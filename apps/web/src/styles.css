@@ -1,0 +1,33 @@
+:root {
+  --ct-paper: #f5f7fa;
+  --ct-surface: #ffffff;
+  --ct-ink: #18212f;
+  --ct-muted: #66738a;
+  --ct-line: #dce2ea;
+}
+:root[data-theme="dark"] {
+  --ct-paper: #10151d;
+  --ct-surface: #161d27;
+  --ct-ink: #e6ebf2;
+  --ct-muted: #93a0b4;
+  --ct-line: #273141;
+}
+.ct-panel {
+  background: var(--ct-surface);
+  border: 1px solid var(--ct-line);
+  border-radius: 6px;
+}
+.ct-mono {
+  font-family: "JetBrains Mono Variable", ui-monospace, monospace;
+  font-size: 0.8125rem;
+}
+.ct-table th {
+  font-weight: 600;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

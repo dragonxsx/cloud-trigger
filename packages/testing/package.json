@@ -1,0 +1,25 @@
+{
+  "name": "@cloud-trigger/testing",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cloud-trigger/core": "workspace:*",
+    "vitest": "5.0.5"
+  },
+  "files": [
+    "dist"
+  ]
+}

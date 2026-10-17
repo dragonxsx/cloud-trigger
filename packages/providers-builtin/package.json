@@ -1,0 +1,35 @@
+{
+  "name": "@cloud-trigger/providers-builtin",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2"
+  },
+  "dependencies": {
+    "@cloud-trigger/core": "workspace:*",
+    "croner": "10.0.1",
+    "cronstrue": "3.32.0",
+    "jsonpath-plus": "11.2.1",
+    "liquidjs": "10.30.0",
+    "neverthrow": "8.2.0",
+    "undici": "8.12.2",
+    "zod": "4.6.7"
+  },
+  "files": [
+    "dist"
+  ]
+}

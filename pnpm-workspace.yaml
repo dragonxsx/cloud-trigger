@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+saveExact: true
+allowBuilds:
+  cpu-features: false
+  ssh2: false
+  protobufjs: false

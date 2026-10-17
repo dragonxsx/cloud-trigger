@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":pinAllExceptPeerDependencies"],
+  "rangeStrategy": "pin",
+  "packageRules": [
+    { "groupName": "nestjs", "matchPackageNames": ["@nestjs/**"] },
+    { "groupName": "orpc", "matchPackageNames": ["@orpc/**"] },
+    { "groupName": "refine", "matchPackageNames": ["@refinedev/**"] },
+    { "groupName": "rjsf", "matchPackageNames": ["@rjsf/**"] },
+    {
+      "description": "Held back on purpose: @refinedev/mantine requires Mantine 5 (and therefore React 18, React Router 7).",
+      "matchPackageNames": [
+        "@mantine/**",
+        "react",
+        "react-dom",
+        "@types/react",
+        "@types/react-dom",
+        "react-router",
+        "@tanstack/react-table"
+      ],
+      "matchFileNames": ["apps/web/package.json"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
+}

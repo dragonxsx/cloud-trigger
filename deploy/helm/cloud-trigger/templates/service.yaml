@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ct.fullname" . }}
+  labels: {{- include "ct.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: {{ ternary "all" "api" .Values.combined.enabled }}
+  ports:
+    - { name: http, port: {{ .Values.service.port }}, targetPort: http }
+---
+# Headless service over every role so Prometheus can scrape schedulers and workers too.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ct.fullname" . }}-metrics
+  labels: {{- include "ct.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }

@@ -1,0 +1,35 @@
+name: cloud-trigger
+
+services:
+  mongo:
+    image: mongo:8
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports: ["27017:27017"]
+    volumes: [mongo-data:/data/db]
+    healthcheck:
+      # Change streams need a replica set.
+      test: >
+        mongosh --quiet --eval "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]}).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+  app:
+    profiles: [app]
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    depends_on: { mongo: { condition: service_healthy } }
+    environment:
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
+      APP_ROLE: all
+      AUTH_DISABLED: "true"
+    ports: ["8080:8080"]
+
+  echo:
+    profiles: [demo, app]
+    image: mendhak/http-https-echo:39
+    environment: { HTTP_PORT: "8888" }
+    ports: ["8888:8888"]
+
+volumes:
+  mongo-data:

@@ -1,0 +1,74 @@
+image:
+  repository: ghcr.io/banana-inc/cloud-trigger
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Split roles to scale them independently, or set `combined.enabled: true` for one Deployment.
+combined:
+  enabled: false
+  replicas: 2
+roles:
+  api:
+    replicas: 2
+    resources: { requests: { cpu: 100m, memory: 192Mi }, limits: { memory: 512Mi } }
+  scheduler:
+    # Safe to run >1: due jobs are claimed with leases and fires are deduplicated.
+    replicas: 2
+    resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 256Mi } }
+  worker:
+    replicas: 2
+    resources: { requests: { cpu: 200m, memory: 192Mi }, limits: { memory: 512Mi } }
+    autoscaling:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 10
+      targetCPUUtilizationPercentage: 70
+
+config:
+  MONGO_DB: cloud_trigger
+  LOG_LEVEL: info
+  WORKER_CONCURRENCY: "16"
+  LEASE_MS: "30000"
+  OIDC_ISSUER: ""
+  OIDC_AUDIENCE: ""
+
+# Sensitive settings. Prefer `existingSecret` in production (e.g. managed by External Secrets).
+secrets:
+  existingSecret: ""
+  values:
+    MONGO_URI: ""
+    API_KEYS: ""
+
+# Job-level secrets referenced as {{secret:NAME}}; mounted as files under /var/run/secrets/cloud-trigger.
+jobSecrets:
+  existingSecret: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: cloud-trigger.example.com
+  tls: []
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile: { type: RuntimeDefault }
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
