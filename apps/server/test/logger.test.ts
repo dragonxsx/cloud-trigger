@@ -5,7 +5,7 @@ import { Writable } from 'node:stream';
 import { pinoHttp } from 'pino-http';
 import { describe, expect, it } from 'vitest';
 
-import { createPino } from '../src/infra/logger.js';
+import { createPino } from '../src/infra/logging/logger.js';
 
 describe('createPino', () => {
   it('redacts credentials from pino-http request logs', async () => {

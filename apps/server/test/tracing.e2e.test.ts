@@ -6,7 +6,6 @@ import { join } from 'node:path';
 
 import { type Contract, contract } from '@cloud-trigger/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
@@ -16,13 +15,11 @@ import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
-import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createAppContext } from '../src/app-context.js';
-import { AppModule } from '../src/app.module.js';
-import { loadConfig } from '../src/config.js';
-import { OtelRunTracer } from '../src/infra/tracing.js';
+import { loadConfig } from '../src/config/config.js';
+import { OtelRunTracer } from '../src/infra/telemetry/tracing.js';
+import { createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -68,10 +65,9 @@ beforeAll(async () => {
     AUTH_DISABLED: 'true',
     WORKER_POLL_MS: '50',
   });
-  const ctx = await createAppContext(config, pino({ level: 'silent' }), {
+  ({ app } = await createTestApp(config, {
     tracer: new OtelRunTracer(provider.getTracer('test')),
-  });
-  app = await NestFactory.create(AppModule.forRoot(ctx), { bodyParser: false, logger: false });
+  }));
   await app.init();
   const http: unknown = app.getHttpServer();
   if (!(http instanceof Server)) {

@@ -1,5 +1,5 @@
 import { JobId, assertNever } from '@cloud-trigger/core';
-import type { WebhookError } from '@cloud-trigger/engine';
+import { EventIngestor, type WebhookError } from '@cloud-trigger/engine';
 import {
   Controller,
   HttpCode,
@@ -13,8 +13,8 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
-import type { AppContext } from '../app-context.js';
-import { APP_CONTEXT } from '../tokens.js';
+import { flatHeaders } from '../common/http/headers.js';
+import { ConfigService } from '../config/config.module.js';
 
 class PayloadTooLarge extends Error {}
 
@@ -32,13 +32,6 @@ async function readBody(req: Request, limit: number): Promise<string> {
 
   return Buffer.concat(chunks).toString('utf8');
 }
-
-const flatHeaders = (req: Request): Record<string, string> =>
-  Object.fromEntries(
-    Object.entries(req.headers).flatMap(([name, value]): [string, string][] =>
-      value === undefined ? [] : [[name, Array.isArray(value) ? value.join(', ') : value]],
-    ),
-  );
 
 const statusFor = (error: WebhookError): HttpStatus => {
   switch (error.code) {
@@ -59,7 +52,10 @@ const statusFor = (error: WebhookError): HttpStatus => {
 
 @Controller('hooks')
 export class HooksController {
-  constructor(@Inject(APP_CONTEXT) private readonly ctx: AppContext) {}
+  constructor(
+    @Inject(EventIngestor) private readonly ingestor: EventIngestor,
+    @Inject(ConfigService) private readonly config: ConfigService,
+  ) {}
 
   @Post(':jobId/:token')
   @HttpCode(HttpStatus.ACCEPTED)
@@ -73,7 +69,7 @@ export class HooksController {
     if (!jobId.success) {
       throw new HttpException('No webhook at this address', HttpStatus.NOT_FOUND);
     }
-    const body = await readBody(req, this.ctx.config.WEBHOOK_MAX_BODY_BYTES).catch(
+    const body = await readBody(req, this.config.values.WEBHOOK_MAX_BODY_BYTES).catch(
       (error: unknown) => {
         if (error instanceof PayloadTooLarge) {
           throw new HttpException('Payload too large', HttpStatus.PAYLOAD_TOO_LARGE);
@@ -81,7 +77,7 @@ export class HooksController {
         throw error;
       },
     );
-    const result = await this.ctx.ingestor.receiveWebhook(jobId.data, {
+    const result = await this.ingestor.receiveWebhook(jobId.data, {
       token,
       headers: flatHeaders(req),
       body,

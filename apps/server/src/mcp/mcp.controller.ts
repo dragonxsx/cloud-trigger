@@ -2,25 +2,23 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { All, Controller, Inject, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
-import type { AppContext } from '../app-context.js';
-import { headersOf } from '../feeds/feeds.controller.js';
-import { APP_CONTEXT } from '../tokens.js';
+import { ApiRouter } from '../api/app-router.js';
+import { Authenticator } from '../auth/authenticator.js';
+import { headersOf } from '../common/http/headers.js';
 import { buildMcpServer } from './mcp-server.js';
-import { type AppRouter, appRouter } from './router.js';
 import { TransportBridge } from './transport-bridge.js';
 
 @Controller('mcp')
 export class McpController {
-  readonly #router: AppRouter;
-
-  constructor(@Inject(APP_CONTEXT) private readonly ctx: AppContext) {
-    this.#router = appRouter(ctx);
-  }
+  constructor(
+    @Inject(Authenticator) private readonly authenticator: Authenticator,
+    @Inject(ApiRouter) private readonly api: ApiRouter,
+  ) {}
 
   @All()
   async handle(@Req() req: Request, @Res() res: Response): Promise<void> {
     const headers = headersOf(req);
-    const principal = await this.ctx.authenticator.authenticate(headers);
+    const principal = await this.authenticator.authenticate(headers);
     if (principal === 'missing' || principal === 'invalid') {
       res
         .status(401)
@@ -33,7 +31,7 @@ export class McpController {
 
       return;
     }
-    const server = buildMcpServer(this.#router, { principal, headers });
+    const server = buildMcpServer(this.api.router, { principal, headers });
     const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();

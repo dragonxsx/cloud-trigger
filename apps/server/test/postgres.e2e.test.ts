@@ -3,24 +3,20 @@ import { Server, createServer } from 'node:http';
 
 import { type Contract, contract } from '@cloud-trigger/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { type AppContext, createAppContext } from '../src/app-context.js';
-import { AppModule } from '../src/app.module.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig } from '../src/config/config.js';
+import { createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
 let container: StartedPostgreSqlContainer;
 let app: INestApplication;
-let ctx: AppContext;
 let target: Server;
 let targetUrl = '';
 let baseUrl = '';
@@ -51,8 +47,7 @@ beforeAll(async () => {
     WORKER_POLL_MS: '100',
     SCHEDULER_INTERVAL_MS: '200',
   });
-  ctx = await createAppContext(config, pino({ level: 'silent' }));
-  app = await NestFactory.create(AppModule.forRoot(ctx), { bodyParser: false, logger: false });
+  ({ app } = await createTestApp(config));
   app.enableShutdownHooks();
   await app.init();
   const http: unknown = app.getHttpServer();

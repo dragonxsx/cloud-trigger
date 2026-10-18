@@ -4,17 +4,15 @@ import { apiReference } from '@scalar/nestjs-api-reference';
 import { Logger } from 'nestjs-pino';
 import { pino } from 'pino';
 
-import { createAppContext } from './app-context.js';
 import { AppModule } from './app.module.js';
-import { loadConfig } from './config.js';
-import { createPino } from './infra/logger.js';
+import { loadConfig } from './config/config.js';
+import { createPino } from './infra/logging/logger.js';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const logger = createPino({ level: config.LOG_LEVEL, base: { instance: config.INSTANCE_ID } });
-  const ctx = await createAppContext(config, logger);
 
-  const app = await NestFactory.create(AppModule.forRoot(ctx), {
+  const app = await NestFactory.create(AppModule.forRoot({ config, pino: logger }), {
     bufferLogs: true,
     bodyParser: false,
   });

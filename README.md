@@ -4,7 +4,7 @@ Self-hosted service that triggers remote endpoints on a schedule and records eve
 
 - **Triggers:** cron (with timezone, `L`/`#`, and `H` hash spreading), fixed interval, one-off, and RFC 5545 `rrule` calendar rules with excluded dates. All support start/end bounds, a max run count and jitter. `after_job` chains a job to another job's outcome; templates can read the parent run as `{{ parent.* }}`.
 - **Event triggers:** inbound webhooks (`POST /hooks/<jobId>/<token>`, optional HMAC, idempotency keys, per-job rate limits) and queue consumers for SQS, Kafka and NATS JetStream (`APP_ROLE=consumer`). Events run at least once and are deduplicated by delivery id, and templates read them as `{{ event.* }}`.
-- **Targets:** HTTP with response assertions (status, JSONPath, body, latency) and HMAC signing; GraphQL; gRPC (inline proto or server reflection); Amazon SQS, SNS and EventBridge; Kafka; NATS (core and JetStream); and fan-out to several targets at once (all or any must succeed). Every target passes a shared conformance suite.
+- **Targets:** HTTP with response assertions (status, JSONPath, body, latency) and HMAC signing; GraphQL; gRPC (inline proto or server reflection); Amazon SQS, SNS and EventBridge; Kafka; NATS (core and JetStream); and fan-out to several targets at once (all or any must succeed). Every target passes a shared conformance suite, and more can be added as providers ([docs/providers.md](docs/providers.md)).
 - **Reliability:**
   - Overlap policies: allow, forbid, replace, buffer one.
   - Missed-run handling with a grace window: skip, run once, or run all.

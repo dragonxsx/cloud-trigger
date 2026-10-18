@@ -4,8 +4,7 @@ import type { InferContractRouterErrorMap } from '@orpc/contract';
 import { implement } from '@orpc/nest';
 import type { ORPCErrorConstructorMap } from '@orpc/server';
 
-import type { AppContext } from '../app-context.js';
-import { type Principal, hasScope } from '../auth/authenticator.js';
+import { type Authenticator, type Principal, hasScope } from '../../auth/authenticator.js';
 
 export interface ApiInitialContext {
   readonly reqHeaders?: Headers;
@@ -13,14 +12,14 @@ export interface ApiInitialContext {
 
 const PUBLIC_PRINCIPAL: Principal = { subject: 'public', via: 'anonymous', scopes: [] };
 
-export const createApi = (ctx: AppContext) =>
+export const createApi = (authenticator: Authenticator) =>
   implement(contract)
     .$context<ApiInitialContext>()
     .use(async ({ context, next, procedure, errors }) => {
       if (procedure['~orpc'].meta.public === true) {
         return next({ context: { principal: PUBLIC_PRINCIPAL } });
       }
-      const result = await ctx.authenticator.authenticate(context.reqHeaders);
+      const result = await authenticator.authenticate(context.reqHeaders);
       if (result === 'missing') {
         throw errors.UNAUTHORIZED({ message: 'Authentication required' });
       }

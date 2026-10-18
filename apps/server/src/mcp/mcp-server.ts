@@ -2,9 +2,9 @@ import { IdParam, RunIdParam } from '@cloud-trigger/api-contract';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { type RouterClient, createRouterClient } from '@orpc/server';
 
+import type { AppRouter } from '../api/app-router.js';
 import { hasScope } from '../auth/authenticator.js';
 import { type McpRequestContext, registerContractTools } from './contract-tools.js';
-import type { AppRouter } from './router.js';
 
 type Client = RouterClient<AppRouter>;
 

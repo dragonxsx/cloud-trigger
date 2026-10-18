@@ -6,27 +6,24 @@ import { type Contract, contract } from '@cloud-trigger/api-contract';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { INestApplication } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import { createORPCClient } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb';
-import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { type AppContext, createAppContext } from '../src/app-context.js';
-import { AppModule } from '../src/app.module.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig } from '../src/config/config.js';
 import { TransportBridge } from '../src/mcp/transport-bridge.js';
+import { type TestApp, createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 let container: StartedMongoDBContainer;
 let app: INestApplication;
-let ctx: AppContext;
+let persistence: TestApp['persistence'];
 let target: Server;
 let targetUrl = '';
 let baseUrl = '';
@@ -83,8 +80,7 @@ beforeAll(async () => {
       `reader:${sha256('r-key')}:read`,
     ].join(','),
   });
-  ctx = await createAppContext(config, pino({ level: 'silent' }));
-  app = await NestFactory.create(AppModule.forRoot(ctx), { bodyParser: false, logger: false });
+  ({ app, persistence } = await createTestApp(config));
   app.enableShutdownHooks();
   await app.init();
   const http: unknown = app.getHttpServer();
@@ -214,7 +210,7 @@ describe('fan-out', () => {
         { type: 'http', outcome: 'success' },
       ],
     });
-    const stored = await ctx.persistence.jobs.get(job.id);
+    const stored = await persistence.jobs.get(job.id);
     expect(stored?.target.config).toMatchObject({
       targets: [
         { config: { secretHeaders: { authorization: 'Bearer s3cret' } } },
@@ -268,7 +264,7 @@ describe('workflows', () => {
     });
     expect(renamed.version).toBe(2);
     const buildJob = renamed.inlineJobIds['build'];
-    const owned = buildJob ? await ctx.persistence.jobs.get(buildJob) : undefined;
+    const owned = buildJob ? await persistence.jobs.get(buildJob) : undefined;
     expect(owned?.target.config).toMatchObject({
       secretHeaders: { authorization: 'Bearer s3cret' },
     });

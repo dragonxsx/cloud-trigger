@@ -4,25 +4,22 @@ import { Server, createServer } from 'node:http';
 
 import { type Contract, contract } from '@cloud-trigger/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import { createORPCClient, isDefinedError, safe } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb';
-import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { type AppContext, createAppContext } from '../src/app-context.js';
-import { AppModule } from '../src/app.module.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig } from '../src/config/config.js';
+import { type TestApp, createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 let container: StartedMongoDBContainer;
 let app: INestApplication;
-let ctx: AppContext;
+let persistence: TestApp['persistence'];
 let target: Server;
 let targetUrl = '';
 let baseUrl = '';
@@ -74,8 +71,7 @@ beforeAll(async () => {
       `reader:${sha256('r-key')}:read`,
     ].join(','),
   });
-  ctx = await createAppContext(config, pino({ level: 'silent' }));
-  app = await NestFactory.create(AppModule.forRoot(ctx), { bodyParser: false, logger: false });
+  ({ app, persistence } = await createTestApp(config));
   app.enableShutdownHooks();
   await app.init();
   const http: unknown = app.getHttpServer();
@@ -179,7 +175,7 @@ describe('Phase 2 API', { timeout: 20_000 }, () => {
       expectedVersion: group.version,
     });
     expect(updated.version).toBe(2);
-    const stored = await ctx.persistence.groups.get(group.id);
+    const stored = await persistence.groups.get(group.id);
     expect(stored?.defaultNotifications[0]?.notifier.config).toEqual({
       url: 'https://hooks.slack.test/x',
     });
@@ -304,7 +300,7 @@ describe('Phase 2 API', { timeout: 20_000 }, () => {
       dryRun: false,
     });
     expect(edited.updated).toEqual(['yaml-export']);
-    const [stored] = await ctx.persistence.jobs.findByName('yaml-export');
+    const [stored] = await persistence.jobs.findByName('yaml-export');
     expect(stored?.description).toBe('from git');
     expect(stored?.target.config).toMatchObject({
       secretHeaders: { authorization: 'Bearer real-token' },

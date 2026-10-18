@@ -4,7 +4,7 @@ import { Scope } from '@cloud-trigger/api-contract';
 import { type JWTVerifyGetKey, createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
 
-import type { AppConfig } from '../config.js';
+import type { AppConfig } from '../config/config.js';
 
 export interface Principal {
   readonly subject: string;

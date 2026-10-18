@@ -1,119 +1,46 @@
-import {
-  type BeforeApplicationShutdown,
-  type DynamicModule,
-  Inject,
-  Injectable,
-  Module,
-  type OnApplicationBootstrap,
-  type OnApplicationShutdown,
-} from '@nestjs/common';
-import { ServeStaticModule } from '@nestjs/serve-static';
-import { ORPCModule, onError } from '@orpc/nest';
-import { RequestHeadersPlugin } from '@orpc/server/plugins';
-import { experimental_ZodSmartCoercionPlugin as ZodSmartCoercionPlugin } from '@orpc/zod/zod4';
-import { LoggerModule } from 'nestjs-pino';
+import type { Tracer } from '@cloud-trigger/core';
+import { type DynamicModule, Module } from '@nestjs/common';
+import type { Logger as Pino } from 'pino';
 
-import { CalendarController } from './api/calendar.controller.js';
-import { GroupsController } from './api/groups.controller.js';
-import { HealthController } from './api/health.controller.js';
-import { JobsController } from './api/jobs.controller.js';
-import { AuthController, AnalyticsController, ProvidersController } from './api/misc.controller.js';
-import { OpenApiController } from './api/openapi.controller.js';
-import { RunsController } from './api/runs.controller.js';
-import { WorkflowsController } from './api/workflows.controller.js';
-import type { AppContext } from './app-context.js';
-import { FeedsController } from './feeds/feeds.controller.js';
-import { HooksController } from './hooks/hooks.controller.js';
-import { McpController } from './mcp/mcp.controller.js';
-import { APP_CONTEXT } from './tokens.js';
+import { ApiModule } from './api/api.module.js';
+import type { AppConfig } from './config/config.js';
+import { ConfigModule } from './config/config.module.js';
+import { RuntimeModule } from './engine/runtime.module.js';
+import { FeedsModule } from './feeds/feeds.module.js';
+import { HealthModule } from './health/health.module.js';
+import { HooksModule } from './hooks/hooks.module.js';
+import { LoggingModule } from './infra/logging/logging.module.js';
+import { PersistenceModule } from './infra/persistence/persistence.module.js';
+import { ProvidersModule } from './infra/providers/providers.module.js';
+import { TelemetryModule } from './infra/telemetry/telemetry.module.js';
+import { McpModule } from './mcp/mcp.module.js';
+import { WebModule } from './web/web.module.js';
 
-@Injectable()
-class AppLifecycle
-  implements OnApplicationBootstrap, BeforeApplicationShutdown, OnApplicationShutdown
-{
-  constructor(@Inject(APP_CONTEXT) private readonly ctx: AppContext) {}
-
-  onApplicationBootstrap(): void {
-    this.ctx.engine.start();
-  }
-
-  async beforeApplicationShutdown(): Promise<void> {
-    await this.ctx.engine.stop();
-  }
-
-  async onApplicationShutdown(): Promise<void> {
-    await this.ctx.registry.dispose();
-    await this.ctx.persistence.close();
-    await this.ctx.shutdownTracing();
-  }
+export interface AppModuleOptions {
+  readonly config: AppConfig;
+  readonly pino: Pino;
+  readonly tracer?: Tracer | undefined;
 }
-
-const QUIET_PATHS = ['/health', '/metrics'];
 
 @Module({})
 export class AppModule {
-  static forRoot(ctx: AppContext): DynamicModule {
-    const servesApi = ctx.config.APP_ROLE.includes('api');
-    const webDist = ctx.config.WEB_DIST;
+  static forRoot({ config, pino, tracer }: AppModuleOptions): DynamicModule {
+    const servesApi = config.APP_ROLE.includes('api');
+    const webDist = config.WEB_DIST;
 
     return {
       module: AppModule,
       imports: [
-        LoggerModule.forRoot({
-          pinoHttp: {
-            logger: ctx.pino,
-            autoLogging: {
-              ignore: (req) => QUIET_PATHS.some((p) => req.url?.startsWith(p) === true),
-            },
-          },
-        }),
-        ORPCModule.forRoot({
-          context: {},
-          plugins: [new RequestHeadersPlugin(), new ZodSmartCoercionPlugin()],
-          interceptors: [
-            onError((error) => {
-              ctx.logger.debug('API procedure error', { err: error });
-            }),
-          ],
-        }),
-        ...(servesApi && webDist
-          ? [
-              ServeStaticModule.forRoot({
-                rootPath: webDist,
-                exclude: [
-                  '/api/{*path}',
-                  '/health/{*path}',
-                  '/metrics',
-                  '/docs/{*path}',
-                  '/badges/{*path}',
-                  '/calendar.ics',
-                  '/hooks/{*path}',
-                  '/mcp',
-                ],
-              }),
-            ]
-          : []),
+        ConfigModule.forRoot(config),
+        LoggingModule.forRoot(pino),
+        TelemetryModule.forRoot({ tracer }),
+        PersistenceModule,
+        ProvidersModule,
+        HealthModule,
+        RuntimeModule,
+        ...(servesApi ? [ApiModule, FeedsModule, HooksModule, McpModule] : []),
+        ...(servesApi && webDist ? [WebModule.forRoot(webDist)] : []),
       ],
-      controllers: [
-        HealthController,
-        ...(servesApi
-          ? [
-              JobsController,
-              RunsController,
-              GroupsController,
-              WorkflowsController,
-              CalendarController,
-              FeedsController,
-              HooksController,
-              McpController,
-              AnalyticsController,
-              ProvidersController,
-              AuthController,
-              OpenApiController,
-            ]
-          : []),
-      ],
-      providers: [{ provide: APP_CONTEXT, useValue: ctx }, AppLifecycle],
     };
   }
 }

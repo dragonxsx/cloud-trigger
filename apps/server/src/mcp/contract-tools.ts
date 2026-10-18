@@ -20,8 +20,8 @@ import {
 import { ORPCError, call, getRouter, isProcedure, unlazy } from '@orpc/server';
 import { ZodToJsonSchemaConverter } from '@orpc/zod/zod4';
 
+import type { AppRouter } from '../api/app-router.js';
 import { type Principal, hasScope } from '../auth/authenticator.js';
-import type { AppRouter } from './router.js';
 
 type ApiProcedure = ContractProcedure<AnySchema, AnySchema, ErrorMap, ApiMeta>;
 

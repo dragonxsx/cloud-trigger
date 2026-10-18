@@ -3,7 +3,7 @@ import { createMongoPersistence } from '@cloud-trigger/persistence-mongo';
 import { createPostgresPersistence } from '@cloud-trigger/persistence-postgres';
 import { createSqlitePersistence } from '@cloud-trigger/persistence-sqlite';
 
-import type { AppConfig } from '../config.js';
+import type { AppConfig } from '../../config/config.js';
 
 const SWEEP_INTERVAL_MS = 10 * 60_000;
 

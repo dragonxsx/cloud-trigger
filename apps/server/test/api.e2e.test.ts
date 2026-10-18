@@ -4,25 +4,21 @@ import { Server, createServer } from 'node:http';
 
 import { type Contract, contract } from '@cloud-trigger/api-contract';
 import type { INestApplication } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
 import { createORPCClient, isDefinedError, safe } from '@orpc/client';
 import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
 import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb';
-import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { type AppContext, createAppContext } from '../src/app-context.js';
-import { AppModule } from '../src/app.module.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig } from '../src/config/config.js';
+import { createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 let container: StartedMongoDBContainer;
 let app: INestApplication;
-let ctx: AppContext;
 let target: Server;
 let targetUrl = '';
 let baseUrl = '';
@@ -63,8 +59,7 @@ beforeAll(async () => {
     SCHEDULER_INTERVAL_MS: '200',
     API_KEYS: `writer:${sha256('w-key')}:write,reader:${sha256('r-key')}:read`,
   });
-  ctx = await createAppContext(config, pino({ level: 'silent' }));
-  app = await NestFactory.create(AppModule.forRoot(ctx), { bodyParser: false, logger: false });
+  ({ app } = await createTestApp(config));
   app.enableShutdownHooks();
   await app.init();
   const http: unknown = app.getHttpServer();
