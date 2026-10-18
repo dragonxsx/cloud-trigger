@@ -3,6 +3,11 @@ import {
   type JobSpec,
   type Group,
   type GroupSpec,
+  type InlineJobSpec,
+  type Workflow,
+  type WorkflowNode,
+  type WorkflowRun,
+  type WorkflowSpec,
   type JsonSchema,
   type NotificationDelivery,
   type ProviderKind,
@@ -82,6 +87,84 @@ export class JobRedactor {
           },
         };
       }),
+    };
+  }
+
+  #redactInline(job: InlineJobSpec): InlineJobSpec {
+    return {
+      ...job,
+      input: { ...job.input, config: this.#redactRef('input', job.input) },
+      target: { ...job.target, config: this.#redactRef('target', job.target) },
+      notifications: job.notifications.map((n) => ({
+        ...n,
+        notifier: { ...n.notifier, config: this.#redactRef('notifier', n.notifier) },
+      })),
+    };
+  }
+
+  #redactNodes(nodes: readonly WorkflowNode[]): WorkflowNode[] {
+    return nodes.map((node) =>
+      node.kind === 'inline' ? { ...node, job: this.#redactInline(node.job) } : node,
+    );
+  }
+
+  redactWorkflow(workflow: Workflow): Workflow {
+    return {
+      ...workflow,
+      nodes: this.#redactNodes(workflow.nodes),
+      ...(workflow.schedule && {
+        schedule: {
+          ...workflow.schedule,
+          config: this.#redactRef('trigger', workflow.schedule),
+        },
+      }),
+    };
+  }
+
+  redactWorkflowRun(run: WorkflowRun): WorkflowRun {
+    return { ...run, graph: { ...run.graph, nodes: this.#redactNodes(run.graph.nodes) } };
+  }
+
+  restoreWorkflow(next: WorkflowSpec, previous: Workflow): WorkflowSpec {
+    const keep = (kind: ProviderKind, ref: ProviderRef, prev: ProviderRef | undefined): unknown =>
+      prev && prev.type === ref.type
+        ? restoreRedacted(this.#schema(kind, ref.type), ref.config, prev.config)
+        : ref.config;
+
+    return {
+      ...next,
+      nodes: next.nodes.map((node) => {
+        const before = previous.nodes.find((candidate) => candidate.key === node.key);
+        if (node.kind !== 'inline' || before?.kind !== 'inline') {
+          return node;
+        }
+
+        return {
+          ...node,
+          job: {
+            ...node.job,
+            input: { ...node.job.input, config: keep('input', node.job.input, before.job.input) },
+            target: {
+              ...node.job.target,
+              config: keep('target', node.job.target, before.job.target),
+            },
+            notifications: node.job.notifications.map((n, i) => ({
+              ...n,
+              notifier: {
+                ...n.notifier,
+                config: keep('notifier', n.notifier, before.job.notifications[i]?.notifier),
+              },
+            })),
+          },
+        };
+      }),
+      schedule:
+        next.schedule === null
+          ? null
+          : {
+              ...next.schedule,
+              config: keep('trigger', next.schedule, previous.schedule ?? undefined),
+            },
     };
   }
 

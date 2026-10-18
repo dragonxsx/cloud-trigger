@@ -41,3 +41,7 @@ export type SchedulePreviewDto = Out<ApiClient['jobs']['validate']>;
 export type JobCreateInput = Parameters<ApiClient['jobs']['create']>[0];
 export type RunStatusDto = RunDto['status'];
 export type GroupDto = Out<ApiClient['groups']['get']>;
+export type WorkflowDto = Out<ApiClient['workflows']['get']>;
+export type WorkflowRunDto = Out<ApiClient['workflowRuns']['get']>;
+export type WorkflowSpecDto = Parameters<ApiClient['workflows']['create']>[0];
+export type NodeStatusDto = WorkflowRunDto['nodes'][string]['status'];

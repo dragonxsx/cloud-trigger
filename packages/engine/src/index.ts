@@ -1,5 +1,7 @@
 export * from './chain-listener.js';
 export * from './config-validation.js';
+export * from './consumer-supervisor.js';
+export * from './event-ingestor.js';
 export * from './explain.js';
 export * from './fire-plan.js';
 export * from './group-service.js';
@@ -16,3 +18,6 @@ export * from './run-completion.js';
 export * from './scheduler.js';
 export * from './sla-monitor.js';
 export * from './worker.js';
+export * from './workflow-monitor.js';
+export * from './workflow-runtime.js';
+export * from './workflow-service.js';

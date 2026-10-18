@@ -8,15 +8,31 @@ export const StatusPattern = z
   .string()
   .regex(/^(?:[1-5]xx|\d{3}(?:-\d{3})?)$/, 'Use 2xx, 404 or 200-299');
 
+export const JsonPathAssertion = z
+  .object({ path: z.string().min(1), equals: z.json().optional() })
+  .describe('Passes when the path matches; if `equals` is set the first match must deep-equal it.');
+export type JsonPathAssertion = z.output<typeof JsonPathAssertion>;
+
+export function jsonPathFailure(check: JsonPathAssertion, json: unknown): string | undefined {
+  if (json === null || typeof json !== 'object') {
+    return 'JSON body is not an object or array';
+  }
+  const matches: unknown = JSONPath({ path: check.path, json, wrap: true });
+  if (!Array.isArray(matches) || matches.length === 0) {
+    return `JSONPath ${check.path} matched nothing`;
+  }
+  const first: unknown = matches[0];
+  if (check.equals !== undefined && !isDeepStrictEqual(first, check.equals)) {
+    return `JSONPath ${check.path} = ${JSON.stringify(first)}, expected ${JSON.stringify(check.equals)}`;
+  }
+
+  return undefined;
+}
+
 export const HttpAssertions = z.object({
   expectedStatus: z.array(StatusPattern).min(1).default(['2xx']),
   bodyContains: z.string().optional(),
-  jsonPath: z
-    .object({ path: z.string().min(1), equals: z.json().optional() })
-    .optional()
-    .describe(
-      'Passes when the path matches; if `equals` is set the first match must deep-equal it.',
-    ),
+  jsonPath: JsonPathAssertion.optional(),
   maxLatencyMs: z.int().positive().optional(),
 });
 export type HttpAssertions = z.output<typeof HttpAssertions>;
@@ -51,22 +67,8 @@ export function firstFailedAssertion(
     if (parsed.isErr()) {
       return 'Body is not valid JSON';
     }
-    if (parsed.value === null || typeof parsed.value !== 'object') {
-      return 'JSON body is not an object or array';
-    }
-    const matches: unknown = JSONPath({
-      path: assertions.jsonPath.path,
-      json: parsed.value,
-      wrap: true,
-    });
-    if (!Array.isArray(matches) || matches.length === 0) {
-      return `JSONPath ${assertions.jsonPath.path} matched nothing`;
-    }
-    const expected = assertions.jsonPath.equals;
-    const first: unknown = matches[0];
-    if (expected !== undefined && !isDeepStrictEqual(first, expected)) {
-      return `JSONPath ${assertions.jsonPath.path} = ${JSON.stringify(first)}, expected ${JSON.stringify(expected)}`;
-    }
+
+    return jsonPathFailure(assertions.jsonPath, parsed.value);
   }
 
   return undefined;

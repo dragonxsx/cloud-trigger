@@ -25,12 +25,14 @@ import {
   type SecretResolver,
   type SkippedRun,
   type TargetResult,
+  type Tracer,
   ResultAsync,
   abortedResult,
   currentAttempt,
   failedResult,
   finishAttempt,
   noRetry,
+  noopTracer,
   parentSnapshotOf,
   requeueClaimedRun,
   skipClaimedRun,
@@ -64,6 +66,7 @@ export interface WorkerDeps {
   readonly groups?: GroupRepository | undefined;
   readonly rateLimiter?: RateLimiter | undefined;
   readonly decisions?: DecisionLog | undefined;
+  readonly tracer?: Tracer | undefined;
 }
 
 class CancelledError extends Error {
@@ -304,7 +307,7 @@ export class Worker {
         if (await this.deps.queue.acquireExecution(run)) {
           return { action: 'run' };
         }
-        if (run.reason === 'backfill') {
+        if (run.reason === 'backfill' || run.reason === 'event' || run.reason === 'workflow') {
           return { action: 'wait' };
         }
 
@@ -370,6 +373,14 @@ export class Worker {
     );
 
     const parent = claimed.parent ?? (await this.#legacyParent(claimed));
+    const span = (this.deps.tracer ?? noopTracer).startRun({
+      jobId: job.id,
+      jobName: job.name,
+      runId: claimed.id,
+      attempt: currentAttempt(claimed),
+      reason: claimed.reason,
+      parentTraceparent: claimed.event?.headers['traceparent'],
+    });
     const ctx: RunContext = {
       ...(parent && { parent }),
       runId: claimed.id,
@@ -380,6 +391,9 @@ export class Worker {
       reason: claimed.reason,
       secrets: this.deps.secrets,
       now: this.deps.clock.now(),
+      ...(span.traceparent !== undefined && { traceparent: span.traceparent }),
+      ...(claimed.idempotencyKey !== null && { idempotencyKey: claimed.idempotencyKey }),
+      ...(claimed.event !== null && { trigger: { event: claimed.event } }),
     };
 
     let result: TargetResult;
@@ -404,6 +418,7 @@ export class Worker {
       clearInterval(heartbeat);
       await beating;
     }
+    span.end({ outcome: result.outcome, errorCode: result.error?.code });
 
     if (leaseLost) {
       this.deps.logger.warn('Discarding result: lease lost (run was reclaimed)', {

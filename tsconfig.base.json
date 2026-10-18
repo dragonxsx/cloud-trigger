@@ -18,6 +18,6 @@
     "declarationMap": true,
     "sourceMap": true,
     "types": ["node"],
-    "customConditions": ["source"]
+    "customConditions": ["@cloud-trigger/source"]
   }
 }

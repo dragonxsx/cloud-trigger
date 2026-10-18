@@ -3,14 +3,12 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import {
   type Clock,
   type Job,
+  type Persistence,
   ProviderRegistry,
   mapSecretResolver,
   silentLogger,
 } from '@cloud-trigger/core';
-import { type MongoPersistence, createMongoPersistence } from '@cloud-trigger/persistence-mongo';
 import { builtinProviders } from '@cloud-trigger/providers-builtin';
-import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb';
-import { MongoClient } from 'mongodb';
 import { afterAll, beforeAll, beforeEach } from 'vitest';
 
 import {
@@ -26,7 +24,12 @@ import {
   Worker,
   type WorkerDeps,
   type WorkerOptions,
+  WorkflowAdvancer,
+  WorkflowMonitor,
+  WorkflowRuntime,
+  WorkflowService,
 } from '../src/index.js';
+import { type TestDatabase, startTestDatabase } from './databases.js';
 
 export interface ReceivedRequest {
   readonly path: string;
@@ -37,8 +40,8 @@ export interface ReceivedRequest {
 type Handler = (req: ReceivedRequest) => { status: number; body?: string; delayMs?: number };
 
 export interface Harness {
-  readonly db: MongoPersistence;
-  readonly admin: MongoClient;
+  readonly db: Persistence;
+  readonly clear: (tables: readonly string[]) => Promise<void>;
   readonly base: () => string;
   readonly requests: ReceivedRequest[];
   readonly maxInFlight: () => number;
@@ -51,6 +54,9 @@ export interface Harness {
   readonly enqueuer: () => NotificationEnqueuer;
   readonly listeners: () => RunLifecycleListener[];
   readonly service: () => JobService;
+  readonly workflowRuntime: () => WorkflowRuntime;
+  readonly workflows: () => WorkflowService;
+  readonly workflowMonitor: () => WorkflowMonitor;
   readonly scheduler: (ownerId?: string) => Scheduler;
   readonly worker: (opts?: Partial<WorkerOptions>, deps?: Partial<WorkerDeps>) => Worker;
   readonly dispatcher: (opts?: Partial<NotificationDispatcherOptions>) => NotificationDispatcher;
@@ -60,9 +66,7 @@ export interface Harness {
 }
 
 export function useHarness(dbName: string): Harness {
-  let container: StartedMongoDBContainer;
-  let db: MongoPersistence | undefined;
-  let admin: MongoClient | undefined;
+  let database: TestDatabase | undefined;
   let server: Server;
   let base = '';
   let current = new Date('2026-03-01T00:00:00.000Z');
@@ -74,11 +78,7 @@ export function useHarness(dbName: string): Harness {
   const clock: Clock = { now: () => new Date(current) };
 
   beforeAll(async () => {
-    container = await new MongoDBContainer('mongo:8').start();
-    const uri = `${container.getConnectionString()}?directConnection=true`;
-    db = await createMongoPersistence({ uri, dbName });
-    await db.migrate();
-    admin = await MongoClient.connect(uri);
+    database = await startTestDatabase(dbName);
     server = createServer((req, res) => {
       let body = '';
       req.on('data', (chunk: Buffer) => {
@@ -108,9 +108,7 @@ export function useHarness(dbName: string): Harness {
   }, 120_000);
 
   afterAll(async () => {
-    await db?.close();
-    await admin?.close();
-    await container.stop();
+    await database?.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
@@ -121,34 +119,26 @@ export function useHarness(dbName: string): Harness {
     routes.set('/fail', () => ({ status: 503 }));
     routes.set('/slow', () => ({ status: 200, delayMs: 1_500 }));
     current = new Date('2026-03-01T00:00:00.000Z');
-    const collections = await mongo().db(dbName).collections();
-    await Promise.all(
-      collections
-        .filter((c) => !c.collectionName.startsWith('system.'))
-        .map((c) => c.deleteMany({})),
-    );
+    await started().clear();
   });
 
-  const persistence = (): MongoPersistence => {
-    if (!db) {
+  const started = (): TestDatabase => {
+    if (!database) {
       throw new Error('harness not started');
     }
 
-    return db;
+    return database;
   };
-  const mongo = (): MongoClient => {
-    if (!admin) {
-      throw new Error('harness not started');
-    }
-
-    return admin;
-  };
+  const persistence = (): Persistence => started().persistence;
   const enqueuer = () =>
     new NotificationEnqueuer({ outbox: persistence().outbox, groups: persistence().groups, clock });
+  const workflowRuntime = () =>
+    new WorkflowRuntime({ ...persistence(), clock, logger: silentLogger });
   const listeners = (): RunLifecycleListener[] => [
     new AnalyticsListener(persistence().analytics),
     new NotificationListener(enqueuer()),
     new ChainListener({ ...persistence(), registry, clock, logger: silentLogger }),
+    new WorkflowAdvancer(workflowRuntime()),
   ];
   const dispatcherFor = (opts: Partial<NotificationDispatcherOptions> = {}) =>
     new NotificationDispatcher(
@@ -175,9 +165,7 @@ export function useHarness(dbName: string): Harness {
     get db() {
       return persistence();
     },
-    get admin() {
-      return mongo();
-    },
+    clear: (tables) => started().clear(tables),
     base: () => base,
     requests,
     maxInFlight: () => flight.max,
@@ -194,6 +182,20 @@ export function useHarness(dbName: string): Harness {
     enqueuer,
     listeners,
     service,
+    workflowRuntime,
+    workflows: () =>
+      new WorkflowService({
+        ...persistence(),
+        registry,
+        clock,
+        jobService: service(),
+        runtime: workflowRuntime(),
+      }),
+    workflowMonitor: () =>
+      new WorkflowMonitor(
+        { ...persistence(), registry, clock, logger: silentLogger, runtime: workflowRuntime() },
+        { intervalMs: 1_000, batchSize: 50 },
+      ),
     scheduler: (ownerId = 's1') =>
       new Scheduler(
         { ...persistence(), registry, clock, logger: silentLogger },

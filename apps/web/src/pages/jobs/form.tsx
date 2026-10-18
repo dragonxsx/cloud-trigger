@@ -74,7 +74,10 @@ export const toSpec = ({
   ...(version !== undefined && { expectedVersion: version }),
 });
 
-const configIssuesFor = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
+export const configIssuesFor = (
+  errors: Record<string, ReactNode>,
+  prefix: string,
+): ConfigIssueDto[] =>
   Object.entries(errors).flatMap(([path, message]) =>
     path.startsWith(`${prefix}.config`) && typeof message === 'string'
       ? [{ path: path.slice(`${prefix}.config`.length).replace(/^\./, ''), message }]

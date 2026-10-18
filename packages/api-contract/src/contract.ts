@@ -6,6 +6,9 @@ import {
   NotificationDelivery,
   PendingRun,
   Run,
+  Workflow,
+  WorkflowRun,
+  WorkflowSpec,
 } from '@cloud-trigger/core';
 import { eventIterator, oc } from '@orpc/contract';
 import { z } from 'zod';
@@ -45,12 +48,30 @@ import {
   TopErrorsQuery,
   UpdateGroupInput,
   UpdateJobInput,
+  ApprovalInput,
+  UpdateWorkflowInput,
+  WorkflowIdParam,
+  WorkflowListQuery,
+  WorkflowPage,
+  WorkflowRunIdParam,
+  WorkflowRunListQuery,
+  WorkflowRunPage,
 } from './schemas.js';
+
+export interface McpToolMeta {
+  readonly name: string;
+  readonly description?: string;
+  readonly destructive?: boolean;
+}
 
 export interface ApiMeta {
   readonly minimumScope: Scope;
   readonly public?: boolean;
+  readonly mcp?: McpToolMeta;
 }
+
+const readTool = (mcp: McpToolMeta): ApiMeta => ({ minimumScope: 'read', mcp });
+const writeTool = (mcp: McpToolMeta): ApiMeta => ({ minimumScope: 'write', mcp });
 
 const base = oc.$meta<ApiMeta>({ minimumScope: 'read' }).errors({
   UNAUTHORIZED: { status: 401 },
@@ -65,6 +86,12 @@ const admin = base.meta({ minimumScope: 'admin' });
 const jobs = {
   list: base
     .route({ method: 'GET', path: '/jobs', summary: 'List jobs' })
+    .meta(
+      readTool({
+        name: 'list_jobs',
+        description: 'List jobs, newest first. Filter by search text, tag, group or state.',
+      }),
+    )
     .input(JobListQuery)
     .output(JobPage),
   export: admin
@@ -83,9 +110,20 @@ const jobs = {
     })
     .input(ImportInput)
     .output(ImportResult),
-  get: base.route({ method: 'GET', path: '/jobs/{id}' }).input(IdParam).output(Job),
+  get: base
+    .route({ method: 'GET', path: '/jobs/{id}' })
+    .meta(readTool({ name: 'get_job', description: 'Get one job, with secrets redacted.' }))
+    .input(IdParam)
+    .output(Job),
   create: write
     .route({ method: 'POST', path: '/jobs', successStatus: 201 })
+    .meta(
+      writeTool({
+        name: 'create_job',
+        description:
+          'Create a job. Provider configs follow the JSON Schemas from GET /api/providers; reference secrets as {{secret:NAME}}.',
+      }),
+    )
     .input(JobSpec)
     .output(Job),
   update: write.route({ method: 'PUT', path: '/jobs/{id}' }).input(UpdateJobInput).output(Job),
@@ -103,9 +141,14 @@ const jobs = {
     .output(SchedulePreview),
   pause: write
     .route({ method: 'POST', path: '/jobs/{id}/pause' })
+    .meta(writeTool({ name: 'pause_job', description: 'Pause a job so it stops scheduling runs.' }))
     .input(IdParam.extend({ reason: z.string().max(500).optional() }))
     .output(Job),
-  resume: write.route({ method: 'POST', path: '/jobs/{id}/resume' }).input(IdParam).output(Job),
+  resume: write
+    .route({ method: 'POST', path: '/jobs/{id}/resume' })
+    .meta(writeTool({ name: 'resume_job', description: 'Resume a paused job.' }))
+    .input(IdParam)
+    .output(Job),
   backfill: write
     .route({
       method: 'POST',
@@ -120,6 +163,12 @@ const jobs = {
       path: '/jobs/{id}/explain',
       summary: "Why didn't it run? Recent scheduler decisions plus a narrative",
     })
+    .meta(
+      readTool({
+        name: 'explain_job',
+        description: 'Explain why a job did or did not run recently, and when it runs next.',
+      }),
+    )
     .input(ExplainQuery)
     .output(Explanation),
   dependencies: base
@@ -137,13 +186,32 @@ const jobs = {
       summary: 'Trigger a run now',
       successStatus: 202,
     })
+    .meta(
+      writeTool({
+        name: 'run_job',
+        description: 'Queue a run of a job now. Pass idempotencyKey to make retries safe.',
+      }),
+    )
     .input(IdParam.extend({ idempotencyKey: z.string().max(200).optional() }))
     .output(PendingRun),
 };
 
 const runs = {
-  list: base.route({ method: 'GET', path: '/runs' }).input(RunListQuery).output(RunPage),
-  get: base.route({ method: 'GET', path: '/runs/{id}' }).input(RunIdParam).output(Run),
+  list: base
+    .route({ method: 'GET', path: '/runs' })
+    .meta(
+      readTool({
+        name: 'list_runs',
+        description: 'List runs, newest first. Filter by job, status, reason or time range.',
+      }),
+    )
+    .input(RunListQuery)
+    .output(RunPage),
+  get: base
+    .route({ method: 'GET', path: '/runs/{id}' })
+    .meta(readTool({ name: 'get_run', description: 'Get one run with its attempts and results.' }))
+    .input(RunIdParam)
+    .output(Run),
   cancel: write.route({ method: 'POST', path: '/runs/{id}/cancel' }).input(RunIdParam).output(Run),
   replay: write
     .route({ method: 'POST', path: '/runs/{id}/replay', successStatus: 202 })
@@ -218,6 +286,12 @@ const calendar = {
 const analytics = {
   summary: base
     .route({ method: 'GET', path: '/analytics/summary' })
+    .meta(
+      readTool({
+        name: 'analytics_summary',
+        description: 'Run totals, success rate and p50/p95 latency for a time range.',
+      }),
+    )
     .input(AnalyticsRange)
     .output(AnalyticsSummary),
   timeseries: base
@@ -237,6 +311,76 @@ const providers = {
     .output(z.array(ProviderInfo)),
 };
 
+const workflows = {
+  list: base
+    .route({ method: 'GET', path: '/workflows', summary: 'List workflows' })
+    .meta(readTool({ name: 'list_workflows', description: 'List DAG workflows.' }))
+    .input(WorkflowListQuery)
+    .output(WorkflowPage),
+  get: base
+    .route({ method: 'GET', path: '/workflows/{id}' })
+    .input(WorkflowIdParam)
+    .output(Workflow),
+  create: write
+    .route({ method: 'POST', path: '/workflows', successStatus: 201 })
+    .input(WorkflowSpec)
+    .output(Workflow),
+  update: write
+    .route({ method: 'PUT', path: '/workflows/{id}' })
+    .input(UpdateWorkflowInput)
+    .output(Workflow),
+  delete: write
+    .route({ method: 'DELETE', path: '/workflows/{id}' })
+    .input(WorkflowIdParam)
+    .output(z.object({ deleted: z.boolean() })),
+  run: write
+    .route({
+      method: 'POST',
+      path: '/workflows/{id}/run',
+      successStatus: 202,
+      summary: 'Start a workflow run now',
+    })
+    .input(WorkflowIdParam)
+    .output(WorkflowRun),
+};
+
+const workflowRuns = {
+  list: base
+    .route({ method: 'GET', path: '/workflow-runs' })
+    .input(WorkflowRunListQuery)
+    .output(WorkflowRunPage),
+  get: base
+    .route({ method: 'GET', path: '/workflow-runs/{id}' })
+    .input(WorkflowRunIdParam)
+    .output(WorkflowRun),
+  approve: write
+    .route({
+      method: 'POST',
+      path: '/workflow-runs/{id}/approve',
+      summary: 'Approve a waiting approval gate',
+    })
+    .meta(
+      writeTool({
+        name: 'approve_workflow_run',
+        description: 'Approve a workflow approval gate that is waiting for a decision.',
+      }),
+    )
+    .input(ApprovalInput)
+    .output(WorkflowRun),
+  reject: write
+    .route({
+      method: 'POST',
+      path: '/workflow-runs/{id}/reject',
+      summary: 'Reject a waiting approval gate',
+    })
+    .input(ApprovalInput)
+    .output(WorkflowRun),
+  cancel: write
+    .route({ method: 'POST', path: '/workflow-runs/{id}/cancel' })
+    .input(WorkflowRunIdParam)
+    .output(WorkflowRun),
+};
+
 const auth = {
   me: base.route({ method: 'GET', path: '/me' }).input(z.object({})).output(Me),
   config: base
@@ -254,6 +398,8 @@ export const contract = oc.prefix('/api').router({
   jobs: oc.tag('Jobs').router(jobs),
   runs: oc.tag('Runs').router(runs),
   groups: oc.tag('Groups').router(groups),
+  workflows: oc.tag('Workflows').router(workflows),
+  workflowRuns: oc.tag('Workflows').router(workflowRuns),
   calendar: oc.tag('Calendar').router(calendar),
   analytics: oc.tag('Analytics').router(analytics),
   providers: oc.tag('Providers').router(providers),

@@ -23,4 +23,7 @@ stringData:
   {{ $k }}: {{ $v | quote }}
   {{- end }}
   {{- end }}
+  {{- if and .Values.demo.postgres.enabled (not .Values.secrets.values.POSTGRES_URL) }}
+  POSTGRES_URL: {{ printf "postgres://cloud:cloud@%s-postgres:5432/cloud_trigger" (include "ct.fullname" .) | quote }}
+  {{- end }}
 {{- end }}

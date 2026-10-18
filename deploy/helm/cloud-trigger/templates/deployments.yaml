@@ -1,7 +1,7 @@
 {{- if .Values.combined.enabled }}
 {{ include "ct.deployment" (dict "root" $ "name" "all" "roles" "all" "spec" (dict "replicas" .Values.combined.replicas "resources" .Values.roles.api.resources)) }}
 {{- else }}
-{{- range $name := list "api" "scheduler" "worker" }}
+{{- range $name := list "api" "scheduler" "worker" "consumer" }}
 ---
 {{ include "ct.deployment" (dict "root" $ "name" $name "roles" $name "spec" (index $.Values.roles $name)) }}
 {{- end }}

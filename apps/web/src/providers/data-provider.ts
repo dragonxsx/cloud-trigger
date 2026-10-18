@@ -1,5 +1,21 @@
-import { RunListQuery, UpdateGroupInput, UpdateJobInput } from '@cloud-trigger/api-contract';
-import { GroupId, GroupSpec, JobId, JobSpec, RunId, toError } from '@cloud-trigger/core';
+import {
+  RunListQuery,
+  UpdateGroupInput,
+  UpdateJobInput,
+  UpdateWorkflowInput,
+  WorkflowRunListQuery,
+} from '@cloud-trigger/api-contract';
+import {
+  GroupId,
+  GroupSpec,
+  JobId,
+  JobSpec,
+  RunId,
+  WorkflowId,
+  WorkflowRunId,
+  WorkflowSpec,
+  toError,
+} from '@cloud-trigger/core';
 import { ORPCError } from '@orpc/client';
 import type { BaseRecord, CrudFilter, DataProvider, HttpError } from '@refinedev/core';
 import { z } from 'zod';
@@ -94,7 +110,52 @@ const runs: ResourceAdapter = {
   getOne: (id) => client.runs.get({ id: RunId.parse(id) }),
 };
 
-const RESOURCES: Readonly<Record<string, ResourceAdapter>> = { jobs, runs, groups };
+const WorkflowFilters = z.object({ search: z.string().optional() });
+
+const workflows: ResourceAdapter = {
+  list: async ({ limit, offset, filters }) => {
+    const page = await client.workflows.list({ limit, offset, ...WorkflowFilters.parse(filters) });
+
+    return { data: page.items, total: page.total };
+  },
+  getOne: (id) => client.workflows.get({ id: WorkflowId.parse(id) }),
+  create: (variables) => client.workflows.create(WorkflowSpec.parse(variables)),
+  update: (id, variables) =>
+    client.workflows.update(
+      UpdateWorkflowInput.parse({ ...z.record(z.string(), z.unknown()).parse(variables), id }),
+    ),
+  deleteOne: async (id) => {
+    const workflowId = WorkflowId.parse(id);
+    await client.workflows.delete({ id: workflowId });
+
+    return { id: workflowId };
+  },
+};
+
+const WorkflowRunFilters = WorkflowRunListQuery.pick({ workflowId: true, status: true });
+
+const workflowRuns: ResourceAdapter = {
+  list: async ({ limit, offset, filters }) => {
+    const parsed = WorkflowRunFilters.parse(filters);
+    const page = await client.workflowRuns.list({
+      limit,
+      offset,
+      ...(parsed.workflowId !== undefined && { workflowId: parsed.workflowId }),
+      ...(parsed.status !== undefined && { status: parsed.status }),
+    });
+
+    return { data: page.items, total: page.total };
+  },
+  getOne: (id) => client.workflowRuns.get({ id: WorkflowRunId.parse(id) }),
+};
+
+const RESOURCES: Readonly<Record<string, ResourceAdapter>> = {
+  jobs,
+  runs,
+  groups,
+  workflows,
+  'workflow-runs': workflowRuns,
+};
 
 function adapter(resource: string): ResourceAdapter {
   const found = RESOURCES[resource];

@@ -8,3 +8,8 @@ export * from './logger.js';
 export * from './notifications.js';
 export * from './groups.js';
 export * from './decisions.js';
+export * from './tracing.js';
+export * from './persistence.js';
+export * from './event-sources.js';
+export * from './workflows.js';
+export * from './unit-of-work.js';

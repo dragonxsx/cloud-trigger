@@ -1,22 +1,10 @@
-import {
-  type DecisionLog,
-  type EventBus,
-  type GroupRepository,
-  type RateLimiter,
-  type JobRepository,
-  type NotificationOutbox,
-  type RunAnalytics,
-  type RunQueue,
-  type RunRepository,
-  ResultAsync,
-  type ScheduleStore,
-  toError,
-} from '@cloud-trigger/core';
+import { type Persistence, ResultAsync, nonAtomicUnitOfWork, toError } from '@cloud-trigger/core';
 import { type Db, MongoClient } from 'mongodb';
 
 import { MongoRunAnalytics, type RunMetricDocument } from './analytics.js';
 import { type DecisionDocument, MongoDecisionLog } from './decisions.js';
 import type { JobDocument, RunDocument } from './documents.js';
+import { type EventSourceLeaseDocument, MongoEventSourceLeases } from './event-sources.js';
 import { MongoChangeStreamEventBus } from './events.js';
 import {
   type GroupDocument,
@@ -27,9 +15,16 @@ import {
 import { MongoJobRepository, MongoScheduleStore } from './jobs.js';
 import { MongoNotificationOutbox, type NotificationDocument } from './notifications.js';
 import { type FireKeyDocument, MongoRunQueue, MongoRunRepository } from './runs.js';
+import {
+  MongoWorkflowRepository,
+  MongoWorkflowRunRepository,
+  type WorkflowDocument,
+  type WorkflowRunDocument,
+} from './workflows.js';
 
 export {
   MongoChangeStreamEventBus,
+  MongoEventSourceLeases,
   MongoDecisionLog,
   MongoGroupRepository,
   MongoJobRepository,
@@ -39,6 +34,8 @@ export {
   MongoRunQueue,
   MongoRunRepository,
   MongoScheduleStore,
+  MongoWorkflowRepository,
+  MongoWorkflowRunRepository,
 };
 
 export interface MongoPersistenceOptions {
@@ -52,21 +49,7 @@ export interface MongoPersistenceOptions {
   readonly onEventBusError?: (error: unknown) => void;
 }
 
-export interface MongoPersistence {
-  readonly jobs: JobRepository;
-  readonly schedule: ScheduleStore;
-  readonly runs: RunRepository;
-  readonly queue: RunQueue;
-  readonly analytics: RunAnalytics;
-  readonly outbox: NotificationOutbox;
-  readonly groups: GroupRepository;
-  readonly rateLimiter: RateLimiter;
-  readonly decisions: DecisionLog;
-  readonly events: EventBus & { start(): void };
-  migrate(): Promise<void>;
-  ping(): Promise<boolean>;
-  close(): Promise<void>;
-}
+export type MongoPersistence = Persistence;
 
 async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
   await db.collection<JobDocument>('jobs').createIndexes([
@@ -74,6 +57,11 @@ async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
     { key: { tags: 1 }, name: 'tags' },
     { key: { groupId: 1 }, name: 'group' },
     { key: { upstreamJobIds: 1 }, name: 'upstream_jobs' },
+    {
+      key: { eventSource: 1 },
+      name: 'event_sourced',
+      partialFilterExpression: { eventSource: { $type: 'string' } },
+    },
     { key: { name: 1 }, name: 'name' },
     {
       key: { 'schedule.successDeadline': 1 },
@@ -132,6 +120,10 @@ export async function createMongoPersistence(
   const rateLimits = db.collection<RateLimitDocument>(MongoRateLimiter.collectionName);
   const outbox = db.collection<NotificationDocument>(MongoNotificationOutbox.collectionName);
   const events = new MongoChangeStreamEventBus(runs, jobs, options.onEventBusError);
+  const workflows = db.collection<WorkflowDocument>(MongoWorkflowRepository.collectionName);
+  const workflowRuns = db.collection<WorkflowRunDocument>(
+    MongoWorkflowRunRepository.collectionName,
+  );
 
   return {
     jobs: new MongoJobRepository(jobs),
@@ -148,11 +140,19 @@ export async function createMongoPersistence(
     decisions: new MongoDecisionLog(
       db.collection<DecisionDocument>(MongoDecisionLog.collectionName),
     ),
+    eventSources: new MongoEventSourceLeases(
+      db.collection<EventSourceLeaseDocument>(MongoEventSourceLeases.collectionName),
+    ),
+    workflows: new MongoWorkflowRepository(workflows),
+    workflowRuns: new MongoWorkflowRunRepository(workflowRuns),
     events,
+    unitOfWork: nonAtomicUnitOfWork,
     async migrate() {
       await ensureIndexes(db, options.runRetentionDays ?? 30);
       await MongoNotificationOutbox.ensureIndexes(outbox);
       await MongoGroupRepository.ensureIndexes(groups);
+      await MongoWorkflowRepository.ensureIndexes(workflows);
+      await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
       await MongoDecisionLog.ensureIndexes(db, options.decisionRetentionDays ?? 14);
       await MongoRunAnalytics.ensureCollection(analyticsDb, options.metricsRetentionDays ?? 90);
     },

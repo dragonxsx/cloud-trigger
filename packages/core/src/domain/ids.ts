@@ -17,3 +17,11 @@ export const newGroupId = (): GroupId => GroupId.parse(uuidv7());
 export const NotificationId = z.uuidv7().brand<'NotificationId'>();
 export type NotificationId = z.output<typeof NotificationId>;
 export const newNotificationId = (): NotificationId => NotificationId.parse(uuidv7());
+
+export const WorkflowId = z.uuidv7().brand<'WorkflowId'>();
+export type WorkflowId = z.output<typeof WorkflowId>;
+export const newWorkflowId = (): WorkflowId => WorkflowId.parse(uuidv7());
+
+export const WorkflowRunId = z.uuidv7().brand<'WorkflowRunId'>();
+export type WorkflowRunId = z.output<typeof WorkflowRunId>;
+export const newWorkflowRunId = (): WorkflowRunId => WorkflowRunId.parse(uuidv7());

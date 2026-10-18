@@ -6,6 +6,7 @@ RUN corepack enable
 WORKDIR /repo
 
 FROM base AS build
+RUN apk add --no-cache python3 make g++
 COPY . .
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 RUN pnpm build

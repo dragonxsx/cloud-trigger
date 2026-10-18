@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { GroupId, JobId } from './ids.js';
+import { GroupId, JobId, WorkflowId } from './ids.js';
 import { JobPolicyPatch } from './policy.js';
 import { ProviderRef } from './provider-ref.js';
 
@@ -58,11 +58,19 @@ export const Job = JobSpec.extend({
     .array(JobId)
     .default([])
     .describe('Jobs whose runs trigger this one, from an event trigger such as after_job.'),
+  eventSource: z
+    .string()
+    .nullable()
+    .default(null)
+    .describe('Trigger type of a long-lived event source (sqs, kafka, nats) the consumers poll.'),
   slaBreachedAt: z
     .date()
     .nullable()
     .default(null)
     .describe('Set when the job broke its since-last-success SLA; cleared by the next success.'),
+  workflowId: WorkflowId.nullable()
+    .default(null)
+    .describe('Set on inline workflow jobs, which are created and deleted with their workflow.'),
   schedule: ScheduleState,
   version: z.int().min(1),
   createdAt: z.date(),
@@ -94,6 +102,8 @@ export function createJob(params: {
   nextFireAt: Date | null;
   successDeadline?: Date | null;
   upstreamJobIds?: readonly JobId[];
+  eventSource?: string | null;
+  workflowId?: WorkflowId | null;
   now: Date;
 }): Job {
   return {
@@ -101,6 +111,8 @@ export function createJob(params: {
     id: params.id,
     pausedReason: null,
     upstreamJobIds: [...(params.upstreamJobIds ?? [])],
+    eventSource: params.eventSource ?? null,
+    workflowId: params.workflowId ?? null,
     slaBreachedAt: null,
     schedule: initialSchedule(
       params.spec.enabled ? params.nextFireAt : null,

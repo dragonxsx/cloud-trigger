@@ -24,8 +24,16 @@ roles:
       minReplicas: 2
       maxReplicas: 10
       targetCPUUtilizationPercentage: 70
+  consumer:
+    # Polls queue event sources (SQS, Kafka, NATS). SQS sources are leased to one replica;
+    # Kafka groups and JetStream durables spread work across replicas.
+    replicas: 2
+    resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 256Mi } }
 
 config:
+  # mongo (default) or postgres. Set MONGO_URI or POSTGRES_URL under secrets accordingly.
+  DB_DRIVER: mongo
+  POSTGRES_MAX_CONNECTIONS: "10"
   MONGO_DB: cloud_trigger
   LOG_LEVEL: info
   WORKER_CONCURRENCY: "16"
@@ -33,6 +41,10 @@ config:
   NOTIFY_TIMEOUT_MS: "10000"
   NOTIFY_MAX_ATTEMPTS: "5"
   SLA_INTERVAL_MS: "5000"
+  CONSUMER_INTERVAL_MS: "5000"
+  CONSUMER_LEASE_MS: "30000"
+  WEBHOOK_MAX_PER_SECOND: "20"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
   DECISION_RETENTION_DAYS: "14"
   BADGES_PUBLIC: "false"
   PUBLIC_URL: ""
@@ -48,6 +60,7 @@ secrets:
   existingSecret: ""
   values:
     MONGO_URI: ""
+    POSTGRES_URL: ""
     API_KEYS: ""
     CALENDAR_TOKEN_SECRET: ""
 
@@ -83,3 +96,20 @@ securityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# OpenTelemetry: set config.OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://otel-collector:4318) to export a span per run.
+
+# Throwaway in-cluster dependencies for demos and evaluation. Do not use in production.
+demo:
+  # Set config.DB_DRIVER=postgres too; POSTGRES_URL is filled in when secrets.values.POSTGRES_URL is empty.
+  postgres:
+    enabled: false
+    image: postgres:18-alpine
+  # SQS, SNS and EventBridge at http://<release>-localstack:4566 for the AWS targets and the sqs trigger.
+  localstack:
+    enabled: false
+    image: localstack/localstack:4.14
+  # A single-node KRaft broker at <release>-kafka:9092 for the kafka target and trigger.
+  kafka:
+    enabled: false
+    image: apache/kafka:4.1.0

@@ -4,16 +4,14 @@ import {
   type Clock,
   type Job,
   type JobId,
+  type Persistence,
   ProviderRegistry,
   type RunRepository,
   type RunningRun,
   mapSecretResolver,
   silentLogger,
 } from '@cloud-trigger/core';
-import { type MongoPersistence, createMongoPersistence } from '@cloud-trigger/persistence-mongo';
 import { builtinProviders } from '@cloud-trigger/providers-builtin';
-import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/mongodb';
-import { MongoClient } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -26,10 +24,10 @@ import {
   type WorkerDeps,
   type WorkerOptions,
 } from '../src/index.js';
+import { type TestDatabase, startTestDatabase } from './databases.js';
 
-let container: StartedMongoDBContainer;
-let db: MongoPersistence;
-let admin: MongoClient;
+let database: TestDatabase;
+let db: Persistence;
 let server: Server;
 let base = '';
 let hits = 0;
@@ -45,11 +43,8 @@ const registry = new ProviderRegistry().use(builtinProviders);
 const secrets = mapSecretResolver({});
 
 beforeAll(async () => {
-  container = await new MongoDBContainer('mongo:8').start();
-  const uri = `${container.getConnectionString()}?directConnection=true`;
-  db = await createMongoPersistence({ uri, dbName: 'engine' });
-  await db.migrate();
-  admin = await MongoClient.connect(uri);
+  database = await startTestDatabase('engine');
+  db = database.persistence;
   server = createServer((req, res) => {
     hits++;
     const path = req.url ?? '/';
@@ -72,17 +67,13 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await db.close();
-  await admin.close();
-  await container.stop();
+  await database.stop();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
 beforeEach(async () => {
   hits = 0;
-  await Promise.all(
-    ['jobs', 'runs', 'run_metrics'].map((c) => admin.db('engine').collection(c).deleteMany({})),
-  );
+  await database.clear(['jobs', 'job_tags', 'job_upstreams', 'runs', 'run_metrics']);
 });
 
 const listeners = (): RunLifecycleListener[] => [new AnalyticsListener(db.analytics)];

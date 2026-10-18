@@ -1,3 +1,4 @@
+import { FanoutMetadata } from '@cloud-trigger/core';
 import {
   Anchor,
   Button,
@@ -5,6 +6,7 @@ import {
   Group,
   SimpleGrid,
   Stack,
+  Table,
   Tabs,
   Text,
   Timeline,
@@ -38,8 +40,52 @@ const prettyBody = (body: string | undefined): string => {
   }
 };
 
+function FanoutChildren({ metadata }: { metadata: FanoutMetadata }) {
+  return (
+    <Table fontSize="sm" verticalSpacing={4}>
+      <thead>
+        <tr>
+          <th>Target</th>
+          <th>Outcome</th>
+          <th>Duration</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {metadata.children.map((child) => (
+          <tr key={child.index}>
+            <td>
+              {child.name ?? `#${child.index + 1}`}{' '}
+              <Text component="span" color="dimmed" className="ct-mono">
+                {child.type}
+              </Text>
+            </td>
+            <td>
+              <StatusBadge status={child.outcome === 'success' ? 'succeeded' : 'failed'} />
+            </td>
+            <td>{duration(child.durationMs)}</td>
+            <td>
+              {child.error ? (
+                <>
+                  <b className="ct-mono">{child.error.code}</b> {child.error.message}
+                </>
+              ) : child.statusCode !== undefined ? (
+                `status ${child.statusCode}`
+              ) : (
+                ''
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </Table>
+  );
+}
+
 function AttemptDetail({ attempt }: { attempt: Attempt }) {
   const { result } = attempt;
+  const fanout = FanoutMetadata.safeParse(result.metadata);
+  const hasMetadata = result.metadata !== undefined && Object.keys(result.metadata).length > 0;
 
   return (
     <Stack spacing="xs">
@@ -53,6 +99,15 @@ function AttemptDetail({ attempt }: { attempt: Attempt }) {
           {result.error.retryable ? ' (retryable)' : ''}
         </Text>
       )}
+      {fanout.success && (
+        <Text size="sm" color="dimmed">
+          Fan-out ({fanout.data.mode === 'all' ? 'all must succeed' : 'any may succeed'})
+        </Text>
+      )}
+      {fanout.success && <FanoutChildren metadata={fanout.data} />}
+      {!fanout.success && hasMetadata && !result.response && (
+        <Code block>{JSON.stringify(result.metadata, null, 2)}</Code>
+      )}
       {result.response && (
         <Tabs defaultValue="body" variant="outline">
           <Tabs.List>
@@ -60,6 +115,7 @@ function AttemptDetail({ attempt }: { attempt: Attempt }) {
               Response body{result.response.truncated ? ' (truncated)' : ''}
             </Tabs.Tab>
             <Tabs.Tab value="headers">Headers</Tabs.Tab>
+            {hasMetadata && !fanout.success && <Tabs.Tab value="metadata">Metadata</Tabs.Tab>}
           </Tabs.List>
           <Tabs.Panel value="body" pt="xs">
             <Code block>{prettyBody(result.response.body)}</Code>
@@ -67,8 +123,36 @@ function AttemptDetail({ attempt }: { attempt: Attempt }) {
           <Tabs.Panel value="headers" pt="xs">
             <Code block>{JSON.stringify(result.response.headers ?? {}, null, 2)}</Code>
           </Tabs.Panel>
+          <Tabs.Panel value="metadata" pt="xs">
+            <Code block>{JSON.stringify(result.metadata ?? {}, null, 2)}</Code>
+          </Tabs.Panel>
         </Tabs>
       )}
+    </Stack>
+  );
+}
+
+type RunEventDto = NonNullable<RunDto['event']>;
+
+function InboundEvent({ event }: { event: RunEventDto }) {
+  return (
+    <Stack className="ct-panel" p="lg" spacing="xs">
+      <Text weight={600}>Inbound {event.kind === 'webhook' ? 'webhook' : 'message'}</Text>
+      <Text size="sm" color="dimmed">
+        {event.source} · {event.id} · received {dateTime(event.receivedAt)}
+      </Text>
+      <Tabs defaultValue="body" variant="outline">
+        <Tabs.List>
+          <Tabs.Tab value="body">Body</Tabs.Tab>
+          <Tabs.Tab value="headers">Headers</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="body" pt="xs">
+          <Code block>{prettyBody(event.body)}</Code>
+        </Tabs.Panel>
+        <Tabs.Panel value="headers" pt="xs">
+          <Code block>{JSON.stringify(event.headers, null, 2)}</Code>
+        </Tabs.Panel>
+      </Tabs>
     </Stack>
   );
 }
@@ -171,6 +255,7 @@ export function RunShow() {
             </Stack>
           </SimpleGrid>
           {run.status === 'skipped' && <Text color="dimmed">Skipped: {run.skipReason}</Text>}
+          {run.event && <InboundEvent event={run.event} />}
           {run.status === 'pending' && run.attempts.length > 0 && (
             <Text color="dimmed">Retrying at {dateTime(run.availableAt)}.</Text>
           )}

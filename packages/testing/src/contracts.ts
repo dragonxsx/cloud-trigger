@@ -1,5 +1,11 @@
 import {
   type DecisionLog,
+  type EventSourceLeases,
+  type WorkflowRepository,
+  type UnitOfWork,
+  type WorkflowRun,
+  type WorkflowRunRepository,
+  completeNode,
   type GroupRepository,
   GroupSpec,
   type JobRepository,
@@ -17,7 +23,15 @@ import {
 } from '@cloud-trigger/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { T0, at, makeDelivery, makeJob, makePendingRun } from './fixtures.js';
+import {
+  T0,
+  at,
+  makeDelivery,
+  makeJob,
+  makePendingRun,
+  makeWorkflow,
+  makeWorkflowRun,
+} from './fixtures.js';
 
 export interface PortsUnderTest {
   readonly jobs: JobRepository;
@@ -29,6 +43,10 @@ export interface PortsUnderTest {
   readonly groups: GroupRepository;
   readonly rateLimiter: RateLimiter;
   readonly decisions: DecisionLog;
+  readonly eventSources: EventSourceLeases;
+  readonly workflows: WorkflowRepository;
+  readonly workflowRuns: WorkflowRunRepository;
+  readonly unitOfWork: UnitOfWork;
 }
 
 const makeGroup = (name: string) =>
@@ -45,6 +63,15 @@ const claimOne = async ({ jobs, runs, queue }: PortsUnderTest) => {
 
   return running;
 };
+const nodeRunId = (run: WorkflowRun, key: string) => {
+  const runId = run.nodes[key]?.runId;
+  if (!runId) {
+    throw new Error(`node ${key} has no run`);
+  }
+
+  return runId;
+};
+
 const succeed = (running: RunningRun) =>
   finishAttempt(running, {
     result: { outcome: 'success', durationMs: 3 },
@@ -58,6 +85,214 @@ export function describePersistenceContract(
 ) {
   describe(`${name}: persistence contract`, () => {
     beforeEach(() => setup.reset());
+
+    describe('UnitOfWork', () => {
+      it('commits writes made inside a transaction', async () => {
+        const { jobs, runs, unitOfWork } = setup.ports();
+        const job = makeJob();
+        await unitOfWork.transaction(async () => {
+          await jobs.insert(job);
+          await runs.insert(makePendingRun(job));
+        });
+        expect(await jobs.get(job.id)).toEqual(job);
+      });
+
+      it('rolls every write back when the work throws, if the store is atomic', async ({
+        skip,
+      }) => {
+        const { jobs, unitOfWork } = setup.ports();
+        if (!unitOfWork.atomic) {
+          skip();
+
+          return;
+        }
+        const job = makeJob();
+        await expect(
+          unitOfWork.transaction(async () => {
+            await jobs.insert(job);
+            throw new Error('abort');
+          }),
+        ).rejects.toThrow('abort');
+        expect(await jobs.get(job.id)).toBeUndefined();
+      });
+    });
+
+    describe('Workflows', () => {
+      it('round-trips, pages, searches and versions workflows', async () => {
+        const { workflows } = setup.ports();
+        const a = makeWorkflow({ name: 'alpha release' });
+        const b = makeWorkflow({ name: 'beta' });
+        await workflows.insert(a);
+        await workflows.insert(b);
+        expect(await workflows.get(a.id)).toEqual(a);
+        const page = await workflows.list({ limit: 1 });
+        expect(page.items.map((w) => w.name)).toEqual(['beta']);
+        expect(page.total).toBe(2);
+        expect(
+          (await workflows.list({ limit: 1, cursor: page.nextCursor ?? undefined })).items[0]?.id,
+        ).toBe(a.id);
+        expect((await workflows.list({ limit: 10, search: 'ALPHA' })).items).toHaveLength(1);
+
+        const change = {
+          spec: { ...a, name: 'renamed' },
+          inlineJobIds: {},
+          nextFireAt: at(5),
+          updatedAt: at(1),
+        };
+        const updated = await workflows.update(a.id, change, 1);
+        expect(updated._unsafeUnwrap()).toMatchObject({
+          name: 'renamed',
+          version: 2,
+          nextFireAt: at(5),
+        });
+        expect((await workflows.update(a.id, change, 1))._unsafeUnwrapErr().code).toBe(
+          'version_conflict',
+        );
+        expect((await workflows.update(makeWorkflow().id, change, 1))._unsafeUnwrapErr().code).toBe(
+          'not_found',
+        );
+        expect(await workflows.delete(a.id)).toBe(true);
+        expect(await workflows.get(a.id)).toBeUndefined();
+      });
+
+      it('finds due workflows and advances each schedule once', async () => {
+        const { workflows } = setup.ports();
+        const due = makeWorkflow({ name: 'due' }, at(0));
+        await workflows.insert(due);
+        await workflows.insert(makeWorkflow({ name: 'later' }, at(60_000)));
+        await workflows.insert(makeWorkflow({ name: 'off', enabled: false }, at(0)));
+        await workflows.insert(makeWorkflow({ name: 'manual' }));
+        expect((await workflows.findDue({ now: at(1), limit: 10 })).map((w) => w.name)).toEqual([
+          'due',
+        ]);
+        const advance = () => workflows.advanceSchedule(due.id, { from: at(0), to: at(30_000) });
+        const results = await Promise.all([advance(), advance()]);
+        expect(results.filter(Boolean)).toHaveLength(1);
+        expect((await workflows.get(due.id))?.nextFireAt).toEqual(at(30_000));
+        expect(await workflows.findDue({ now: at(1), limit: 10 })).toEqual([]);
+      });
+    });
+
+    describe('Workflow runs', () => {
+      it('stores runs, deduplicates by key, and updates with a version check', async () => {
+        const { workflowRuns } = setup.ports();
+        const workflow = makeWorkflow();
+        const run = makeWorkflowRun(workflow, { key: 'wfsched:x:1' });
+        expect((await workflowRuns.insert(run)).isOk()).toBe(true);
+        expect(await workflowRuns.get(run.id)).toEqual(run);
+        const dup = await workflowRuns.insert(makeWorkflowRun(workflow, { key: 'wfsched:x:1' }));
+        expect(dup._unsafeUnwrapErr().code).toBe('duplicate_run');
+        expect((await workflowRuns.insert(makeWorkflowRun(workflow))).isOk()).toBe(true);
+        expect((await workflowRuns.insert(makeWorkflowRun(workflow))).isOk()).toBe(true);
+
+        const advanced = completeNode(run, 'first', 'succeeded', {
+          runId: nodeRunId(run, 'first'),
+          now: at(10),
+        });
+        if (!advanced) {
+          throw new Error('expected a transition');
+        }
+        const saved = await workflowRuns.update(advanced.run, 1);
+        expect(saved._unsafeUnwrap()).toMatchObject({
+          version: 2,
+          nodes: { gate: { status: 'waiting_approval' } },
+        });
+        expect((await workflowRuns.update(advanced.run, 1))._unsafeUnwrapErr().code).toBe(
+          'stale_run',
+        );
+
+        const page = await workflowRuns.list({
+          limit: 10,
+          workflowId: workflow.id,
+          status: ['running'],
+        });
+        expect(page.total).toBe(3);
+        expect(
+          (await workflowRuns.list({ limit: 10, workflowId: makeWorkflow().id })).items,
+        ).toEqual([]);
+      });
+
+      it('finds expired approval gates and runs with queued nodes', async () => {
+        const { workflowRuns } = setup.ports();
+        const workflow = makeWorkflow();
+        const queued = makeWorkflowRun(workflow);
+        await workflowRuns.insert(queued);
+        const waiting = completeNode(queued, 'first', 'succeeded', {
+          runId: nodeRunId(queued, 'first'),
+          now: at(0),
+        });
+        if (!waiting) {
+          throw new Error('expected a transition');
+        }
+        const other = makeWorkflowRun(workflow);
+        await workflowRuns.insert(other);
+        await workflowRuns.update({ ...waiting.run, id: other.id }, 1);
+
+        expect((await workflowRuns.findWithQueuedNodes({ limit: 10 })).map((r) => r.id)).toEqual([
+          queued.id,
+        ]);
+        expect(await workflowRuns.findExpiredApprovals({ now: at(500), limit: 10 })).toEqual([]);
+        expect(
+          (await workflowRuns.findExpiredApprovals({ now: at(1_000), limit: 10 })).map((r) => r.id),
+        ).toEqual([other.id]);
+      });
+    });
+
+    describe('Event sources', () => {
+      it('finds jobs with an event source and keeps it across edits', async () => {
+        const { jobs } = setup.ports();
+        const sourced = { ...makeJob({ name: 'consumer' }, null), eventSource: 'sqs' };
+        await jobs.insert(sourced);
+        await jobs.insert(makeJob({ name: 'scheduled' }));
+        expect((await jobs.findEventSourced()).map((j) => j.name)).toEqual(['consumer']);
+        expect((await jobs.get(sourced.id))?.eventSource).toBe('sqs');
+
+        await jobs.update(sourced.id, { spec: sourced, updatedAt: at(1), eventSource: null }, 1);
+        expect(await jobs.findEventSourced()).toEqual([]);
+      });
+
+      it('leases a source to one owner until it expires or is released', async () => {
+        const { eventSources } = setup.ports();
+        const claim = (ownerId: string, ms: number) =>
+          eventSources.claim({ key: 'job-1', ownerId, now: at(ms), leaseMs: 1_000 });
+        expect(await claim('a', 0)).toBe(true);
+        expect(await claim('b', 10)).toBe(false);
+        expect(await claim('a', 500)).toBe(true);
+        expect(await claim('b', 1_400)).toBe(false);
+        expect(await claim('b', 1_600)).toBe(true);
+        await eventSources.release({ key: 'job-1', ownerId: 'a' });
+        expect(await claim('a', 1_700)).toBe(false);
+        await eventSources.release({ key: 'job-1', ownerId: 'b' });
+        expect(await claim('a', 1_800)).toBe(true);
+      });
+
+      it('lets exactly one of several racing owners win', async () => {
+        const { eventSources } = setup.ports();
+        const results = await Promise.all(
+          ['a', 'b', 'c', 'd'].map((ownerId) =>
+            eventSources.claim({ key: 'race', ownerId, now: T0, leaseMs: 1_000 }),
+          ),
+        );
+        expect(results.filter(Boolean)).toHaveLength(1);
+      });
+
+      it('stores the inbound event on the run', async () => {
+        const { jobs, runs } = setup.ports();
+        const job = makeJob();
+        await jobs.insert(job);
+        const event = {
+          kind: 'webhook' as const,
+          source: 'webhook',
+          id: 'delivery-1',
+          body: '{"a":1}',
+          headers: { 'content-type': 'application/json' },
+          receivedAt: T0,
+        };
+        const run = { ...makePendingRun(job), reason: 'event' as const, event };
+        await runs.insert(run);
+        expect((await runs.get(run.id))?.event).toEqual(event);
+      });
+    });
 
     describe('JobRepository', () => {
       it('round-trips a job and pages newest first', async () => {

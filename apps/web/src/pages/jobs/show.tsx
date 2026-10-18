@@ -1,4 +1,4 @@
-import { Alert, Button, Group, List, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Alert, Button, Code, Group, List, SimpleGrid, Stack, Text } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
 import { CanAccess, useInvalidate, useList, useShow } from '@refinedev/core';
 import { DeleteButton, EditButton, Show } from '@refinedev/mantine';
@@ -90,6 +90,23 @@ function JobActions({ job }: { job: JobDto }) {
   );
 }
 
+function WebhookPanel({ job }: { job: JobDto }) {
+  const url = `${window.location.origin}/hooks/${job.id}/<token>`;
+
+  return (
+    <Stack className="ct-panel" p="lg" spacing="xs">
+      <Text weight={600}>Webhook endpoint</Text>
+      <Text size="sm" color="dimmed">
+        POST to this address to start a run. Replace &lt;token&gt; with the token from the trigger
+        settings; it is never shown again here. Send an Idempotency-Key header to make retries safe.
+      </Text>
+      <Code block className="ct-mono">
+        {`curl -X POST '${url}' \\\n  -H 'content-type: application/json' \\\n  -H 'idempotency-key: <unique id>' \\\n  -d '{"hello":"world"}'`}
+      </Code>
+    </Stack>
+  );
+}
+
 function JobInsights({ job }: { job: JobDto }) {
   const lastWeek = () => ({
     from: new Date(Date.now() - WEEK).toISOString(),
@@ -142,6 +159,7 @@ function JobInsights({ job }: { job: JobDto }) {
           {job.pausedReason}. Resume to schedule runs again.
         </Alert>
       )}
+      {job.trigger.type === 'webhook' && <WebhookPanel job={job} />}
       {(preview.data?.nextFireTimes.length ?? 0) > 0 && (
         <Stack className="ct-panel" p="lg" spacing="xs">
           <Text weight={600}>Upcoming runs</Text>

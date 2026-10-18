@@ -8,9 +8,10 @@ import {
   secret,
   toError,
 } from '@cloud-trigger/core';
-import { Agent, type Dispatcher, interceptors, request } from 'undici';
+import { request } from 'undici';
 import { z } from 'zod';
 
+import { dispatcherFor, errorCode, flattenHeaders, readLimited } from '../shared/http-client.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
 import { SigningConfig, signatureHeaders } from '../shared/signing.js';
 import {
@@ -53,51 +54,6 @@ export const HttpTargetConfig = z.object({
 });
 export type HttpTargetConfig = z.output<typeof HttpTargetConfig>;
 
-const agents = new Map<number, Dispatcher>();
-const dispatcherFor = (maxRedirections: number): Dispatcher => {
-  const existing = agents.get(maxRedirections);
-  if (existing) {
-    return existing;
-  }
-  const agent = new Agent().compose(interceptors.redirect({ maxRedirections }));
-  agents.set(maxRedirections, agent);
-
-  return agent;
-};
-
-const flattenHeaders = (
-  headers: Record<string, string | string[] | undefined>,
-): Record<string, string> =>
-  Object.fromEntries(
-    Object.entries(headers).flatMap(([k, v]) =>
-      v === undefined ? [] : [[k, Array.isArray(v) ? v.join(', ') : v]],
-    ),
-  );
-
-async function readLimited(body: AsyncIterable<unknown>, limit: number) {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  let truncated = false;
-  for await (const chunk of body) {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    size += buf.length;
-    const room = limit - (size - buf.length);
-    if (room > 0) {
-      chunks.push(room >= buf.length ? buf : buf.subarray(0, room));
-    }
-    if (size > limit) {
-      truncated = true;
-    }
-  }
-
-  return { text: Buffer.concat(chunks).toString('utf8'), sizeBytes: size, truncated };
-}
-
-const errorCode = (error: unknown): string | undefined =>
-  error instanceof Error && 'code' in error && typeof error.code === 'string'
-    ? error.code
-    : undefined;
-
 export const httpTarget = defineTarget({
   type: 'http',
   displayName: 'HTTP request',
@@ -131,6 +87,7 @@ export const httpTarget = defineTarget({
       'user-agent': 'cloud-trigger',
       'x-cloud-trigger-run-id': ctx.runId,
       'x-cloud-trigger-attempt': String(ctx.attempt),
+      ...(ctx.traceparent !== undefined && { traceparent: ctx.traceparent }),
       ...payload.attributes,
       ...(payload.contentType && body !== undefined ? { 'content-type': payload.contentType } : {}),
       ...headers,

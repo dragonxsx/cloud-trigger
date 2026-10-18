@@ -1,0 +1,36 @@
+{
+  "name": "@cloud-trigger/providers-aws",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@cloud-trigger/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@aws-sdk/client-eventbridge": "3.1152.0",
+    "@aws-sdk/client-sns": "3.1152.0",
+    "@aws-sdk/client-sqs": "3.1152.0",
+    "@cloud-trigger/core": "workspace:*",
+    "@cloud-trigger/providers-builtin": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@cloud-trigger/testing": "workspace:*",
+    "@testcontainers/localstack": "12.2.1",
+    "@types/node": "24.19.2",
+    "testcontainers": "12.2.1"
+  }
+}

@@ -3,9 +3,24 @@ import type { JsonSchema } from './sdk.js';
 
 export const REDACTED = '***';
 
-const schemaBranches = (schema: JsonSchema): readonly (JsonSchema | boolean)[] => [
-  ...(schema.anyOf ?? []),
-  ...(schema.oneOf ?? []),
+const discriminatorMatches = (branch: JsonSchema | boolean, value: unknown): boolean => {
+  if (typeof branch === 'boolean' || branch.properties === undefined || !isRecord(value)) {
+    return true;
+  }
+
+  return Object.entries(branch.properties).every(
+    ([key, property]) =>
+      typeof property === 'boolean' ||
+      property.const === undefined ||
+      value[key] === undefined ||
+      value[key] === property.const,
+  );
+};
+
+const schemaBranches = (schema: JsonSchema, value: unknown): readonly (JsonSchema | boolean)[] => [
+  ...[...(schema.anyOf ?? []), ...(schema.oneOf ?? [])].filter((branch) =>
+    discriminatorMatches(branch, value),
+  ),
   ...(schema.allOf ?? []),
 ];
 
@@ -23,7 +38,7 @@ export function redactBySchema(schema: JsonSchema | boolean | undefined, value: 
     return value === undefined ? value : REDACTED;
   }
 
-  const result = schemaBranches(schema).reduce<unknown>(
+  const result = schemaBranches(schema, value).reduce<unknown>(
     (current, branch) => redactBySchema(branch, current),
     value,
   );
@@ -57,7 +72,7 @@ export function restoreRedacted(
     return next === REDACTED ? previous : next;
   }
 
-  const result = schemaBranches(schema).reduce<unknown>(
+  const result = schemaBranches(schema, next).reduce<unknown>(
     (current, branch) => restoreRedacted(branch, current, previous),
     next,
   );

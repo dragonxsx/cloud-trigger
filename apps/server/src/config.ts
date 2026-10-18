@@ -10,7 +10,7 @@ const splitCsv = (s: string): string[] =>
     .filter(Boolean);
 const csv = z.string().default('').transform(splitCsv);
 
-const Role = z.enum(['api', 'scheduler', 'worker']);
+const Role = z.enum(['api', 'scheduler', 'worker', 'consumer']);
 export type Role = z.output<typeof Role>;
 
 const ApiKeys = csv.pipe(
@@ -26,17 +26,24 @@ const ApiKeys = csv.pipe(
   ),
 );
 
-export const AppConfig = z.object({
+const ConfigShape = z.object({
   APP_ROLE: z
     .string()
     .default('all')
-    .transform((s) => splitCsv(s === 'all' ? 'api,scheduler,worker' : s))
+    .transform((s) => splitCsv(s === 'all' ? 'api,scheduler,worker,consumer' : s))
     .pipe(z.array(Role).min(1)),
   PORT: z.coerce.number().int().default(8080),
   INSTANCE_ID: z.string().default(`${hostname()}-${process.pid}`),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 
-  MONGO_URI: z.string().min(1),
+  DB_DRIVER: z
+    .enum(['mongo', 'postgres', 'sqlite'])
+    .default('mongo')
+    .describe('Storage adapter. sqlite is for single-node installs (APP_ROLE=all, 1 replica).'),
+  MONGO_URI: z.string().min(1).optional(),
+  POSTGRES_URL: z.string().min(1).optional(),
+  POSTGRES_MAX_CONNECTIONS: z.coerce.number().int().positive().default(10),
+  SQLITE_PATH: z.string().min(1).default('./data/cloud-trigger.db'),
   MONGO_DB: z.string().default('cloud_trigger'),
   ANALYTICS_MONGO_URI: z.string().optional(),
   ANALYTICS_MONGO_DB: z.string().optional(),
@@ -54,6 +61,19 @@ export const AppConfig = z.object({
   NOTIFY_POLL_MS: z.coerce.number().int().positive().default(1_000),
   NOTIFY_TIMEOUT_MS: z.coerce.number().int().min(100).default(10_000),
   NOTIFY_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(5),
+  CONSUMER_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(5_000)
+    .describe('How often consumers re-check event-source jobs and renew their leases.'),
+  CONSUMER_LEASE_MS: z.coerce.number().int().min(1_000).default(30_000),
+  WEBHOOK_MAX_PER_SECOND: z.coerce
+    .number()
+    .positive()
+    .default(20)
+    .describe('Default per-job rate limit for inbound webhooks without their own limit.'),
+  WEBHOOK_MAX_BODY_BYTES: z.coerce.number().int().positive().max(262_144).default(262_144),
 
   AUTH_DISABLED: z.stringbool().default(false),
   OIDC_ISSUER: z.url().optional(),
@@ -81,6 +101,32 @@ export const AppConfig = z.object({
   SECRET_ENV_PREFIX: z.string().default('CT_SECRET_'),
   WEB_DIST: z.string().optional(),
   PLUGINS: csv,
+  OTEL_EXPORTER_OTLP_ENDPOINT: z
+    .url()
+    .optional()
+    .describe('Enables OpenTelemetry tracing; the SDK also reads the other OTEL_* variables.'),
+  OTEL_SERVICE_NAME: z.string().default('cloud-trigger'),
+});
+const ALL_ROLES: readonly Role[] = ['api', 'scheduler', 'worker', 'consumer'];
+
+export const AppConfig = ConfigShape.superRefine((config, ctx) => {
+  if (config.DB_DRIVER === 'mongo' && config.MONGO_URI === undefined) {
+    ctx.addIssue({ code: 'custom', path: ['MONGO_URI'], message: 'Required when DB_DRIVER=mongo' });
+  }
+  if (config.DB_DRIVER === 'postgres' && config.POSTGRES_URL === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['POSTGRES_URL'],
+      message: 'Required when DB_DRIVER=postgres',
+    });
+  }
+  if (config.DB_DRIVER === 'sqlite' && !ALL_ROLES.every((role) => config.APP_ROLE.includes(role))) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['APP_ROLE'],
+      message: 'DB_DRIVER=sqlite runs every role in one process; use APP_ROLE=all',
+    });
+  }
 });
 export type AppConfig = z.output<typeof AppConfig>;
 

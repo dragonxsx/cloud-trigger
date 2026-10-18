@@ -20,8 +20,11 @@ import { JobsController } from './api/jobs.controller.js';
 import { AuthController, AnalyticsController, ProvidersController } from './api/misc.controller.js';
 import { OpenApiController } from './api/openapi.controller.js';
 import { RunsController } from './api/runs.controller.js';
+import { WorkflowsController } from './api/workflows.controller.js';
 import type { AppContext } from './app-context.js';
 import { FeedsController } from './feeds/feeds.controller.js';
+import { HooksController } from './hooks/hooks.controller.js';
+import { McpController } from './mcp/mcp.controller.js';
 import { APP_CONTEXT } from './tokens.js';
 
 @Injectable()
@@ -39,7 +42,9 @@ class AppLifecycle
   }
 
   async onApplicationShutdown(): Promise<void> {
+    await this.ctx.registry.dispose();
     await this.ctx.persistence.close();
+    await this.ctx.shutdownTracing();
   }
 }
 
@@ -82,6 +87,8 @@ export class AppModule {
                   '/docs/{*path}',
                   '/badges/{*path}',
                   '/calendar.ics',
+                  '/hooks/{*path}',
+                  '/mcp',
                 ],
               }),
             ]
@@ -94,8 +101,11 @@ export class AppModule {
               JobsController,
               RunsController,
               GroupsController,
+              WorkflowsController,
               CalendarController,
               FeedsController,
+              HooksController,
+              McpController,
               AnalyticsController,
               ProvidersController,
               AuthController,

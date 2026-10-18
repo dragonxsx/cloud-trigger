@@ -2,7 +2,7 @@ import { err, ok, type Result } from 'neverthrow';
 import { z } from 'zod';
 
 import type { RunLifecycleEvent } from '../domain/notification.js';
-import type { RunReason } from '../domain/run.js';
+import type { RunEvent, RunReason } from '../domain/run.js';
 import type { TargetResult } from '../domain/target-result.js';
 import type { SecretResolver } from '../ports/secrets.js';
 import { type ConfigError, configErrorFromZod } from '../shared/errors.js';
@@ -39,7 +39,12 @@ export interface RunContext {
   readonly reason: RunReason;
   readonly secrets: SecretResolver;
   readonly now: Date;
+  readonly traceparent?: string | undefined;
+  readonly idempotencyKey?: string | undefined;
+  readonly trigger?: { readonly event: RunEvent } | undefined;
 }
+
+export const deliveryKey = (ctx: RunContext): string => ctx.idempotencyKey ?? ctx.runId;
 
 export const LintIssue = z.object({
   severity: z.enum(['info', 'warning', 'error']),
@@ -71,12 +76,52 @@ export interface TargetRequest {
   readonly signal: AbortSignal;
 }
 
-export type TriggerEvent = {
-  readonly kind: 'run_finished';
+export type TriggerEvent =
+  | {
+      readonly kind: 'run_finished';
+      readonly jobId: string;
+      readonly runId: string;
+      readonly status: 'succeeded' | 'failed' | 'timed_out';
+    }
+  | { readonly kind: 'webhook' | 'message'; readonly event: RunEvent };
+
+export interface InboundRequest {
+  readonly token: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string;
+  readonly receivedAt: Date;
+}
+
+export type InboundVerdict =
+  | {
+      readonly accepted: true;
+      readonly deliveryId: string;
+      readonly perSecond?: number | undefined;
+    }
+  | { readonly accepted: false; readonly reason: 'unauthorized' | 'invalid_signature' };
+
+export interface InboundContext {
+  readonly secrets: SecretResolver;
+  readonly now: Date;
+}
+
+export interface SourceMessage {
+  readonly id: string;
+  readonly body: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+export interface SubscribeContext {
+  readonly signal: AbortSignal;
+  readonly secrets: SecretResolver;
   readonly jobId: string;
-  readonly runId: string;
-  readonly status: 'succeeded' | 'failed' | 'timed_out';
-};
+  readonly emit: (message: SourceMessage) => Promise<void>;
+}
+
+export interface BoundEventSource {
+  readonly exclusive: boolean;
+  subscribe(ctx: SubscribeContext): Promise<void>;
+}
 
 export interface UpstreamRef {
   readonly jobId: string;
@@ -89,6 +134,8 @@ export interface BoundTrigger {
   lint(ctx: LintContext): readonly LintIssue[];
   matches?(event: TriggerEvent): boolean;
   upstream?(): readonly UpstreamRef[];
+  inbound?(request: InboundRequest, ctx: InboundContext): Promise<InboundVerdict>;
+  readonly source?: BoundEventSource | undefined;
 }
 export interface BoundInput {
   resolve(ctx: RunContext): Promise<Payload>;
@@ -150,6 +197,17 @@ export interface EventTriggerDefinition<S extends z.ZodType> extends BaseDefinit
   upstream(config: z.output<S>): readonly UpstreamRef[];
   describe(config: z.output<S>): string;
   lint?(config: z.output<S>, ctx: LintContext): readonly LintIssue[];
+  inbound?(
+    config: z.output<S>,
+    request: InboundRequest,
+    ctx: InboundContext,
+  ): Promise<InboundVerdict>;
+}
+export interface EventSourceDefinition<S extends z.ZodType> extends BaseDefinition<S> {
+  readonly exclusive: boolean;
+  subscribe(config: z.output<S>, ctx: SubscribeContext): Promise<void>;
+  describe(config: z.output<S>): string;
+  lint?(config: z.output<S>, ctx: LintContext): readonly LintIssue[];
 }
 export interface InputDefinition<S extends z.ZodType> extends BaseDefinition<S> {
   resolve(config: z.output<S>, ctx: RunContext): Promise<Payload>;
@@ -198,6 +256,26 @@ export const defineEventTrigger = <S extends z.ZodType>(
     lint: (ctx) => def.lint?.(config, ctx) ?? [],
     matches: (event) => def.matches(config, event),
     upstream: () => def.upstream(config),
+    ...(def.inbound && {
+      inbound: (request: InboundRequest, ctx: InboundContext) =>
+        def.inbound?.(config, request, ctx) ??
+        Promise.resolve<InboundVerdict>({ accepted: false, reason: 'unauthorized' }),
+    }),
+  }));
+
+export const defineEventSource = <S extends z.ZodType>(
+  def: EventSourceDefinition<S>,
+): TriggerProvider =>
+  makeProvider('trigger', def, (config) => ({
+    nextFireAt: () => null,
+    describe: () => def.describe(config),
+    lint: (ctx) => def.lint?.(config, ctx) ?? [],
+    matches: (event) => event.kind === 'message' && event.event.source === def.type,
+    upstream: () => [],
+    source: {
+      exclusive: def.exclusive,
+      subscribe: (ctx) => def.subscribe(config, ctx),
+    },
   }));
 
 export const defineInput = <S extends z.ZodType>(def: InputDefinition<S>): InputProvider =>

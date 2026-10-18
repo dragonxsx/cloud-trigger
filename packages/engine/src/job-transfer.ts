@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
 
 import {
+  type UnitOfWork,
+  nonAtomicUnitOfWork,
   type GroupId,
   type GroupRepository,
   type Job,
@@ -53,7 +55,10 @@ export interface JobTransferDeps {
   readonly groups?: GroupRepository | undefined;
   readonly registry: ProviderRegistry;
   readonly service: JobService;
+  readonly unitOfWork?: UnitOfWork | undefined;
 }
+
+class ImportRolledBack extends Error {}
 
 interface Plan {
   readonly index: number;
@@ -127,7 +132,7 @@ async function allJobs(
     cursor = page.nextCursor ?? undefined;
   } while (cursor !== undefined);
 
-  return all;
+  return all.filter((job) => job.workflowId === null);
 }
 
 export class JobTransfer {
@@ -213,12 +218,23 @@ export class JobTransfer {
     if (opts.dryRun) {
       return { dryRun: true, ...outcome, issues };
     }
-    await this.#apply(plans, ids, new Set(unchanged), opts.restore, issues);
-    if (issues.length > 0) {
-      return { dryRun: false, created, updated, unchanged, deleted: [], issues };
-    }
-    for (const job of toDelete) {
-      await this.deps.service.delete(job.id);
+    const unitOfWork = this.deps.unitOfWork ?? nonAtomicUnitOfWork;
+    const failed = { dryRun: false, created, updated, unchanged, deleted: [], issues };
+    try {
+      await unitOfWork.transaction(async () => {
+        await this.#apply(plans, ids, new Set(unchanged), opts.restore, issues);
+        if (issues.length > 0) {
+          throw new ImportRolledBack();
+        }
+        for (const job of toDelete) {
+          await this.deps.service.delete(job.id);
+        }
+      });
+    } catch (error: unknown) {
+      if (error instanceof ImportRolledBack) {
+        return unitOfWork.atomic ? { ...failed, created: [], updated: [] } : failed;
+      }
+      throw error;
     }
 
     return { dryRun: false, ...outcome, issues };

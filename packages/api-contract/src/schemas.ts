@@ -14,6 +14,12 @@ import {
   RunStatus,
   ScheduleDecision,
   SchedulePreview,
+  Workflow,
+  WorkflowId,
+  WorkflowRun,
+  WorkflowRunId,
+  WorkflowRunStatus,
+  WorkflowSpec,
 } from '@cloud-trigger/core';
 import { z } from 'zod';
 
@@ -177,4 +183,23 @@ export const Me = z.object({
   subject: z.string(),
   via: z.enum(['oidc', 'api_key', 'anonymous', 'disabled']),
   scopes: z.array(Scope),
+});
+
+export const WorkflowIdParam = z.object({ id: WorkflowId });
+export const WorkflowPage = page(Workflow);
+export const WorkflowListQuery = PageQuery.extend({ search: z.string().optional() });
+export const UpdateWorkflowInput = WorkflowSpec.extend({
+  id: WorkflowId,
+  expectedVersion: z.int().min(1),
+});
+export const WorkflowRunIdParam = z.object({ id: WorkflowRunId });
+export const WorkflowRunPage = page(WorkflowRun);
+export const WorkflowRunListQuery = PageQuery.extend({
+  workflowId: WorkflowId.optional(),
+  status: commaSeparated(WorkflowRunStatus).optional(),
+});
+export const ApprovalInput = z.object({
+  id: WorkflowRunId,
+  node: z.string().min(1).describe('Key of the approval node.'),
+  reason: z.string().max(500).optional(),
 });

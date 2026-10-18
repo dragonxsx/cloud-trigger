@@ -95,6 +95,7 @@ export class MongoJobRepository implements JobRepository {
           schedulerLease: null,
           ...(reschedule && { 'schedule.nextFireAt': reschedule.nextFireAt }),
           ...(update.upstreamJobIds && { upstreamJobIds: [...update.upstreamJobIds] }),
+          ...(update.eventSource !== undefined && { eventSource: update.eventSource }),
         },
       },
       { returnDocument: 'after' },
@@ -136,6 +137,15 @@ export class MongoJobRepository implements JobRepository {
 
   async findDependants(jobId: JobId): Promise<readonly Job[]> {
     const docs = await this.jobs.find({ upstreamJobIds: jobId }).sort({ _id: 1 }).toArray();
+
+    return docs.map(fromJobDocument);
+  }
+
+  async findEventSourced(): Promise<readonly Job[]> {
+    const docs = await this.jobs
+      .find({ eventSource: { $type: 'string' } })
+      .sort({ _id: 1 })
+      .toArray();
 
     return docs.map(fromJobDocument);
   }

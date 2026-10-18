@@ -1,7 +1,16 @@
-import { type Logger, ProviderRegistry, type Run, systemClock } from '@cloud-trigger/core';
+import {
+  type Logger,
+  type Persistence,
+  ProviderRegistry,
+  type Run,
+  type Tracer,
+  systemClock,
+} from '@cloud-trigger/core';
 import {
   AnalyticsListener,
   ChainListener,
+  ConsumerSupervisor,
+  EventIngestor,
   GroupService,
   JobTransfer,
   JobService,
@@ -12,9 +21,16 @@ import {
   Scheduler,
   SlaMonitor,
   Worker,
+  WorkflowAdvancer,
+  WorkflowMonitor,
+  WorkflowRuntime,
+  WorkflowService,
 } from '@cloud-trigger/engine';
-import { type MongoPersistence, createMongoPersistence } from '@cloud-trigger/persistence-mongo';
-import { builtinProviders } from '@cloud-trigger/providers-builtin';
+import { awsProviders } from '@cloud-trigger/providers-aws';
+import { builtinProviders, createFanoutTarget } from '@cloud-trigger/providers-builtin';
+import { grpcProviders } from '@cloud-trigger/providers-grpc';
+import { kafkaProviders } from '@cloud-trigger/providers-kafka';
+import { natsProviders } from '@cloud-trigger/providers-nats';
 import { EventPublisher } from '@orpc/server';
 import type { Logger as Pino } from 'pino';
 
@@ -23,42 +39,55 @@ import type { AppConfig } from './config.js';
 import { type BackgroundLoop, EngineRuntime } from './engine/engine-runtime.js';
 import { pinoLogger } from './infra/logger.js';
 import { AppMetrics } from './infra/metrics.js';
+import { createPersistence } from './infra/persistence.js';
 import { loadPlugins } from './infra/plugins.js';
 import { envAndFileSecretResolver } from './infra/secrets.js';
+import { startTracing } from './infra/tracing.js';
 
 export interface AppContext {
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly pino: Pino;
-  readonly persistence: MongoPersistence;
+  readonly persistence: Persistence;
   readonly registry: ProviderRegistry;
   readonly jobService: JobService;
+  readonly ingestor: EventIngestor;
+  readonly workflowService: WorkflowService;
   readonly groupService: GroupService;
   readonly jobTransfer: JobTransfer;
   readonly authenticator: Authenticator;
   readonly metrics: AppMetrics;
   readonly runEvents: EventPublisher<{ run: Run }>;
   readonly engine: EngineRuntime;
+  readonly shutdownTracing: () => Promise<void>;
 }
 
-export async function createAppContext(config: AppConfig, pino: Pino): Promise<AppContext> {
+export interface AppContextOptions {
+  readonly tracer?: Tracer | undefined;
+}
+
+export async function createAppContext(
+  config: AppConfig,
+  pino: Pino,
+  options: AppContextOptions = {},
+): Promise<AppContext> {
   const logger = pinoLogger(pino);
-  const registry = new ProviderRegistry().use(builtinProviders);
+  const tracing = options.tracer ? undefined : startTracing(config);
+  const tracer = options.tracer ?? tracing?.tracer;
+  const registry = new ProviderRegistry().use(
+    builtinProviders,
+    grpcProviders,
+    awsProviders,
+    kafkaProviders,
+    natsProviders,
+  );
   const plugins = await loadPlugins(registry, config.PLUGINS);
   if (plugins.length > 0) {
     logger.info('Loaded provider plugins', { plugins });
   }
+  registry.register(createFanoutTarget(registry));
 
-  const persistence = await createMongoPersistence({
-    uri: config.MONGO_URI,
-    dbName: config.MONGO_DB,
-    analyticsUri: config.ANALYTICS_MONGO_URI,
-    analyticsDbName: config.ANALYTICS_MONGO_DB,
-    runRetentionDays: config.RUN_RETENTION_DAYS,
-    metricsRetentionDays: config.METRICS_RETENTION_DAYS,
-    decisionRetentionDays: config.DECISION_RETENTION_DAYS,
-    onEventBusError: (error) => logger.warn('Change stream error; reconnecting', { err: error }),
-  });
+  const persistence = await createPersistence(config, logger);
   await persistence.migrate();
 
   const clock = systemClock;
@@ -86,11 +115,13 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
     groups: persistence.groups,
     clock,
   });
+  const workflowRuntime = new WorkflowRuntime({ ...persistence, clock, logger });
   const listeners = [
     new AnalyticsListener(persistence.analytics),
     metrics,
     new NotificationListener(enqueuer),
     new ChainListener({ ...persistence, registry, clock, logger }),
+    new WorkflowAdvancer(workflowRuntime),
   ];
   const reaper = roles.has('scheduler')
     ? new Reaper(
@@ -107,6 +138,7 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
           clock,
           logger,
           listeners,
+          tracer,
         },
         {
           workerId: id,
@@ -143,9 +175,39 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
         { intervalMs: config.SLA_INTERVAL_MS, batchSize: 100 },
       )
     : undefined;
-  const loops: BackgroundLoop[] = [scheduler, reaper, slaMonitor, dispatcher].filter(
-    (l) => l !== undefined,
-  );
+  const ingestor = new EventIngestor({
+    ...persistence,
+    registry,
+    secrets,
+    clock,
+    logger,
+    defaultWebhookPerSecond: config.WEBHOOK_MAX_PER_SECOND,
+  });
+  const consumers = roles.has('consumer')
+    ? new ConsumerSupervisor(
+        { ...persistence, registry, secrets, clock, logger, ingestor },
+        {
+          ownerId: id,
+          intervalMs: config.CONSUMER_INTERVAL_MS,
+          leaseMs: config.CONSUMER_LEASE_MS,
+          restartDelayMs: 1_000,
+        },
+      )
+    : undefined;
+  const workflowMonitor = roles.has('scheduler')
+    ? new WorkflowMonitor(
+        { ...persistence, registry, clock, logger, runtime: workflowRuntime },
+        { intervalMs: config.SCHEDULER_INTERVAL_MS, batchSize: config.SCHEDULER_BATCH_SIZE },
+      )
+    : undefined;
+  const loops: BackgroundLoop[] = [
+    scheduler,
+    reaper,
+    slaMonitor,
+    dispatcher,
+    consumers,
+    workflowMonitor,
+  ].filter((l) => l !== undefined);
 
   const runEvents = new EventPublisher<{ run: Run }>();
   if (roles.has('api')) {
@@ -158,6 +220,13 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
   }
 
   const jobService = new JobService({ ...persistence, registry, clock, logger, listeners });
+  const workflowService = new WorkflowService({
+    ...persistence,
+    registry,
+    clock,
+    jobService,
+    runtime: workflowRuntime,
+  });
 
   return {
     config,
@@ -166,11 +235,14 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
     persistence,
     registry,
     jobService,
+    ingestor,
+    workflowService,
     jobTransfer: new JobTransfer({ ...persistence, registry, service: jobService }),
     groupService: new GroupService({ ...persistence, registry, clock }),
     authenticator: new Authenticator(config),
     metrics,
     runEvents,
     engine: new EngineRuntime({ loops, worker }, logger),
+    shutdownTracing: tracing?.shutdown ?? (() => Promise.resolve()),
   };
 }

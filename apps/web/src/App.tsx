@@ -24,6 +24,7 @@ import {
   IconApi,
   IconCalendarTime,
   IconFolders,
+  IconHierarchy2,
   IconLayoutDashboard,
   IconMoon,
   IconSun,
@@ -49,6 +50,11 @@ const GroupList = lazyNamed(() => import('./pages/groups/list'), 'GroupList');
 const GroupCreate = lazyNamed(() => import('./pages/groups/create'), 'GroupCreate');
 const GroupEdit = lazyNamed(() => import('./pages/groups/edit'), 'GroupEdit');
 const GroupShow = lazyNamed(() => import('./pages/groups/show'), 'GroupShow');
+const WorkflowList = lazyNamed(() => import('./pages/workflows/list'), 'WorkflowList');
+const WorkflowCreate = lazyNamed(() => import('./pages/workflows/create'), 'WorkflowCreate');
+const WorkflowEdit = lazyNamed(() => import('./pages/workflows/edit'), 'WorkflowEdit');
+const WorkflowShow = lazyNamed(() => import('./pages/workflows/show'), 'WorkflowShow');
+const WorkflowRunShow = lazyNamed(() => import('./pages/workflows/run'), 'WorkflowRunShow');
 const Login = lazyNamed(() => import('./pages/Login'), 'Login');
 const AuthCallback = lazyNamed(() => import('./pages/AuthCallback'), 'AuthCallback');
 
@@ -163,6 +169,14 @@ export function App() {
                   meta: { label: 'Runs', icon: <IconActivity size={18} /> },
                 },
                 {
+                  name: 'workflows',
+                  list: '/workflows',
+                  create: '/workflows/create',
+                  edit: '/workflows/edit/:id',
+                  show: '/workflows/show/:id',
+                  meta: { label: 'Workflows', icon: <IconHierarchy2 size={18} />, canDelete: true },
+                },
+                {
                   name: 'groups',
                   list: '/groups',
                   create: '/groups/create',
@@ -209,6 +223,13 @@ export function App() {
                   <Route path="/runs">
                     <Route index element={<RunList />} />
                     <Route path="show/:id" element={<RunShow />} />
+                  </Route>
+                  <Route path="/workflows">
+                    <Route index element={<WorkflowList />} />
+                    <Route path="create" element={<WorkflowCreate />} />
+                    <Route path="edit/:id" element={<WorkflowEdit />} />
+                    <Route path="show/:id" element={<WorkflowShow />} />
+                    <Route path="runs/:id" element={<WorkflowRunShow />} />
                   </Route>
                   <Route path="/groups">
                     <Route index element={<GroupList />} />

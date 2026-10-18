@@ -1,4 +1,12 @@
 import {
+  type Workflow,
+  type WorkflowRun,
+  WorkflowSpec,
+  type WorkflowSpecInput,
+  newWorkflowId,
+  newWorkflowRunId,
+  nodeJobIds,
+  startWorkflowRun,
   type Job,
   type NotificationDelivery,
   JobSpec,
@@ -70,3 +78,36 @@ export const makeDelivery = (
 
   return delivery;
 };
+
+export const makeWorkflow = (
+  spec: Partial<WorkflowSpecInput> = {},
+  nextFireAt: Date | null = null,
+): Workflow => ({
+  ...WorkflowSpec.parse({
+    name: 'workflow',
+    nodes: [
+      { key: 'first', kind: 'job', jobId: newJobId() },
+      { key: 'gate', kind: 'approval', timeoutMs: 1_000 },
+    ],
+    edges: [{ from: 'first', to: 'gate' }],
+    ...spec,
+  }),
+  id: newWorkflowId(),
+  inlineJobIds: {},
+  nextFireAt,
+  version: 1,
+  createdAt: T0,
+  updatedAt: T0,
+});
+
+export const makeWorkflowRun = (
+  workflow: Workflow,
+  p: { key?: string; now?: Date } = {},
+): WorkflowRun =>
+  startWorkflowRun(workflow, {
+    id: newWorkflowRunId(),
+    jobIds: nodeJobIds(workflow),
+    reason: 'manual',
+    idempotencyKey: p.key ?? null,
+    now: p.now ?? T0,
+  }).run;

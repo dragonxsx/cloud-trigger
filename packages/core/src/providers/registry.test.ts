@@ -84,4 +84,31 @@ describe('ProviderRegistry', () => {
       token: 'abc',
     });
   });
+
+  it('applies only the union branch whose discriminator matches', () => {
+    const schema = z.toJSONSchema(
+      z.object({
+        targets: z.array(
+          z.discriminatedUnion('type', [
+            z.object({ type: z.literal('a'), config: z.object({ key: secret(z.string()) }) }),
+            z.object({ type: z.literal('b'), config: z.object({ key: z.string() }) }),
+          ]),
+        ),
+      }),
+    );
+    const stored = {
+      targets: [
+        { type: 'a', config: { key: 'hidden' } },
+        { type: 'b', config: { key: 'visible' } },
+      ],
+    };
+    const redacted = redactBySchema(schema, stored);
+    expect(redacted).toEqual({
+      targets: [
+        { type: 'a', config: { key: REDACTED } },
+        { type: 'b', config: { key: 'visible' } },
+      ],
+    });
+    expect(restoreRedacted(schema, redacted, stored)).toEqual(stored);
+  });
 });

@@ -25,6 +25,23 @@ export const TargetResult = z.object({
 });
 export type TargetResult = z.output<typeof TargetResult>;
 
+export const FanoutChild = z.object({
+  index: z.int().min(0),
+  type: z.string(),
+  name: z.string().optional(),
+  outcome: z.enum(['success', 'failure']),
+  durationMs: z.number(),
+  statusCode: z.int().optional(),
+  error: TargetError.optional(),
+});
+export type FanoutChild = z.output<typeof FanoutChild>;
+
+export const FanoutMetadata = z.object({
+  mode: z.enum(['all', 'any']),
+  children: z.array(FanoutChild),
+});
+export type FanoutMetadata = z.output<typeof FanoutMetadata>;
+
 export const EngineErrorCode = {
   timeout: 'timeout',
   cancelled: 'cancelled',
@@ -53,3 +70,22 @@ export const abortedResult = (signal: AbortSignal, durationMs: number): TargetRe
 
   return failedResult(EngineErrorCode.cancelled, message, false, durationMs);
 };
+
+export async function abortable<T>(signal: AbortSignal, work: Promise<T>): Promise<T> {
+  work.catch(() => undefined);
+  if (signal.aborted) {
+    throw toError(signal.reason);
+  }
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(toError(signal.reason));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([work, aborted]);
+  } finally {
+    if (onAbort) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
+}

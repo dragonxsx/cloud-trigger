@@ -14,6 +14,7 @@ export interface ProviderInfo {
 export interface ProviderPlugin {
   readonly name: string;
   register(registry: ProviderRegistry): void;
+  readonly dispose?: () => Promise<void>;
 }
 
 export class ProviderRegistry {
@@ -45,12 +46,26 @@ export class ProviderRegistry {
     return this;
   }
 
+  readonly #plugins: ProviderPlugin[] = [];
+
   use(...plugins: readonly ProviderPlugin[]): this {
     for (const plugin of plugins) {
+      if (this.#plugins.some((loaded) => loaded.name === plugin.name)) {
+        continue;
+      }
       plugin.register(this);
+      this.#plugins.push(plugin);
     }
 
     return this;
+  }
+
+  async dispose(): Promise<void> {
+    await Promise.allSettled(
+      this.#plugins.map(async (plugin) => {
+        await plugin.dispose?.();
+      }),
+    );
   }
 
   get<K extends ProviderKind>(kind: K, type: string): Result<Provider<K>, UnknownProviderError> {
@@ -63,6 +78,12 @@ export class ProviderRegistry {
           code: 'unknown_provider',
           message: `No ${kind} provider registered for type "${type}"`,
         });
+  }
+
+  providers<K extends ProviderKind>(kind: K): readonly Provider<K>[] {
+    const map: Map<string, Provider<K>> = this.#providers[kind];
+
+    return [...map.values()];
   }
 
   list(kind?: ProviderKind): ProviderInfo[] {

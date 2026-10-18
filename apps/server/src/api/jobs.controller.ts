@@ -147,9 +147,14 @@ export class JobsController {
         return { upstream: upstream.map(summary), downstream: downstream.map(summary) };
       }),
 
-      delete: jobs.delete.handler(async ({ input }) => ({
-        deleted: await jobService.delete(input.id),
-      })),
+      delete: jobs.delete.handler(async ({ input, errors }) => {
+        const deleted = await jobService.delete(input.id);
+        if (deleted.isErr()) {
+          throw toApiError(errors, deleted.error);
+        }
+
+        return { deleted: deleted.value };
+      }),
 
       validate: jobs.validate.handler(({ input, errors }) => {
         const validated = jobService.validate(input);

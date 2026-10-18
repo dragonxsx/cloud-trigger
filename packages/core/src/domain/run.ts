@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { assertNever } from '../shared/assert-never.js';
-import { GroupId, JobId, RunId } from './ids.js';
+import { GroupId, JobId, RunId, WorkflowRunId } from './ids.js';
 import type { Job } from './job.js';
 import { computeRetryDelay, type RetryPolicy, type SlaPolicy } from './policy.js';
 import { EngineErrorCode, TargetResult, failedResult } from './target-result.js';
@@ -14,6 +14,8 @@ export const RunReason = z.enum([
   'backfill',
   'chained',
   'replay',
+  'event',
+  'workflow',
 ]);
 export type RunReason = z.output<typeof RunReason>;
 
@@ -40,6 +42,25 @@ export const ParentSnapshot = z
   .describe('The upstream run as it finished, so pruning its history keeps the chained context.');
 export type ParentSnapshot = z.output<typeof ParentSnapshot>;
 
+export const RunEvent = z
+  .object({
+    kind: z.enum(['webhook', 'message']),
+    source: z.string().describe('The trigger type that received the event, e.g. webhook or sqs.'),
+    id: z.string().describe('The message or delivery id, used for deduplication.'),
+    body: z.string(),
+    headers: z.record(z.string(), z.string()),
+    receivedAt: z.date(),
+  })
+  .describe('The inbound webhook request or queue message that started the run.');
+export type RunEvent = z.output<typeof RunEvent>;
+
+export const MAX_EVENT_BODY_BYTES = 256 * 1024;
+
+export const WorkflowNodeRef = z
+  .object({ runId: WorkflowRunId, node: z.string() })
+  .describe('The workflow run and node this run executes.');
+export type WorkflowNodeRef = z.output<typeof WorkflowNodeRef>;
+
 const RunBase = z.object({
   id: RunId,
   jobId: JobId,
@@ -64,6 +85,8 @@ const RunBase = z.object({
     .describe('Set when a failed run is dismissed from the failed-runs inbox.'),
   parentRunId: RunId.nullable().default(null),
   parent: ParentSnapshot.nullable().default(null),
+  event: RunEvent.nullable().default(null),
+  workflow: WorkflowNodeRef.nullable().default(null),
   groupId: GroupId.nullable().default(null),
   rateLimitKey: z
     .string()
@@ -165,6 +188,8 @@ export function newPendingRun(params: {
   idempotencyKey?: string;
   parentRunId?: RunId | null;
   parent?: ParentSnapshot | null;
+  event?: RunEvent | null;
+  workflow?: WorkflowNodeRef | null;
   now: Date;
 }): PendingRun {
   const startDelay = params.sla.maxStartDelayMs;
@@ -187,6 +212,8 @@ export function newPendingRun(params: {
     acknowledgedAt: null,
     parentRunId: params.parent?.runId ?? params.parentRunId ?? null,
     parent: params.parent ?? null,
+    event: params.event ?? null,
+    workflow: params.workflow ?? null,
     groupId: params.job.groupId,
     rateLimitKey: null,
     status: 'pending',

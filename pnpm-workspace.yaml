@@ -3,6 +3,8 @@ packages:
   - packages/*
 saveExact: true
 allowBuilds:
+  better-sqlite3: true
+  esbuild: false
   cpu-features: false
   ssh2: false
   protobufjs: false

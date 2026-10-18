@@ -1,8 +1,8 @@
 apiVersion: v2
 name: cloud-trigger
-description: Schedule and trigger remote endpoints (REST today; gRPC/SQS via providers).
+description: Schedule and trigger remote endpoints (HTTP, GraphQL, gRPC, SQS/SNS/EventBridge, Kafka, NATS), with event triggers and DAG workflows.
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
 annotations:
   artifacthub.io/license: MIT

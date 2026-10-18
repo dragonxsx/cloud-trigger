@@ -1,17 +1,40 @@
-import { type RunContext, defineInput } from '@cloud-trigger/core';
+import { Result, type RunContext, defineInput } from '@cloud-trigger/core';
 import { z } from 'zod';
 
 import { LiquidTemplate, renderWithSecrets } from '../shared/liquid.js';
 
 export const TemplateInputConfig = z.object({
   template: LiquidTemplate.describe(
-    'Liquid template. Variables: run.*, now, parent (chained runs). Filter: {{ "NAME" | secret }}',
+    'Liquid template. Variables: run.*, now, parent (chained runs), event (webhooks and queue messages: event.body, event.headers). Filter: {{ "NAME" | secret }}',
   ),
   contentType: z.string().default('application/json'),
   attributes: z.record(z.string(), LiquidTemplate).default({}),
 });
 
-const scopeFor = (ctx: RunContext) => ({
+const parseBody = (body: string): unknown => {
+  const parsed = Result.fromThrowable((text: string): unknown => JSON.parse(text))(body);
+
+  return parsed.isOk() ? parsed.value : body;
+};
+
+const eventScope = (ctx: RunContext) => {
+  const event = ctx.trigger?.event;
+
+  return event
+    ? {
+        kind: event.kind,
+        source: event.source,
+        id: event.id,
+        headers: event.headers,
+        body: parseBody(event.body),
+        rawBody: event.body,
+        receivedAt: event.receivedAt.toISOString(),
+      }
+    : null;
+};
+
+export const templateScope = (ctx: RunContext) => ({
+  event: eventScope(ctx),
   now: ctx.now.toISOString(),
   parent: ctx.parent
     ? {
@@ -33,7 +56,7 @@ const scopeFor = (ctx: RunContext) => ({
 });
 
 const render = (template: string, ctx: RunContext) =>
-  renderWithSecrets(template, scopeFor(ctx), ctx.secrets);
+  renderWithSecrets(template, templateScope(ctx), ctx.secrets);
 
 export const templateInput = defineInput({
   type: 'template',

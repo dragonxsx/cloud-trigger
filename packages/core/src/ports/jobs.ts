@@ -18,6 +18,7 @@ export interface JobUpdate {
   readonly spec: JobSpec;
   readonly updatedAt: Date;
   readonly upstreamJobIds?: readonly JobId[] | undefined;
+  readonly eventSource?: string | null | undefined;
   /** Applied only while the stored schedule still matches `basedOn`. */
   readonly reschedule?:
     | {
@@ -47,6 +48,8 @@ export interface JobRepository {
   /** Atomically increments `consecutiveFailures` and pauses the job once it reaches `pauseAfter`. */
   recordFailure(id: JobId, p: { pauseAfter?: number | undefined }): Promise<void>;
   findDependants(jobId: JobId): Promise<readonly Job[]>;
+  /** Jobs whose trigger is a long-lived event source, enabled or not. */
+  findEventSourced(): Promise<readonly Job[]>;
   findByName(name: string): Promise<readonly Job[]>;
   findStaleJobs(p: { now: Date; limit: number }): Promise<readonly Job[]>;
   updateSlaState(

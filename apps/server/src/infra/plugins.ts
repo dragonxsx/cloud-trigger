@@ -4,6 +4,9 @@ import { z } from 'zod';
 const Plugin = z.object({
   name: z.string(),
   register: z.custom<ProviderPlugin['register']>((value) => typeof value === 'function'),
+  dispose: z
+    .custom<NonNullable<ProviderPlugin['dispose']>>((value) => typeof value === 'function')
+    .optional(),
 });
 const PluginModule = z.looseObject({ default: Plugin.optional(), plugin: Plugin.optional() });
 
@@ -18,7 +21,11 @@ export async function loadPlugins(
     if (!plugin) {
       throw new Error(`Module "${specifier}" does not export a provider plugin`);
     }
-    registry.use(plugin);
+    registry.use({
+      name: plugin.name,
+      register: plugin.register,
+      ...(plugin.dispose && { dispose: plugin.dispose }),
+    });
     loaded.push(plugin.name);
   }
 

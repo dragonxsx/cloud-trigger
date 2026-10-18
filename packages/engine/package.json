@@ -6,7 +6,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
+      "@cloud-trigger/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -21,11 +21,17 @@
   },
   "devDependencies": {
     "@cloud-trigger/persistence-mongo": "workspace:*",
+    "@cloud-trigger/persistence-postgres": "workspace:*",
+    "@cloud-trigger/persistence-sqlite": "workspace:*",
     "@cloud-trigger/providers-builtin": "workspace:*",
     "@cloud-trigger/testing": "workspace:*",
     "@testcontainers/mongodb": "12.2.1",
+    "@testcontainers/postgresql": "12.2.1",
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.19.2",
+    "better-sqlite3": "13.0.3",
     "mongodb": "7.7.0",
+    "postgres": "3.4.9",
     "vitest": "5.0.5",
     "zod": "4.6.7"
   },

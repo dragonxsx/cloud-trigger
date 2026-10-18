@@ -44,5 +44,48 @@ services:
     environment: { HTTP_PORT: "8888" }
     ports: ["8888:8888"]
 
+  postgres:
+    profiles: [postgres]
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: cloud
+      POSTGRES_PASSWORD: cloud
+      POSTGRES_DB: cloud_trigger
+    ports: ["5432:5432"]
+    volumes: [postgres-data:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cloud -d cloud_trigger"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  localstack:
+    profiles: [localstack]
+    # 4.14 is the last community image that starts without a LOCALSTACK_AUTH_TOKEN.
+    image: localstack/localstack:4.14
+    environment: { SERVICES: "sqs,sns,events" }
+    ports: ["4566:4566"]
+
+  kafka:
+    profiles: [kafka]
+    image: apache/kafka:4.1.0
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    ports: ["9092:9092"]
+
+  nats:
+    profiles: [nats]
+    image: nats:2.12-alpine
+    command: ["-js"]
+    ports: ["4222:4222"]
+
 volumes:
   mongo-data:
+  postgres-data:

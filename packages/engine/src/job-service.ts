@@ -5,6 +5,7 @@ import {
   type Clock,
   type ConfigError,
   type ConfigIssue,
+  type ConflictError,
   type DecisionLog,
   type DomainError,
   type EventBus,
@@ -27,6 +28,7 @@ import {
   type RunRepository,
   type SchedulePreview,
   type VersionConflictError,
+  type WorkflowId,
   cancelPendingRun,
   configErrorFromZod,
   createJob,
@@ -85,6 +87,11 @@ const invalidBackfill = (path: string, message: string): ConfigError => ({
 const notFound = (what: string, id: string): NotFoundError => ({
   code: 'not_found',
   message: `${what} ${id} not found`,
+});
+
+const ownedByWorkflow = (job: Job): ConflictError => ({
+  code: 'conflict',
+  message: `Job ${job.id} belongs to workflow ${job.workflowId ?? ''}; edit the workflow instead`,
 });
 
 const scheduleChanged = (current: Job, spec: JobSpec): boolean =>
@@ -230,7 +237,10 @@ export class JobService {
     }));
   }
 
-  async create(raw: unknown): Promise<Result<Job, ConfigError>> {
+  async create(
+    raw: unknown,
+    opts: { readonly workflowId?: WorkflowId | undefined } = {},
+  ): Promise<Result<Job, ConfigError>> {
     const id = newJobId();
     const validated = this.#validate(raw, id, 1);
     if (validated.isErr()) {
@@ -253,6 +263,8 @@ export class JobService {
       nextFireAt: preview.nextFireTimes[0] ?? null,
       successDeadline: successDeadlineAfter(now, policy.sla.maxSinceLastSuccessMs),
       upstreamJobIds: upstream.value,
+      eventSource: trigger.source ? spec.trigger.type : null,
+      workflowId: opts.workflowId ?? null,
       now,
     });
     await this.deps.jobs.insert(job);
@@ -264,10 +276,14 @@ export class JobService {
     id: JobId,
     raw: unknown,
     expectedVersion: number,
-  ): Promise<Result<Job, ConfigError | NotFoundError | VersionConflictError>> {
+    opts: { readonly asWorkflow?: boolean } = {},
+  ): Promise<Result<Job, ConfigError | NotFoundError | VersionConflictError | ConflictError>> {
     const current = await this.deps.jobs.get(id);
     if (!current) {
       return err(notFound('Job', id));
+    }
+    if (current.workflowId !== null && opts.asWorkflow !== true) {
+      return err(ownedByWorkflow(current));
     }
     const validated = this.#validate(raw, id, 1);
     if (validated.isErr()) {
@@ -304,7 +320,13 @@ export class JobService {
 
     const updated = await this.deps.jobs.update(
       id,
-      { spec, updatedAt: now, reschedule, upstreamJobIds: upstream.value },
+      {
+        spec,
+        updatedAt: now,
+        reschedule,
+        upstreamJobIds: upstream.value,
+        eventSource: trigger.source ? spec.trigger.type : null,
+      },
       expectedVersion,
     );
     if (updated.isErr()) {
@@ -339,8 +361,16 @@ export class JobService {
     return this.deps.jobs.get(id);
   }
 
-  async delete(id: JobId): Promise<boolean> {
-    return this.deps.jobs.delete(id);
+  async delete(
+    id: JobId,
+    opts: { readonly asWorkflow?: boolean } = {},
+  ): Promise<Result<boolean, ConflictError>> {
+    const current = await this.deps.jobs.get(id);
+    if (current && current.workflowId !== null && opts.asWorkflow !== true) {
+      return err(ownedByWorkflow(current));
+    }
+
+    return ok(await this.deps.jobs.delete(id));
   }
 
   async pause(id: JobId, reason = 'Paused by user'): Promise<Result<void, NotFoundError>> {
