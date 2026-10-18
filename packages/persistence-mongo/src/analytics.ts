@@ -28,7 +28,9 @@ const nullableNumber = z.number().nullable().catch(null);
 const percentiles = z.array(z.number().nullable()).nullable().catch(null);
 
 const SummaryResult = z.object({
-  overall: z.array(z.object({ total: z.number(), avg: nullableNumber, pct: percentiles })),
+  overall: z.array(
+    z.object({ total: z.number(), late: z.number(), avg: nullableNumber, pct: percentiles }),
+  ),
   byStatus: z.array(z.object({ _id: RunStatus, count: z.number() })),
 });
 const TimeseriesRow = z.object({
@@ -89,6 +91,7 @@ export class MongoRunAnalytics implements RunAnalytics {
                 $group: {
                   _id: null,
                   total: { $sum: 1 },
+                  late: { $sum: { $cond: ['$late', 1, 0] } },
                   avg: { $avg: '$durationMs' },
                   pct: {
                     $percentile: { input: '$durationMs', p: [0.5, 0.95], method: 'approximate' },
@@ -109,6 +112,7 @@ export class MongoRunAnalytics implements RunAnalytics {
 
     return {
       total: overall?.total ?? 0,
+      late: overall?.late ?? 0,
       byStatus,
       successRate: ok + bad === 0 ? null : ok / (ok + bad),
       avgMs: overall?.avg ?? null,

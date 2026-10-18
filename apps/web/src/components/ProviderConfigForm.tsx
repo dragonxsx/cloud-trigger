@@ -29,6 +29,8 @@ function uiSchemaFor(schema: unknown, root = true): UiSchema {
     }
     if (prop['secret'] === true) {
       ui[key] = { 'ui:widget': 'password' };
+    } else if (prop['widget'] === 'job' || prop['widget'] === 'wall-clock') {
+      ui[key] = { 'ui:widget': prop['widget'] };
     } else if (isRecord(prop['properties'])) {
       ui[key] = uiSchemaFor(prop, false);
     } else if (key === 'template' || key === 'body') {

@@ -15,6 +15,7 @@ const job = (nextFireAt: Date, fireCount = 0) => ({
     lastSuccessAt: null,
     fireCount,
     consecutiveFailures: 0,
+    successDeadline: null,
   },
 });
 const plan = (

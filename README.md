@@ -2,15 +2,19 @@
 
 Self-hosted service that triggers remote endpoints on a schedule and records every result. It has an API, live monitoring and an analytics dashboard.
 
-- **Triggers:** cron (with timezone, `L`/`#`, and `H` hash spreading), fixed interval, and one-off. All support start/end bounds, a max run count and jitter.
+- **Triggers:** cron (with timezone, `L`/`#`, and `H` hash spreading), fixed interval, one-off, and RFC 5545 `rrule` calendar rules with excluded dates. All support start/end bounds, a max run count and jitter. `after_job` chains a job to another job's outcome; templates can read the parent run as `{{ parent.* }}`.
 - **Targets:** HTTP with response assertions (status, JSONPath, body, latency) and HMAC signing. gRPC, SQS and others can be added as providers ([docs/providers.md](docs/providers.md)).
 - **Reliability:**
   - Overlap policies: allow, forbid, replace, buffer one.
   - Missed-run handling with a grace window: skip, run once, or run all.
   - Retries with backoff, timeouts, and auto-pause after N consecutive failures.
   - Exactly-once firing across replicas.
-- **Operations:** run history, live updates over SSE, a dashboard (outcomes, p50/p95 latency, top errors), Prometheus `/metrics`, and OpenAPI docs at `/docs`.
-- **Security:** OIDC bearer tokens or hashed API keys with `read`/`write`/`admin` scopes. Secrets are referenced as `{{secret:NAME}}` and redacted in every response.
+  - Groups that share default policies, default notifications and rate limits (`perSecond` and `maxConcurrent`, enforced across replicas).
+  - SLAs (start delay, duration, time since last success) that flag runs and jobs as late.
+  - Idempotent backfill of past fire times.
+- **Notifications:** webhook (signed, with an `Idempotency-Key` header), Slack and email on success, failure, permanent failure or late. Delivery goes through a retried Mongo outbox.
+- **Operations:** run history, live updates over SSE, a dashboard (outcomes, p50/p95 latency, late runs, top errors), a failed-runs inbox with bulk replay and dismiss, a "Why didn't it run?" explainer, YAML import and export (`/api/jobs/export`, admin scope), status badges (`/badges/jobs/<id>.svg`), an iCal feed of upcoming runs (`/calendar.ics`), Prometheus `/metrics`, and OpenAPI docs at `/docs`.
+- **Security:** OIDC (the UI signs in with authorization code + PKCE) or hashed API keys, with `read`/`write`/`admin` scopes. `ANONYMOUS_SCOPES=read` serves read-only wallboards. Secrets are referenced as `{{secret:NAME}}` and redacted in every response and export.
 
 ## Architecture
 
@@ -44,6 +48,8 @@ pnpm build
 pnpm --filter @cloud-trigger/server start   # http://localhost:8080 (API, /docs)
 pnpm --filter @cloud-trigger/web dev        # http://localhost:5173 (UI, proxies to :8080)
 ```
+
+SSO locally: `docker compose -f deploy/docker-compose.yml --profile auth up -d` starts Keycloak on :8081 (user `demo`/`demo`). Then set the `OIDC_*` variables shown in `.env.example`.
 
 Everything in one container: `docker compose -f deploy/docker-compose.yml --profile app up --build`.
 

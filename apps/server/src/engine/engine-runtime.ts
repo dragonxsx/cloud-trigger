@@ -1,24 +1,30 @@
 import type { Logger } from '@cloud-trigger/core';
-import type { Reaper, Scheduler, Worker } from '@cloud-trigger/engine';
+import type { Worker } from '@cloud-trigger/engine';
+
+export interface BackgroundLoop {
+  start(): void;
+  stop(): Promise<void>;
+}
 
 export class EngineRuntime {
   constructor(
-    private readonly parts: { scheduler?: Scheduler; reaper?: Reaper; worker?: Worker },
+    private readonly parts: { loops: readonly BackgroundLoop[]; worker?: Worker | undefined },
     private readonly logger: Logger,
   ) {}
 
   start(): void {
-    this.parts.scheduler?.start();
-    this.parts.reaper?.start();
+    for (const loop of this.parts.loops) {
+      loop.start();
+    }
     this.parts.worker?.start();
     this.logger.info('Engine started', {
-      scheduler: !!this.parts.scheduler,
+      loops: this.parts.loops.length,
       worker: !!this.parts.worker,
     });
   }
 
   async stop(): Promise<void> {
-    await Promise.all([this.parts.scheduler?.stop(), this.parts.reaper?.stop()]);
+    await Promise.all(this.parts.loops.map((loop) => loop.stop()));
     await this.parts.worker?.stop();
     this.logger.info('Engine stopped');
   }

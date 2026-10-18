@@ -1,7 +1,7 @@
 import { err, ok, type Result } from 'neverthrow';
 import { z } from 'zod';
 
-import type { NotificationEvent } from '../domain/job.js';
+import type { RunLifecycleEvent } from '../domain/notification.js';
 import type { RunReason } from '../domain/run.js';
 import type { TargetResult } from '../domain/target-result.js';
 import type { SecretResolver } from '../ports/secrets.js';
@@ -21,7 +21,16 @@ export interface Payload {
 
 export const emptyPayload: Payload = { body: undefined, contentType: undefined, attributes: {} };
 
+export interface ParentRun {
+  readonly runId: string;
+  readonly jobId: string;
+  readonly jobName: string;
+  readonly status: string;
+  readonly result: TargetResult | null;
+}
+
 export interface RunContext {
+  readonly parent?: ParentRun | undefined;
   readonly runId: string;
   readonly jobId: string;
   readonly jobName: string;
@@ -62,21 +71,24 @@ export interface TargetRequest {
   readonly signal: AbortSignal;
 }
 
-export interface RunLifecycleEvent {
-  readonly event: NotificationEvent;
+export type TriggerEvent = {
+  readonly kind: 'run_finished';
   readonly jobId: string;
-  readonly jobName: string;
   readonly runId: string;
-  readonly status: string;
-  readonly attempt: number;
-  readonly scheduledAt: Date;
-  readonly result: TargetResult | null;
+  readonly status: 'succeeded' | 'failed' | 'timed_out';
+};
+
+export interface UpstreamRef {
+  readonly jobId: string;
+  readonly path: string;
 }
 
 export interface BoundTrigger {
   nextFireAt(ctx: TriggerContext): Date | null;
   describe(): string;
   lint(ctx: LintContext): readonly LintIssue[];
+  matches?(event: TriggerEvent): boolean;
+  upstream?(): readonly UpstreamRef[];
 }
 export interface BoundInput {
   resolve(ctx: RunContext): Promise<Payload>;
@@ -84,11 +96,19 @@ export interface BoundInput {
 export interface BoundTarget {
   execute(request: TargetRequest): Promise<TargetResult>;
 }
+export interface NotifyFailure {
+  readonly message: string;
+  readonly retryable: boolean;
+}
+export type NotifyResult = Result<void, NotifyFailure>;
+export interface NotifyContext {
+  readonly secrets: SecretResolver;
+  readonly signal: AbortSignal;
+  readonly now: Date;
+}
+
 export interface BoundNotifier {
-  notify(
-    event: RunLifecycleEvent,
-    ctx: { secrets: SecretResolver; signal: AbortSignal },
-  ): Promise<void>;
+  notify(event: RunLifecycleEvent, ctx: NotifyContext): Promise<NotifyResult>;
 }
 
 interface BoundByKind {
@@ -125,6 +145,12 @@ export interface TriggerDefinition<S extends z.ZodType> extends BaseDefinition<S
   describe(config: z.output<S>): string;
   lint?(config: z.output<S>, ctx: LintContext): readonly LintIssue[];
 }
+export interface EventTriggerDefinition<S extends z.ZodType> extends BaseDefinition<S> {
+  matches(config: z.output<S>, event: TriggerEvent): boolean;
+  upstream(config: z.output<S>): readonly UpstreamRef[];
+  describe(config: z.output<S>): string;
+  lint?(config: z.output<S>, ctx: LintContext): readonly LintIssue[];
+}
 export interface InputDefinition<S extends z.ZodType> extends BaseDefinition<S> {
   resolve(config: z.output<S>, ctx: RunContext): Promise<Payload>;
 }
@@ -132,11 +158,7 @@ export interface TargetDefinition<S extends z.ZodType> extends BaseDefinition<S>
   execute(config: z.output<S>, request: TargetRequest): Promise<TargetResult>;
 }
 export interface NotifierDefinition<S extends z.ZodType> extends BaseDefinition<S> {
-  notify(
-    config: z.output<S>,
-    event: RunLifecycleEvent,
-    ctx: { secrets: SecretResolver; signal: AbortSignal },
-  ): Promise<void>;
+  notify(config: z.output<S>, event: RunLifecycleEvent, ctx: NotifyContext): Promise<NotifyResult>;
 }
 
 function makeProvider<K extends ProviderKind, S extends z.ZodType>(
@@ -165,6 +187,17 @@ export const defineTrigger = <S extends z.ZodType>(def: TriggerDefinition<S>): T
     nextFireAt: (ctx) => def.nextFireAt(config, ctx),
     describe: () => def.describe(config),
     lint: (ctx) => def.lint?.(config, ctx) ?? [],
+  }));
+
+export const defineEventTrigger = <S extends z.ZodType>(
+  def: EventTriggerDefinition<S>,
+): TriggerProvider =>
+  makeProvider('trigger', def, (config) => ({
+    nextFireAt: () => null,
+    describe: () => def.describe(config),
+    lint: (ctx) => def.lint?.(config, ctx) ?? [],
+    matches: (event) => def.matches(config, event),
+    upstream: () => def.upstream(config),
   }));
 
 export const defineInput = <S extends z.ZodType>(def: InputDefinition<S>): InputProvider =>

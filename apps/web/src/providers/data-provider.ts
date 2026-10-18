@@ -1,5 +1,5 @@
-import { RunListQuery, UpdateJobInput } from '@cloud-trigger/api-contract';
-import { JobId, JobSpec, RunId, toError } from '@cloud-trigger/core';
+import { RunListQuery, UpdateGroupInput, UpdateJobInput } from '@cloud-trigger/api-contract';
+import { GroupId, GroupSpec, JobId, JobSpec, RunId, toError } from '@cloud-trigger/core';
 import { ORPCError } from '@orpc/client';
 import type { BaseRecord, CrudFilter, DataProvider, HttpError } from '@refinedev/core';
 import { z } from 'zod';
@@ -21,10 +21,18 @@ interface ResourceAdapter {
 
 const JobFilters = z.object({
   search: z.string().optional(),
+  groupId: GroupId.optional(),
   tag: z.string().optional(),
   enabled: z.boolean().optional(),
+  slaBreached: z.boolean().optional(),
 });
-const RunFilters = RunListQuery.pick({ jobId: true, status: true, reason: true });
+const RunFilters = RunListQuery.pick({
+  jobId: true,
+  status: true,
+  reason: true,
+  late: true,
+  acknowledged: true,
+});
 
 const jobs: ResourceAdapter = {
   list: async ({ limit, offset, filters }) => {
@@ -46,6 +54,28 @@ const jobs: ResourceAdapter = {
   },
 };
 
+const GroupFilters = z.object({ search: z.string().optional() });
+
+const groups: ResourceAdapter = {
+  list: async ({ limit, offset, filters }) => {
+    const page = await client.groups.list({ limit, offset, ...GroupFilters.parse(filters) });
+
+    return { data: page.items, total: page.total };
+  },
+  getOne: (id) => client.groups.get({ id: GroupId.parse(id) }),
+  create: (variables) => client.groups.create(GroupSpec.parse(variables)),
+  update: (id, variables) =>
+    client.groups.update(
+      UpdateGroupInput.parse({ ...z.record(z.string(), z.unknown()).parse(variables), id }),
+    ),
+  deleteOne: async (id) => {
+    const groupId = GroupId.parse(id);
+    await client.groups.delete({ id: groupId });
+
+    return { id: groupId };
+  },
+};
+
 const runs: ResourceAdapter = {
   list: async ({ limit, offset, filters }) => {
     const parsed = RunFilters.parse(filters);
@@ -55,6 +85,8 @@ const runs: ResourceAdapter = {
       ...(parsed.jobId !== undefined && { jobId: parsed.jobId }),
       ...(parsed.status !== undefined && { status: parsed.status }),
       ...(parsed.reason !== undefined && { reason: parsed.reason }),
+      ...(parsed.late !== undefined && { late: parsed.late }),
+      ...(parsed.acknowledged !== undefined && { acknowledged: parsed.acknowledged }),
     });
 
     return { data: page.items, total: page.total };
@@ -62,7 +94,7 @@ const runs: ResourceAdapter = {
   getOne: (id) => client.runs.get({ id: RunId.parse(id) }),
 };
 
-const RESOURCES: Readonly<Record<string, ResourceAdapter>> = { jobs, runs };
+const RESOURCES: Readonly<Record<string, ResourceAdapter>> = { jobs, runs, groups };
 
 function adapter(resource: string): ResourceAdapter {
   const found = RESOURCES[resource];

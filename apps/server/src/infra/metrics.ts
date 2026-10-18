@@ -1,4 +1,4 @@
-import type { FinishedRun, Job, SkippedRun } from '@cloud-trigger/core';
+import type { FinishedRun, Job, PendingRun, RunningRun, SkippedRun } from '@cloud-trigger/core';
 import type { RunLifecycleListener } from '@cloud-trigger/engine';
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from '@prometheus-io/client';
 
@@ -18,6 +18,12 @@ export class AppMetrics implements RunLifecycleListener {
     buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
     registers: [this.registry],
   });
+  readonly lateTotal = new Counter({
+    name: 'cloud_trigger_runs_late_total',
+    help: 'Runs flagged late by the SLA monitor, by job name',
+    labelNames: ['job'] as const,
+    registers: [this.registry],
+  });
   readonly activeRuns = new Gauge({
     name: 'cloud_trigger_worker_active_runs',
     help: 'Runs currently executing on this instance',
@@ -33,6 +39,10 @@ export class AppMetrics implements RunLifecycleListener {
 
   constructor() {
     collectDefaultMetrics({ register: this.registry });
+  }
+
+  async onRunLate(run: PendingRun | RunningRun): Promise<void> {
+    this.lateTotal.inc({ job: run.jobName });
   }
 
   async onRunFinished(run: FinishedRun | SkippedRun, job: Job | undefined): Promise<void> {

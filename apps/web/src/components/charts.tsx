@@ -1,11 +1,24 @@
 import { useMantineColorScheme } from '@mantine/core';
 import type { EChartsOption } from 'echarts';
-import ReactECharts from 'echarts-for-react';
+import ReactEChartsCore from 'echarts-for-react/esm/core';
+import { BarChart, LineChart } from 'echarts/charts';
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
+import * as echarts from 'echarts/core';
+import { CanvasRenderer } from 'echarts/renderers';
 import { useMemo } from 'react';
 
 import type { ApiClient } from '../lib/api';
 import { duration } from '../lib/format';
 import { CHART_STACK_ORDER, STATUS } from '../lib/status';
+
+echarts.use([
+  BarChart,
+  LineChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 type Point = Awaited<ReturnType<ApiClient['analytics']['timeseries']>>[number];
 
@@ -65,7 +78,7 @@ export function RunsOverTimeChart({ points, height = 260, pinnedWindow }: ChartP
     [points, ink, pinnedWindow],
   );
 
-  return <ReactECharts option={option} style={{ height }} notMerge />;
+  return <ReactEChartsCore echarts={echarts} option={option} style={{ height }} notMerge />;
 }
 
 export function LatencyChart({ points, height = 260, pinnedWindow }: ChartProps) {
@@ -96,5 +109,5 @@ export function LatencyChart({ points, height = 260, pinnedWindow }: ChartProps)
     [points, ink, pinnedWindow],
   );
 
-  return <ReactECharts option={option} style={{ height }} notMerge />;
+  return <ReactEChartsCore echarts={echarts} option={option} style={{ height }} notMerge />;
 }

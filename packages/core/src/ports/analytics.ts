@@ -21,6 +21,7 @@ export interface AnalyticsFilter {
 
 export interface AnalyticsSummary {
   readonly total: number;
+  readonly late: number;
   readonly byStatus: Readonly<Partial<Record<RunStatus, number>>>;
   readonly successRate: number | null;
   readonly p50Ms: number | null;

@@ -28,6 +28,11 @@ describePersistenceContract('mongo', {
   ports: () => persistence,
   reset: async () => {
     const db = admin.db(DB);
-    await Promise.all(['jobs', 'runs', 'run_metrics'].map((c) => db.collection(c).deleteMany({})));
+    const collections = await db.collections();
+    await Promise.all(
+      collections
+        .filter((c) => !c.collectionName.startsWith('system.'))
+        .map((c) => c.deleteMany({})),
+    );
   },
 });

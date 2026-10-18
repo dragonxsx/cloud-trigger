@@ -17,6 +17,8 @@ import { IconAlertCircle, IconInfoCircle } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
+import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
+import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { type JobCreateInput, type JobDto, type ProviderDto, client } from '../../lib/api';
 import { type ConfigIssueDto, configIssues, errorMessage } from '../../lib/errors';
@@ -52,14 +54,7 @@ export const blankJob: JobFormValues = {
   input: { type: 'static', config: { format: 'none' } },
   target: { type: 'http', config: { method: 'POST', url: 'https://' } },
   notifications: [],
-  policy: {
-    timeoutMs: 30_000,
-    overlap: 'forbid',
-    retry: { maxAttempts: 3, backoff: 'exponential', delayMs: 1_000, maxDelayMs: 300_000 },
-    misfire: { mode: 'run_once', graceMs: 60_000, maxCatchup: 100 },
-    sla: {},
-    history: { keepSucceeded: 100, keepFailed: 500 },
-  },
+  policy: {},
 };
 
 export const toSpec = ({
@@ -78,26 +73,6 @@ export const toSpec = ({
   policy: v.policy,
   ...(version !== undefined && { expectedVersion: version }),
 });
-
-const OVERLAP = [
-  { value: 'forbid', label: 'Skip the new run' },
-  { value: 'allow', label: 'Run in parallel' },
-  { value: 'replace', label: 'Cancel the running one' },
-  { value: 'buffer_one', label: 'Queue one, skip the rest' },
-] as const;
-const MISFIRE = [
-  { value: 'run_once', label: 'Run once to catch up' },
-  { value: 'run_all', label: 'Run every missed time' },
-  { value: 'skip', label: 'Skip missed times' },
-] as const;
-const BACKOFF = [
-  { value: 'exponential', label: 'Exponential' },
-  { value: 'fixed', label: 'Fixed' },
-] as const;
-const pick = <T extends string>(
-  options: readonly { value: T }[],
-  v: string | null,
-): T | undefined => options.find((o) => o.value === v)?.value;
 
 const configIssuesFor = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
   Object.entries(errors).flatMap(([path, message]) =>
@@ -199,9 +174,20 @@ export function JobFormFields({ form }: { form: JobForm }) {
     const all = providers.data ?? [];
     const of = (kind: ProviderDto['kind']) => all.filter((p) => p.kind === kind);
 
-    return { trigger: of('trigger'), input: of('input'), target: of('target') };
+    return {
+      trigger: of('trigger'),
+      input: of('input'),
+      target: of('target'),
+      notifier: of('notifier'),
+    };
   }, [providers.data]);
+  const groups = useQuery({
+    queryKey: ['groups', 'all'],
+    queryFn: () => client.groups.list({ limit: 200 }),
+    staleTime: 60_000,
+  });
   const { values, errors } = form;
+  const group = groups.data?.items.find((g) => g.id === values.groupId);
   const spec = useMemo(() => toSpec(values), [values]);
   const num =
     (path: Parameters<JobForm['setFieldValue']>[0], fallback: number | undefined) =>
@@ -225,6 +211,18 @@ export function JobFormFields({ form }: { form: JobForm }) {
             placeholder="Type to add"
           />
         </SimpleGrid>
+        <Select
+          label="Group"
+          description="Groups supply default policies, notifications and rate limits."
+          placeholder="No group"
+          clearable
+          searchable
+          data={(groups.data?.items ?? []).map((g) => ({ value: g.id, label: g.name }))}
+          value={values.groupId}
+          onChange={(id) =>
+            form.setFieldValue('groupId', groups.data?.items.find((g) => g.id === id)?.id ?? null)
+          }
+        />
         <Textarea label="Description" autosize minRows={2} {...form.getInputProps('description')} />
         <Switch label="Enabled" {...form.getInputProps('enabled', { type: 'checkbox' })} />
       </Section>
@@ -285,73 +283,28 @@ export function JobFormFields({ form }: { form: JobForm }) {
         />
       </Section>
 
-      <Section title="Reliability">
-        <SimpleGrid
-          cols={3}
-          breakpoints={[
-            { maxWidth: 'md', cols: 2 },
-            { maxWidth: 'sm', cols: 1 },
-          ]}
-        >
-          <NumberInput
-            label="Timeout (ms)"
-            min={100}
-            value={values.policy.timeoutMs}
-            onChange={num('policy.timeoutMs', 30_000)}
-          />
-          <NumberInput
-            label="Attempts"
-            description="1 means no retries"
-            min={1}
-            max={100}
-            value={values.policy.retry.maxAttempts}
-            onChange={num('policy.retry.maxAttempts', 1)}
-          />
-          <SimpleGrid cols={2} spacing="xs">
-            <Select
-              label="Backoff"
-              data={[...BACKOFF]}
-              value={values.policy.retry.backoff}
-              onChange={(v) =>
-                form.setFieldValue('policy.retry.backoff', pick(BACKOFF, v) ?? 'exponential')
-              }
-            />
-            <NumberInput
-              label="First delay (ms)"
-              min={0}
-              value={values.policy.retry.delayMs}
-              onChange={num('policy.retry.delayMs', 0)}
-            />
-          </SimpleGrid>
-          <Select
-            label="If the previous run is still going"
-            data={[...OVERLAP]}
-            value={values.policy.overlap}
-            onChange={(v) => form.setFieldValue('policy.overlap', pick(OVERLAP, v) ?? 'forbid')}
-          />
-          <Select
-            label="After downtime"
-            data={[...MISFIRE]}
-            value={values.policy.misfire.mode}
-            onChange={(v) =>
-              form.setFieldValue('policy.misfire.mode', pick(MISFIRE, v) ?? 'run_once')
-            }
-          />
-          <NumberInput
-            label="Late tolerance (ms)"
-            description="Later than this counts as missed"
-            min={0}
-            value={values.policy.misfire.graceMs}
-            onChange={num('policy.misfire.graceMs', 0)}
-          />
-          <NumberInput
-            label="Pause after failures in a row"
-            description="Leave empty to never pause"
-            min={1}
-            value={values.policy.pauseAfterConsecutiveFailures}
-            onChange={num('policy.pauseAfterConsecutiveFailures', undefined)}
-          />
-        </SimpleGrid>
+      <Section
+        title="Notifications"
+        hint="Delivered through a retried outbox. Webhooks carry an Idempotency-Key header."
+      >
+        <NotificationRulesEditor
+          rules={values.notifications}
+          providers={byKind.notifier}
+          issuesFor={(i) => configIssuesFor(errors, `notifications.${i}.notifier`)}
+          onChange={(rules) => form.setFieldValue('notifications', rules)}
+        />
+      </Section>
+
+      <Section
+        title="Reliability"
+        hint="How runs are retried, overlapped, caught up and held to service levels."
+      >
+        <PolicyFields
+          policy={values.policy}
+          inherited={group?.defaultPolicy}
+          inheritedFrom={group ? `the ${group.name} group` : undefined}
+          onChange={(policy) => form.setFieldValue('policy', policy)}
+        />
       </Section>
     </Stack>
   );

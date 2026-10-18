@@ -1,6 +1,9 @@
 import {
   ActionIcon,
+  Button,
+  Center,
   ColorSchemeProvider,
+  Loader,
   Global,
   MantineProvider,
   Tooltip,
@@ -8,42 +11,52 @@ import {
 } from '@mantine/core';
 import { useColorScheme, useLocalStorage } from '@mantine/hooks';
 import { NotificationsProvider } from '@mantine/notifications';
-import { Authenticated, Refine } from '@refinedev/core';
+import { Authenticated, Refine, useGetIdentity } from '@refinedev/core';
 import {
   ErrorComponent,
   ThemedLayout,
   ThemedSider,
   useNotificationProvider,
 } from '@refinedev/mantine';
-import routerProvider, {
-  CatchAllNavigate,
-  NavigateToResource,
-  UnsavedChangesNotifier,
-} from '@refinedev/react-router';
+import routerProvider, { CatchAllNavigate, UnsavedChangesNotifier } from '@refinedev/react-router';
 import {
   IconActivity,
   IconApi,
   IconCalendarTime,
+  IconFolders,
   IconLayoutDashboard,
   IconMoon,
   IconSun,
 } from '@tabler/icons-react';
-import { useEffect } from 'react';
-import { BrowserRouter, Outlet, Route, Routes } from 'react-router';
+import { Suspense, useEffect } from 'react';
+import { BrowserRouter, Link, Outlet, Route, Routes } from 'react-router';
 
 import { BrandTitle } from './components/Brand';
-import { Dashboard } from './pages/Dashboard';
-import { JobCreate } from './pages/jobs/create';
-import { JobEdit } from './pages/jobs/edit';
-import { JobList } from './pages/jobs/list';
-import { JobShow } from './pages/jobs/show';
-import { Login } from './pages/Login';
-import { RunList } from './pages/runs/list';
-import { RunShow } from './pages/runs/show';
+import { lazyNamed } from './lib/lazy';
 import { accessControlProvider, authProvider } from './providers/auth-provider';
 import { dataProvider } from './providers/data-provider';
 import { createSharedRunStreamLiveProvider } from './providers/live-provider';
 import { buildTheme } from './theme';
+
+const Dashboard = lazyNamed(() => import('./pages/Dashboard'), 'Dashboard');
+const JobList = lazyNamed(() => import('./pages/jobs/list'), 'JobList');
+const JobCreate = lazyNamed(() => import('./pages/jobs/create'), 'JobCreate');
+const JobEdit = lazyNamed(() => import('./pages/jobs/edit'), 'JobEdit');
+const JobShow = lazyNamed(() => import('./pages/jobs/show'), 'JobShow');
+const RunList = lazyNamed(() => import('./pages/runs/list'), 'RunList');
+const RunShow = lazyNamed(() => import('./pages/runs/show'), 'RunShow');
+const GroupList = lazyNamed(() => import('./pages/groups/list'), 'GroupList');
+const GroupCreate = lazyNamed(() => import('./pages/groups/create'), 'GroupCreate');
+const GroupEdit = lazyNamed(() => import('./pages/groups/edit'), 'GroupEdit');
+const GroupShow = lazyNamed(() => import('./pages/groups/show'), 'GroupShow');
+const Login = lazyNamed(() => import('./pages/Login'), 'Login');
+const AuthCallback = lazyNamed(() => import('./pages/AuthCallback'), 'AuthCallback');
+
+const PageLoader = () => (
+  <Center h={240}>
+    <Loader size="sm" />
+  </Center>
+);
 
 const liveProvider = createSharedRunStreamLiveProvider();
 
@@ -62,6 +75,7 @@ const Sider = () => (
 function HeaderActions() {
   const scheme = useMantineColorScheme();
   const dark = scheme.colorScheme === 'dark';
+  const identity = useGetIdentity<{ via: string }>();
 
   return (
     <div
@@ -74,6 +88,11 @@ function HeaderActions() {
         background: 'var(--ct-surface)',
       }}
     >
+      {identity.data?.via === 'anonymous' && (
+        <Button component={Link} to="/login" size="xs" variant="light" mr="xs">
+          Viewing read-only · Sign in
+        </Button>
+      )}
       <Tooltip label="API reference">
         <ActionIcon
           component="a"
@@ -143,6 +162,14 @@ export function App() {
                   show: '/runs/show/:id',
                   meta: { label: 'Runs', icon: <IconActivity size={18} /> },
                 },
+                {
+                  name: 'groups',
+                  list: '/groups',
+                  create: '/groups/create',
+                  edit: '/groups/edit/:id',
+                  show: '/groups/show/:id',
+                  meta: { label: 'Groups', icon: <IconFolders size={18} />, canDelete: true },
+                },
               ]}
               options={{
                 liveMode: 'auto',
@@ -154,10 +181,20 @@ export function App() {
             >
               <Routes>
                 <Route
+                  path="/auth/callback"
+                  element={
+                    <Suspense fallback={<PageLoader />}>
+                      <AuthCallback />
+                    </Suspense>
+                  }
+                />
+                <Route
                   element={
                     <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
                       <ThemedLayout Title={BrandTitle} Sider={Sider} Header={HeaderActions}>
-                        <Outlet />
+                        <Suspense fallback={<PageLoader />}>
+                          <Outlet />
+                        </Suspense>
                       </ThemedLayout>
                     </Authenticated>
                   }
@@ -173,17 +210,22 @@ export function App() {
                     <Route index element={<RunList />} />
                     <Route path="show/:id" element={<RunShow />} />
                   </Route>
+                  <Route path="/groups">
+                    <Route index element={<GroupList />} />
+                    <Route path="create" element={<GroupCreate />} />
+                    <Route path="edit/:id" element={<GroupEdit />} />
+                    <Route path="show/:id" element={<GroupShow />} />
+                  </Route>
                   <Route path="*" element={<ErrorComponent />} />
                 </Route>
                 <Route
+                  path="/login"
                   element={
-                    <Authenticated key="auth" fallback={<Outlet />}>
-                      <NavigateToResource resource="dashboard" />
-                    </Authenticated>
+                    <Suspense fallback={<PageLoader />}>
+                      <Login />
+                    </Suspense>
                   }
-                >
-                  <Route path="/login" element={<Login />} />
-                </Route>
+                />
               </Routes>
               <UnsavedChangesNotifier />
             </Refine>

@@ -27,6 +27,25 @@ describe('inputs', () => {
     expect(payload.attributes).toEqual({ authorization: 'Bearer s3cr3t' });
   });
 
+  it('template exposes the parent run of a chained run', async () => {
+    const input = templateInput
+      .bind({ template: '{{ parent.jobName }}:{{ parent.result.statusCode }}' })
+      ._unsafeUnwrap();
+    const payload = await input.resolve(
+      testContext({
+        reason: 'chained',
+        parent: {
+          runId: 'run-0',
+          jobId: 'job-0',
+          jobName: 'extract',
+          status: 'succeeded',
+          result: { outcome: 'success', durationMs: 4, statusCode: 201 },
+        },
+      }),
+    );
+    expect(payload.body).toBe('extract:201');
+  });
+
   it('template rejects invalid syntax at bind time', () => {
     expect(templateInput.bind({ template: '{% if %}' }).isErr()).toBe(true);
   });

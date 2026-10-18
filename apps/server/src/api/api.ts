@@ -11,10 +11,15 @@ export interface ApiInitialContext {
   readonly reqHeaders?: Headers;
 }
 
+const PUBLIC_PRINCIPAL: Principal = { subject: 'public', via: 'anonymous', scopes: [] };
+
 export const createApi = (ctx: AppContext) =>
   implement(contract)
     .$context<ApiInitialContext>()
     .use(async ({ context, next, procedure, errors }) => {
+      if (procedure['~orpc'].meta.public === true) {
+        return next({ context: { principal: PUBLIC_PRINCIPAL } });
+      }
       const result = await ctx.authenticator.authenticate(context.reqHeaders);
       if (result === 'missing') {
         throw errors.UNAUTHORIZED({ message: 'Authentication required' });
@@ -36,7 +41,12 @@ export type Api = ReturnType<typeof createApi>;
 type KnownError =
   | ConfigError
   | DomainError<
-      'not_found' | 'version_conflict' | 'duplicate_run' | 'not_finished' | 'not_cancellable'
+      | 'not_found'
+      | 'version_conflict'
+      | 'duplicate_run'
+      | 'not_finished'
+      | 'not_cancellable'
+      | 'conflict'
     >;
 
 export type ErrorFactories = Pick<
@@ -54,6 +64,7 @@ export function toApiError(errors: ErrorFactories, error: KnownError): Error {
     case 'duplicate_run':
     case 'not_finished':
     case 'not_cancellable':
+    case 'conflict':
       return errors.CONFLICT({ message: error.message });
     default:
       return assertNever(error);

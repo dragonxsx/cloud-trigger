@@ -13,13 +13,37 @@ import { useDebouncedValue } from '@mantine/hooks';
 import { useTable } from '@refinedev/core';
 import { List, ShowButton } from '@refinedev/mantine';
 import { IconSearch } from '@tabler/icons-react';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 
-import type { JobDto } from '../../lib/api';
+import { GroupChip } from '../../components/GroupChip';
+import { JobTransferButtons } from '../../components/JobTransferButtons';
+import { CalendarButton } from '../../components/ShareButtons';
+import type { GroupDto, JobDto } from '../../lib/api';
 import { fromNow } from '../../lib/format';
+import { useGroupsById } from '../../lib/groups';
 import { targetSummary, triggerSummary } from '../../lib/job-summary';
 import { JobState } from './state';
+
+const jobListHeader = ({ defaultButtons }: { defaultButtons: ReactNode }) => (
+  <Group spacing="xs">
+    <CalendarButton />
+    <JobTransferButtons />
+    {defaultButtons}
+  </Group>
+);
+
+function MemberOf({
+  groupId,
+  groups,
+}: {
+  groupId: string | null;
+  groups: ReadonlyMap<string, GroupDto>;
+}) {
+  const group = groupId === null ? undefined : groups.get(groupId);
+
+  return group ? <GroupChip group={group} /> : null;
+}
 
 export function JobList() {
   const [search, setSearch] = useState('');
@@ -33,9 +57,10 @@ export function JobList() {
     setFilters([{ field: 'search', operator: 'contains', value: debounced }], 'replace');
   }, [debounced, setFilters]);
   const items = tableQuery.data?.data ?? [];
+  const groups = useGroupsById();
 
   return (
-    <List title="Jobs">
+    <List title="Jobs" headerButtons={jobListHeader}>
       <Stack spacing="md">
         <TextInput
           placeholder="Search by name"
@@ -73,8 +98,9 @@ export function JobList() {
                       <Anchor component={Link} to={`/jobs/show/${job.id}`} weight={600} size="sm">
                         {job.name}
                       </Anchor>
-                      {job.tags.length > 0 && (
+                      {(job.tags.length > 0 || job.groupId !== null) && (
                         <Group spacing={4} mt={2}>
+                          <MemberOf groupId={job.groupId} groups={groups} />
                           {job.tags.map((t) => (
                             <Badge key={t} size="xs" variant="outline" color="gray" tt="none">
                               {t}

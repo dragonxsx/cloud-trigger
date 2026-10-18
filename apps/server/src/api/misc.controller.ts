@@ -55,7 +55,7 @@ export class ProvidersController {
 export class AuthController {
   readonly #api: Api;
 
-  constructor(@Inject(APP_CONTEXT) ctx: AppContext) {
+  constructor(@Inject(APP_CONTEXT) private readonly ctx: AppContext) {
     this.#api = createApi(ctx);
   }
 
@@ -66,6 +66,22 @@ export class AuthController {
         ...context.principal,
         scopes: [...context.principal.scopes],
       })),
+      config: this.#api.auth.config.handler(() => {
+        const { config } = this.ctx;
+
+        return {
+          oidc:
+            config.OIDC_ISSUER && config.OIDC_CLIENT_ID
+              ? {
+                  authority: config.OIDC_ISSUER,
+                  clientId: config.OIDC_CLIENT_ID,
+                  scope: config.OIDC_UI_SCOPE,
+                }
+              : null,
+          apiKeys: config.API_KEYS.length > 0,
+          anonymous: config.ANONYMOUS_SCOPES.length > 0,
+        };
+      }),
     };
   }
 }

@@ -1,9 +1,11 @@
 import {
   type Job,
+  type NotificationDelivery,
   JobSpec,
   type JobSpecInput,
   type PendingRun,
   createJob,
+  newDeliveries,
   newJobId,
   newPendingRun,
   newRunId,
@@ -34,6 +36,37 @@ export const makePendingRun = (
     job,
     reason: 'scheduled',
     scheduledAt: p.scheduledAt ?? T0,
+    sla: job.policy.sla ?? {},
     ...(p.key !== undefined && { idempotencyKey: p.key }),
     now: T0,
   });
+
+export const makeDelivery = (
+  job: Job,
+  p: { subject?: string; now?: Date } = {},
+): NotificationDelivery => {
+  const [delivery] = newDeliveries({
+    rules: [
+      { on: ['success'], notifier: { type: 'webhook', config: { url: 'http://localhost' } } },
+    ],
+    event: {
+      event: 'success',
+      jobId: job.id,
+      jobName: job.name,
+      runId: null,
+      status: 'succeeded',
+      attempt: 1,
+      scheduledAt: T0,
+      lateReasons: [],
+      result: null,
+      occurredAt: T0,
+    },
+    subject: p.subject ?? newRunId(),
+    now: p.now ?? T0,
+  });
+  if (!delivery) {
+    throw new Error('expected a delivery');
+  }
+
+  return delivery;
+};

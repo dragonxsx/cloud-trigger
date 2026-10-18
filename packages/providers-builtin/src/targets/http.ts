@@ -1,8 +1,5 @@
-import { createHmac } from 'node:crypto';
-
 import {
   ResultAsync,
-  type SecretResolver,
   type TargetResult,
   abortedResult,
   defineTarget,
@@ -14,6 +11,8 @@ import {
 import { Agent, type Dispatcher, interceptors, request } from 'undici';
 import { z } from 'zod';
 
+import { interpolate, interpolateValues } from '../shared/interpolate.js';
+import { SigningConfig, signatureHeaders } from '../shared/signing.js';
 import {
   HttpAssertions,
   StatusPattern,
@@ -50,14 +49,7 @@ export const HttpTargetConfig = z.object({
     .describe('Captured response bytes, at most 1 MiB so the run record fits in the database.'),
   retryOnStatus: z.array(StatusPattern).default(['408', '429', '5xx']),
   assertions: HttpAssertions.prefault({}),
-  signing: z
-    .object({
-      secret: secret(z.string().min(1)),
-      header: z.string().default('X-Signature'),
-      timestampHeader: z.string().default('X-Signature-Timestamp'),
-    })
-    .optional()
-    .describe('HMAC-SHA256 over "<timestamp>.<body>".'),
+  signing: SigningConfig.optional(),
 });
 export type HttpTargetConfig = z.output<typeof HttpTargetConfig>;
 
@@ -106,16 +98,6 @@ const errorCode = (error: unknown): string | undefined =>
     ? error.code
     : undefined;
 
-const interpolate = (secrets: SecretResolver, text: string) =>
-  new ResultAsync(secrets.interpolate(text));
-
-const interpolateValues = (secrets: SecretResolver, values: Record<string, string>) =>
-  ResultAsync.combine(
-    Object.entries(values).map(([key, value]) =>
-      interpolate(secrets, value).map((resolved) => [key, resolved] as const),
-    ),
-  ).map((entries) => Object.fromEntries(entries));
-
 export const httpTarget = defineTarget({
   type: 'http',
   displayName: 'HTTP request',
@@ -155,12 +137,10 @@ export const httpTarget = defineTarget({
       ...secretHeaders,
     };
     if (config.signing && signingSecret !== undefined) {
-      const timestamp = String(Math.floor(ctx.now.getTime() / 1000));
-      const signature = createHmac('sha256', signingSecret)
-        .update(`${timestamp}.${body ?? ''}`)
-        .digest('hex');
-      outgoing[config.signing.header] = `sha256=${signature}`;
-      outgoing[config.signing.timestampHeader] = timestamp;
+      Object.assign(
+        outgoing,
+        signatureHeaders(config.signing, { secret: signingSecret, body, now: ctx.now }),
+      );
     }
 
     try {

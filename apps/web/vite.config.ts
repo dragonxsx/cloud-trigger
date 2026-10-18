@@ -9,8 +9,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: Object.fromEntries(
-      ['/api', '/health', '/metrics', '/docs'].map((p) => [p, { target: api, changeOrigin: true }]),
+      ['/api', '/health', '/metrics', '/docs', '/badges', '/calendar.ics'].map((p) => [
+        p,
+        { target: api, changeOrigin: true },
+      ]),
     ),
   },
-  build: { outDir: 'dist', sourcemap: true, chunkSizeWarningLimit: 1500 },
+  build: { outDir: 'dist', sourcemap: true, chunkSizeWarningLimit: 600 },
 });

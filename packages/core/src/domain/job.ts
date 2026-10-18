@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { GroupId, JobId } from './ids.js';
-import { JobPolicy } from './policy.js';
+import { JobPolicyPatch } from './policy.js';
 import { ProviderRef } from './provider-ref.js';
 
 export const NotificationEvent = z.enum(['success', 'failure', 'permanent_failure', 'late']);
@@ -28,6 +28,11 @@ export const ScheduleState = z.object({
   lastSuccessAt: z.date().nullable(),
   fireCount: z.int().min(0),
   consecutiveFailures: z.int().min(0),
+  successDeadline: z
+    .date()
+    .nullable()
+    .default(null)
+    .describe('When the since-last-success SLA breaks if no run succeeds before then.'),
 });
 export type ScheduleState = z.output<typeof ScheduleState>;
 
@@ -41,7 +46,7 @@ export const JobSpec = z.object({
   trigger: TriggerRef,
   target: ProviderRef,
   notifications: z.array(NotificationRule).default([]),
-  policy: JobPolicy.prefault({}),
+  policy: JobPolicyPatch.prefault({}),
 });
 export type JobSpec = z.output<typeof JobSpec>;
 export type JobSpecInput = z.input<typeof JobSpec>;
@@ -49,6 +54,15 @@ export type JobSpecInput = z.input<typeof JobSpec>;
 export const Job = JobSpec.extend({
   id: JobId,
   pausedReason: z.string().nullable(),
+  upstreamJobIds: z
+    .array(JobId)
+    .default([])
+    .describe('Jobs whose runs trigger this one, from an event trigger such as after_job.'),
+  slaBreachedAt: z
+    .date()
+    .nullable()
+    .default(null)
+    .describe('Set when the job broke its since-last-success SLA; cleared by the next success.'),
   schedule: ScheduleState,
   version: z.int().min(1),
   createdAt: z.date(),
@@ -56,25 +70,43 @@ export const Job = JobSpec.extend({
 });
 export type Job = z.output<typeof Job>;
 
-export const initialSchedule = (nextFireAt: Date | null): ScheduleState => ({
+export const successDeadlineAfter = (
+  since: Date,
+  maxSinceLastSuccessMs: number | undefined,
+): Date | null =>
+  maxSinceLastSuccessMs === undefined ? null : new Date(since.getTime() + maxSinceLastSuccessMs);
+
+export const initialSchedule = (
+  nextFireAt: Date | null,
+  successDeadline: Date | null = null,
+): ScheduleState => ({
   nextFireAt,
   lastFiredAt: null,
   lastSuccessAt: null,
   fireCount: 0,
   consecutiveFailures: 0,
+  successDeadline,
 });
 
 export function createJob(params: {
   id: JobId;
   spec: JobSpec;
   nextFireAt: Date | null;
+  successDeadline?: Date | null;
+  upstreamJobIds?: readonly JobId[];
   now: Date;
 }): Job {
   return {
     ...params.spec,
     id: params.id,
     pausedReason: null,
-    schedule: initialSchedule(params.spec.enabled ? params.nextFireAt : null),
+    upstreamJobIds: [...(params.upstreamJobIds ?? [])],
+    slaBreachedAt: null,
+    schedule: initialSchedule(
+      params.spec.enabled ? params.nextFireAt : null,
+      params.successDeadline ??
+        successDeadlineAfter(params.now, params.spec.policy.sla?.maxSinceLastSuccessMs),
+    ),
     version: 1,
     createdAt: params.now,
     updatedAt: params.now,

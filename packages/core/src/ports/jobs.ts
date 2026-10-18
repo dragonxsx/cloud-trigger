@@ -11,11 +11,13 @@ export interface JobQuery extends PageRequest {
   readonly tag?: string | undefined;
   readonly groupId?: GroupId | undefined;
   readonly enabled?: boolean | undefined;
+  readonly slaBreached?: boolean | undefined;
 }
 
 export interface JobUpdate {
   readonly spec: JobSpec;
   readonly updatedAt: Date;
+  readonly upstreamJobIds?: readonly JobId[] | undefined;
   /** Applied only while the stored schedule still matches `basedOn`. */
   readonly reschedule?:
     | {
@@ -40,10 +42,17 @@ export interface JobRepository {
   patchSchedule(
     id: JobId,
     patch: Partial<ScheduleState>,
-    extra?: { pausedReason?: string | null },
+    extra?: { pausedReason?: string | null; slaBreachedAt?: Date | null },
   ): Promise<void>;
   /** Atomically increments `consecutiveFailures` and pauses the job once it reaches `pauseAfter`. */
   recordFailure(id: JobId, p: { pauseAfter?: number | undefined }): Promise<void>;
+  findDependants(jobId: JobId): Promise<readonly Job[]>;
+  findByName(name: string): Promise<readonly Job[]>;
+  findStaleJobs(p: { now: Date; limit: number }): Promise<readonly Job[]>;
+  updateSlaState(
+    job: Job,
+    update: { slaBreachedAt: Date | null; successDeadline: Date | null },
+  ): Promise<boolean>;
 }
 
 export interface ScheduleStore {

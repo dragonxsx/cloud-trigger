@@ -25,6 +25,19 @@ services:
       AUTH_DISABLED: "true"
     ports: ["8080:8080"]
 
+  keycloak:
+    profiles: [auth]
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm", "--http-port=8081"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Browsers and the app container must see the same issuer.
+      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+    volumes: [./keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro]
+    ports: ["8081:8081"]
+
   echo:
     profiles: [demo, app]
     image: mendhak/http-https-echo:39

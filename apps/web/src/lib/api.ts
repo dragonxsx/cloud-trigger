@@ -5,6 +5,7 @@ import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
 
+import { accessToken } from './oidc';
 import { bestEffortStorage } from './storage';
 
 const API_KEY = 'cloud-trigger.api-key';
@@ -18,7 +19,11 @@ export type ApiClient = JsonifiedClient<ContractRouterClient<Contract, ClientRet
 
 const link = new OpenAPILink<ClientRetryPluginContext>(contract, {
   url: window.location.origin,
-  headers: () => {
+  headers: async () => {
+    const token = await accessToken();
+    if (token) {
+      return { authorization: `Bearer ${token}` };
+    }
     const key = auth.apiKey();
 
     return key ? { 'x-api-key': key } : {};
@@ -35,3 +40,4 @@ export type ProviderDto = Out<ApiClient['providers']['list']>[number];
 export type SchedulePreviewDto = Out<ApiClient['jobs']['validate']>;
 export type JobCreateInput = Parameters<ApiClient['jobs']['create']>[0];
 export type RunStatusDto = RunDto['status'];
+export type GroupDto = Out<ApiClient['groups']['get']>;

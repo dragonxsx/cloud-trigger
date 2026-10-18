@@ -1,9 +1,9 @@
-import { Anchor, ScrollArea, Table, Text } from '@mantine/core';
+import { Anchor, Checkbox, Group, ScrollArea, Table, Text } from '@mantine/core';
 import { Link } from 'react-router';
 
 import type { RunDto } from '../lib/api';
 import { dateTime, duration, fromNow } from '../lib/format';
-import { StatusBadge } from '../lib/status';
+import { LateBadge, StatusBadge } from '../lib/status';
 
 export const lastResult = (run: RunDto) =>
   run.status === 'succeeded' ||
@@ -13,12 +13,19 @@ export const lastResult = (run: RunDto) =>
     ? run.result
     : run.attempts.at(-1)?.result;
 
+export interface RunSelection {
+  readonly selected: ReadonlySet<string>;
+  readonly onChange: (selected: ReadonlySet<string>) => void;
+}
+
 export function RunsTable({
   runs,
   showJob = true,
+  selection,
 }: {
   runs: readonly RunDto[];
   showJob?: boolean;
+  selection?: RunSelection | undefined;
 }) {
   if (runs.length === 0) {
     return (
@@ -33,6 +40,23 @@ export function RunsTable({
       <Table highlightOnHover verticalSpacing="xs" className="ct-table" miw={760}>
         <thead>
           <tr>
+            {selection && (
+              <th style={{ width: 36 }}>
+                <Checkbox
+                  aria-label="Select all"
+                  checked={runs.length > 0 && runs.every((r) => selection.selected.has(r.id))}
+                  indeterminate={
+                    runs.some((r) => selection.selected.has(r.id)) &&
+                    !runs.every((r) => selection.selected.has(r.id))
+                  }
+                  onChange={(e) =>
+                    selection.onChange(
+                      new Set(e.currentTarget.checked ? runs.map((r) => r.id) : []),
+                    )
+                  }
+                />
+              </th>
+            )}
             <th>Status</th>
             {showJob && <th>Job</th>}
             <th>Scheduled</th>
@@ -49,10 +73,30 @@ export function RunsTable({
 
             return (
               <tr key={run.id}>
+                {selection && (
+                  <td>
+                    <Checkbox
+                      aria-label={`Select run ${run.id}`}
+                      checked={selection.selected.has(run.id)}
+                      onChange={(e) => {
+                        const next = new Set(selection.selected);
+                        if (e.currentTarget.checked) {
+                          next.add(run.id);
+                        } else {
+                          next.delete(run.id);
+                        }
+                        selection.onChange(next);
+                      }}
+                    />
+                  </td>
+                )}
                 <td>
-                  <Anchor component={Link} to={`/runs/show/${run.id}`} underline={false}>
-                    <StatusBadge status={run.status} />
-                  </Anchor>
+                  <Group spacing={4} noWrap>
+                    <Anchor component={Link} to={`/runs/show/${run.id}`} underline={false}>
+                      <StatusBadge status={run.status} />
+                    </Anchor>
+                    {run.late && <LateBadge reasons={run.lateReasons} />}
+                  </Group>
                 </td>
                 {showJob && (
                   <td>

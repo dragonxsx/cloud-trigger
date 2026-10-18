@@ -16,6 +16,7 @@ import { IconPlayerStop, IconRepeat } from '@tabler/icons-react';
 import { useMutation } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router';
 
+import { RunNotifications } from '../../components/RunNotifications';
 import { lastResult } from '../../components/RunsTable';
 import { type RunDto, client } from '../../lib/api';
 import { notifyError } from '../../lib/errors';
@@ -217,6 +218,7 @@ export function RunShow() {
               </Timeline>
             )}
           </Stack>
+          <RunNotifications run={run} />
         </Stack>
       )}
     </Show>

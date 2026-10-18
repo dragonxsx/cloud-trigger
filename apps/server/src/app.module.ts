@@ -13,12 +13,15 @@ import { RequestHeadersPlugin } from '@orpc/server/plugins';
 import { experimental_ZodSmartCoercionPlugin as ZodSmartCoercionPlugin } from '@orpc/zod/zod4';
 import { LoggerModule } from 'nestjs-pino';
 
+import { CalendarController } from './api/calendar.controller.js';
+import { GroupsController } from './api/groups.controller.js';
 import { HealthController } from './api/health.controller.js';
 import { JobsController } from './api/jobs.controller.js';
 import { AuthController, AnalyticsController, ProvidersController } from './api/misc.controller.js';
 import { OpenApiController } from './api/openapi.controller.js';
 import { RunsController } from './api/runs.controller.js';
 import type { AppContext } from './app-context.js';
+import { FeedsController } from './feeds/feeds.controller.js';
 import { APP_CONTEXT } from './tokens.js';
 
 @Injectable()
@@ -72,7 +75,14 @@ export class AppModule {
           ? [
               ServeStaticModule.forRoot({
                 rootPath: webDist,
-                exclude: ['/api/{*path}', '/health/{*path}', '/metrics', '/docs/{*path}'],
+                exclude: [
+                  '/api/{*path}',
+                  '/health/{*path}',
+                  '/metrics',
+                  '/docs/{*path}',
+                  '/badges/{*path}',
+                  '/calendar.ics',
+                ],
               }),
             ]
           : []),
@@ -83,6 +93,9 @@ export class AppModule {
           ? [
               JobsController,
               RunsController,
+              GroupsController,
+              CalendarController,
+              FeedsController,
               AnalyticsController,
               ProvidersController,
               AuthController,

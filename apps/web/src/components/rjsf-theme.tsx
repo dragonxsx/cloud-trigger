@@ -13,8 +13,11 @@ import {
 } from '@mantine/core';
 import type { RegistryWidgetsType, TemplatesType, WidgetProps } from '@rjsf/utils';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
+import { useQuery } from '@tanstack/react-query';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
+
+import { client } from '../lib/api';
 
 const ACRONYMS = new Set(['url', 'http', 'id', 'ms']);
 export const humanize = (key: string): string =>
@@ -93,6 +96,20 @@ function DateTimeWidget(p: WidgetProps) {
   );
 }
 
+function WallClockWidget(p: WidgetProps) {
+  return (
+    <TextInput
+      {...common(p)}
+      type="datetime-local"
+      description="Wall-clock time in the trigger's time zone"
+      value={typeof p.value === 'string' ? p.value.slice(0, 16) : ''}
+      onChange={(e) =>
+        p.onChange(e.currentTarget.value === '' ? undefined : e.currentTarget.value.slice(0, 16))
+      }
+    />
+  );
+}
+
 function PasswordWidget(p: WidgetProps) {
   return (
     <PasswordInput
@@ -136,6 +153,25 @@ function SelectWidget(p: WidgetProps) {
   );
 }
 
+function JobWidget(p: WidgetProps) {
+  const jobs = useQuery({
+    queryKey: ['jobs', 'picker'],
+    queryFn: () => client.jobs.list({ limit: 200 }),
+    staleTime: 30_000,
+  });
+
+  return (
+    <Select
+      {...common(p)}
+      searchable
+      nothingFound="No matching job"
+      data={(jobs.data?.items ?? []).map((j) => ({ value: j.id, label: j.name }))}
+      value={typeof p.value === 'string' ? p.value : null}
+      onChange={(v) => p.onChange(v ?? undefined)}
+    />
+  );
+}
+
 function CheckboxWidget(p: WidgetProps) {
   return (
     <Checkbox
@@ -149,10 +185,12 @@ function CheckboxWidget(p: WidgetProps) {
 export const widgets: RegistryWidgetsType = {
   TextWidget,
   DateTimeWidget,
+  'wall-clock': WallClockWidget,
   PasswordWidget,
   TextareaWidget,
   SelectWidget,
   CheckboxWidget,
+  job: JobWidget,
 };
 
 export const templates: Partial<TemplatesType> = {

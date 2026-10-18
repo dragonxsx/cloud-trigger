@@ -315,6 +315,11 @@ describe('engine', () => {
       transition: (previous, next) => db.runs.transition(previous, next),
       countByStatus: (id, statuses) => db.runs.countByStatus(id, statuses),
       prune: (id, keep) => db.runs.prune(id, keep),
+      acknowledge: (ids, at) => db.runs.acknowledge(ids, at),
+      countHoldingSlot: (key) => db.runs.countHoldingSlot(key),
+      markSlotHeld: (run, key) => db.runs.markSlotHeld(run, key),
+      findLateCandidates: (p) => db.runs.findLateCandidates(p),
+      updateSla: (run, update) => db.runs.updateSla(run, update),
       findByStatus: async (id, statuses) => {
         if (++checks === 2) {
           bothChecking.resolve();

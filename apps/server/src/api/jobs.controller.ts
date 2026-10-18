@@ -6,6 +6,7 @@ import type { AppContext } from '../app-context.js';
 import { APP_CONTEXT } from '../tokens.js';
 import { type Api, type ErrorFactories, createApi, toApiError } from './api.js';
 import { JobRedactor } from './redaction.js';
+import { fromYaml, toYaml } from './transfer.js';
 
 @Controller()
 export class JobsController {
@@ -68,6 +69,82 @@ export class JobsController {
         }
 
         return redact(updated.value);
+      }),
+
+      backfill: jobs.backfill.handler(async ({ input, errors }) => {
+        const { id, ...range } = input;
+        const result = await jobService.backfill(id, range);
+        if (result.isErr()) {
+          throw toApiError(errors, result.error);
+        }
+
+        return {
+          ...result.value,
+          fireTimes: [...result.value.fireTimes],
+          created: [...result.value.created],
+        };
+      }),
+
+      export: jobs.export.handler(async ({ input }) => {
+        const docs = await this.ctx.jobTransfer.export(input, redact);
+
+        return new File([toYaml(docs)], 'jobs.yaml', { type: 'application/yaml' });
+      }),
+
+      import: jobs.import.handler(async ({ input }) => {
+        const parsed = fromYaml(input.yaml);
+        if (parsed.issues.length > 0) {
+          return {
+            dryRun: input.dryRun,
+            created: [],
+            updated: [],
+            unchanged: [],
+            deleted: [],
+            issues: parsed.issues,
+          };
+        }
+        const result = await this.ctx.jobTransfer.import(parsed.values, {
+          mode: input.mode,
+          dryRun: input.dryRun,
+          restore: (next, previous) => this.#redactor.restore(next, previous),
+        });
+
+        return {
+          dryRun: result.dryRun,
+          created: [...result.created],
+          updated: [...result.updated],
+          unchanged: [...result.unchanged],
+          deleted: [...result.deleted],
+          issues: [...result.issues],
+        };
+      }),
+
+      explain: jobs.explain.handler(async ({ input, errors }) => {
+        const result = await jobService.explain(input.id, input.at);
+        if (result.isErr()) {
+          throw toApiError(errors, result.error);
+        }
+        const { narrative, nextFireAt, decisions } = result.value;
+
+        return { narrative: [...narrative], nextFireAt, decisions: [...decisions] };
+      }),
+
+      dependencies: jobs.dependencies.handler(async ({ input, errors }) => {
+        await getOrThrow(input.id, errors);
+        const summary = (job: {
+          id: typeof input.id;
+          name: string;
+          enabled: boolean;
+          pausedReason: string | null;
+        }) => ({
+          id: job.id,
+          name: job.name,
+          enabled: job.enabled,
+          pausedReason: job.pausedReason,
+        });
+        const { upstream, downstream } = await jobService.dependencies(input.id);
+
+        return { upstream: upstream.map(summary), downstream: downstream.map(summary) };
       }),
 
       delete: jobs.delete.handler(async ({ input }) => ({

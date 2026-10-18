@@ -5,11 +5,17 @@ import { DeleteButton, EditButton, Show } from '@refinedev/mantine';
 import { IconPlayerPause, IconPlayerPlay, IconPlayerTrackNext } from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 
+import { BackfillDialog } from '../../components/BackfillDialog';
 import { RunsOverTimeChart } from '../../components/charts';
+import { ExplainPanel } from '../../components/ExplainPanel';
+import { GroupChip } from '../../components/GroupChip';
+import { JobDependencies } from '../../components/JobDependencies';
 import { RunsTable } from '../../components/RunsTable';
+import { BadgeButton } from '../../components/ShareButtons';
 import { type JobDto, type RunDto, client } from '../../lib/api';
 import { notifyError } from '../../lib/errors';
 import { dateTime, duration, fromNow, percent } from '../../lib/format';
+import { useGroupsById } from '../../lib/groups';
 import { targetSummary } from '../../lib/job-summary';
 import { toSpec } from './form';
 import { JobState } from './state';
@@ -125,6 +131,12 @@ function JobInsights({ job }: { job: JobDto }) {
         <Fact label="p95 latency">{duration(s?.p95Ms)}</Fact>
         <Fact label="Last success">{fromNow(job.schedule.lastSuccessAt)}</Fact>
       </SimpleGrid>
+      {job.slaBreachedAt !== null && (
+        <Alert color="gray" variant="outline" title="Breaching its SLA">
+          No run has succeeded within the job&apos;s since-last-success window (flagged{' '}
+          {dateTime(job.slaBreachedAt)}). The next successful run clears this.
+        </Alert>
+      )}
       {job.pausedReason !== null && (
         <Alert color="orange" title="Paused">
           {job.pausedReason}. Resume to schedule runs again.
@@ -151,6 +163,8 @@ function JobInsights({ job }: { job: JobDto }) {
 export function JobShow() {
   const { query } = useShow<JobDto>({ resource: 'jobs' });
   const job = query.data?.data;
+  const groups = useGroupsById();
+  const group = job?.groupId ? groups.get(job.groupId) : undefined;
   const runs = useList<RunDto>({
     resource: 'runs',
     filters: [{ field: 'jobId', operator: 'eq', value: job?.id }],
@@ -166,6 +180,12 @@ export function JobShow() {
         job ? (
           <Group spacing="xs">
             <JobActions job={job} />
+            {job.upstreamJobIds.length === 0 && (
+              <CanAccess resource="jobs" action="backfill">
+                <BackfillDialog job={job} />
+              </CanAccess>
+            )}
+            <BadgeButton job={job} />
             <EditButton recordItemId={job.id} />
             <DeleteButton
               recordItemId={job.id}
@@ -177,8 +197,15 @@ export function JobShow() {
     >
       {job && (
         <Stack spacing="lg">
-          {job.description && <Text color="dimmed">{job.description}</Text>}
+          {(job.description || group) && (
+            <Group spacing="sm">
+              {group && <GroupChip group={group} />}
+              {job.description && <Text color="dimmed">{job.description}</Text>}
+            </Group>
+          )}
           <JobInsights job={job} />
+          <JobDependencies job={job} />
+          <ExplainPanel job={job} />
           <Stack className="ct-panel" spacing={0}>
             <Text weight={600} p="lg" pb="xs">
               Recent runs

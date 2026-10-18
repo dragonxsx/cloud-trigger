@@ -30,8 +30,18 @@ config:
   LOG_LEVEL: info
   WORKER_CONCURRENCY: "16"
   LEASE_MS: "30000"
+  NOTIFY_TIMEOUT_MS: "10000"
+  NOTIFY_MAX_ATTEMPTS: "5"
+  SLA_INTERVAL_MS: "5000"
+  DECISION_RETENTION_DAYS: "14"
+  BADGES_PUBLIC: "false"
+  PUBLIC_URL: ""
   OIDC_ISSUER: ""
   OIDC_AUDIENCE: ""
+  OIDC_JWKS_URI: ""
+  OIDC_CLIENT_ID: ""
+  OIDC_UI_SCOPE: ""
+  ANONYMOUS_SCOPES: ""
 
 # Sensitive settings. Prefer `existingSecret` in production (e.g. managed by External Secrets).
 secrets:
@@ -39,6 +49,7 @@ secrets:
   values:
     MONGO_URI: ""
     API_KEYS: ""
+    CALENDAR_TOKEN_SECRET: ""
 
 # Job-level secrets referenced as {{secret:NAME}}; mounted as files under /var/run/secrets/cloud-trigger.
 jobSecrets:

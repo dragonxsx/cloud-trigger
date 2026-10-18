@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
 import { assertNever } from '../shared/assert-never.js';
-import { JobId, RunId } from './ids.js';
+import { GroupId, JobId, RunId } from './ids.js';
 import type { Job } from './job.js';
-import { computeRetryDelay, type RetryPolicy } from './policy.js';
+import { computeRetryDelay, type RetryPolicy, type SlaPolicy } from './policy.js';
 import { EngineErrorCode, TargetResult, failedResult } from './target-result.js';
 
 export const RunReason = z.enum([
@@ -29,6 +29,17 @@ export const AttemptRecord = z.object({
 });
 export type AttemptRecord = z.output<typeof AttemptRecord>;
 
+export const ParentSnapshot = z
+  .object({
+    runId: RunId,
+    jobId: JobId,
+    jobName: z.string(),
+    status: z.string(),
+    result: TargetResult.nullable(),
+  })
+  .describe('The upstream run as it finished, so pruning its history keeps the chained context.');
+export type ParentSnapshot = z.output<typeof ParentSnapshot>;
+
 const RunBase = z.object({
   id: RunId,
   jobId: JobId,
@@ -39,6 +50,26 @@ const RunBase = z.object({
   idempotencyKey: z.string().nullable(),
   attempts: z.array(AttemptRecord),
   late: z.boolean(),
+  lateReasons: z.array(z.string()).default([]),
+  slaDeadline: z
+    .date()
+    .nullable()
+    .default(null)
+    .describe('When the run breaches its SLA if still pending or running; null once checked.'),
+  slaMaxDurationMs: z.int().min(1).nullable().default(null),
+  acknowledgedAt: z
+    .date()
+    .nullable()
+    .default(null)
+    .describe('Set when a failed run is dismissed from the failed-runs inbox.'),
+  parentRunId: RunId.nullable().default(null),
+  parent: ParentSnapshot.nullable().default(null),
+  groupId: GroupId.nullable().default(null),
+  rateLimitKey: z
+    .string()
+    .nullable()
+    .default(null)
+    .describe('Rate-limit slot held while running; released when the run leaves `running`.'),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
@@ -90,6 +121,22 @@ export type Run = z.output<typeof Run>;
 export type RunStatus = Run['status'];
 export const RunStatus = z.enum(['pending', 'running', ...TerminalStatus.options, 'skipped']);
 
+export const lastResultOf = (run: Run): TargetResult | null =>
+  run.status === 'succeeded' ||
+  run.status === 'failed' ||
+  run.status === 'timed_out' ||
+  run.status === 'cancelled'
+    ? run.result
+    : (run.attempts.at(-1)?.result ?? null);
+
+export const parentSnapshotOf = (run: Run): ParentSnapshot => ({
+  runId: run.id,
+  jobId: run.jobId,
+  jobName: run.jobName,
+  status: run.status,
+  result: lastResultOf(run),
+});
+
 export const currentAttempt = (run: Run): number => run.attempts.length + 1;
 
 export const isTerminal = (run: Run): run is FinishedRun | SkippedRun => {
@@ -110,13 +157,18 @@ export const isTerminal = (run: Run): run is FinishedRun | SkippedRun => {
 
 export function newPendingRun(params: {
   id: RunId;
-  job: Pick<Job, 'id' | 'name' | 'version'>;
+  job: Pick<Job, 'id' | 'name' | 'version' | 'groupId'>;
+  sla: Pick<SlaPolicy, 'maxStartDelayMs' | 'maxDurationMs'>;
   reason: RunReason;
   scheduledAt: Date;
   availableAt?: Date;
   idempotencyKey?: string;
+  parentRunId?: RunId | null;
+  parent?: ParentSnapshot | null;
   now: Date;
 }): PendingRun {
+  const startDelay = params.sla.maxStartDelayMs;
+
   return {
     id: params.id,
     jobId: params.job.id,
@@ -128,6 +180,15 @@ export function newPendingRun(params: {
     idempotencyKey: params.idempotencyKey ?? null,
     attempts: [],
     late: false,
+    lateReasons: [],
+    slaDeadline:
+      startDelay === undefined ? null : new Date(params.scheduledAt.getTime() + startDelay),
+    slaMaxDurationMs: params.sla.maxDurationMs ?? null,
+    acknowledgedAt: null,
+    parentRunId: params.parent?.runId ?? params.parentRunId ?? null,
+    parent: params.parent ?? null,
+    groupId: params.job.groupId,
+    rateLimitKey: null,
     status: 'pending',
     createdAt: params.now,
     updatedAt: params.now,

@@ -13,3 +13,7 @@ export type GroupId = z.output<typeof GroupId>;
 export const newJobId = (): JobId => JobId.parse(uuidv7());
 export const newRunId = (): RunId => RunId.parse(uuidv7());
 export const newGroupId = (): GroupId => GroupId.parse(uuidv7());
+
+export const NotificationId = z.uuidv7().brand<'NotificationId'>();
+export type NotificationId = z.output<typeof NotificationId>;
+export const newNotificationId = (): NotificationId => NotificationId.parse(uuidv7());

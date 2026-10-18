@@ -1,5 +1,18 @@
 import { type Logger, ProviderRegistry, type Run, systemClock } from '@cloud-trigger/core';
-import { AnalyticsListener, JobService, Reaper, Scheduler, Worker } from '@cloud-trigger/engine';
+import {
+  AnalyticsListener,
+  ChainListener,
+  GroupService,
+  JobTransfer,
+  JobService,
+  NotificationDispatcher,
+  NotificationEnqueuer,
+  NotificationListener,
+  Reaper,
+  Scheduler,
+  SlaMonitor,
+  Worker,
+} from '@cloud-trigger/engine';
 import { type MongoPersistence, createMongoPersistence } from '@cloud-trigger/persistence-mongo';
 import { builtinProviders } from '@cloud-trigger/providers-builtin';
 import { EventPublisher } from '@orpc/server';
@@ -7,7 +20,7 @@ import type { Logger as Pino } from 'pino';
 
 import { Authenticator } from './auth/authenticator.js';
 import type { AppConfig } from './config.js';
-import { EngineRuntime } from './engine/engine-runtime.js';
+import { type BackgroundLoop, EngineRuntime } from './engine/engine-runtime.js';
 import { pinoLogger } from './infra/logger.js';
 import { AppMetrics } from './infra/metrics.js';
 import { loadPlugins } from './infra/plugins.js';
@@ -20,6 +33,8 @@ export interface AppContext {
   readonly persistence: MongoPersistence;
   readonly registry: ProviderRegistry;
   readonly jobService: JobService;
+  readonly groupService: GroupService;
+  readonly jobTransfer: JobTransfer;
   readonly authenticator: Authenticator;
   readonly metrics: AppMetrics;
   readonly runEvents: EventPublisher<{ run: Run }>;
@@ -41,6 +56,7 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
     analyticsDbName: config.ANALYTICS_MONGO_DB,
     runRetentionDays: config.RUN_RETENTION_DAYS,
     metricsRetentionDays: config.METRICS_RETENTION_DAYS,
+    decisionRetentionDays: config.DECISION_RETENTION_DAYS,
     onEventBusError: (error) => logger.warn('Change stream error; reconnecting', { err: error }),
   });
   await persistence.migrate();
@@ -65,11 +81,21 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
         },
       )
     : undefined;
-  const listeners = [new AnalyticsListener(persistence.analytics), metrics];
+  const enqueuer = new NotificationEnqueuer({
+    outbox: persistence.outbox,
+    groups: persistence.groups,
+    clock,
+  });
+  const listeners = [
+    new AnalyticsListener(persistence.analytics),
+    metrics,
+    new NotificationListener(enqueuer),
+    new ChainListener({ ...persistence, registry, clock, logger }),
+  ];
   const reaper = roles.has('scheduler')
     ? new Reaper(
         { ...persistence, clock, logger, listeners },
-        { intervalMs: config.REAPER_INTERVAL_MS, batchSize: 100 },
+        { intervalMs: config.REAPER_INTERVAL_MS, batchSize: 100, slotIdleMs: config.LEASE_MS * 2 },
       )
     : undefined;
   const worker = roles.has('worker')
@@ -94,6 +120,32 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
   if (worker) {
     metrics.observeActiveRuns(() => worker.activeRuns);
   }
+  const dispatcher = roles.has('worker')
+    ? new NotificationDispatcher(
+        { ...persistence, registry, secrets, clock, logger },
+        {
+          workerId: id,
+          pollIntervalMs: config.NOTIFY_POLL_MS,
+          timeoutMs: config.NOTIFY_TIMEOUT_MS,
+          leaseMs: config.NOTIFY_TIMEOUT_MS * 3,
+          retry: {
+            maxAttempts: config.NOTIFY_MAX_ATTEMPTS,
+            backoff: 'exponential',
+            delayMs: 5_000,
+            maxDelayMs: 600_000,
+          },
+        },
+      )
+    : undefined;
+  const slaMonitor = roles.has('scheduler')
+    ? new SlaMonitor(
+        { ...persistence, enqueuer, clock, logger, listeners },
+        { intervalMs: config.SLA_INTERVAL_MS, batchSize: 100 },
+      )
+    : undefined;
+  const loops: BackgroundLoop[] = [scheduler, reaper, slaMonitor, dispatcher].filter(
+    (l) => l !== undefined,
+  );
 
   const runEvents = new EventPublisher<{ run: Run }>();
   if (roles.has('api')) {
@@ -105,19 +157,20 @@ export async function createAppContext(config: AppConfig, pino: Pino): Promise<A
     persistence.events.start();
   }
 
+  const jobService = new JobService({ ...persistence, registry, clock, logger, listeners });
+
   return {
     config,
     logger,
     pino,
     persistence,
     registry,
-    jobService: new JobService({ ...persistence, registry, clock, logger, listeners }),
+    jobService,
+    jobTransfer: new JobTransfer({ ...persistence, registry, service: jobService }),
+    groupService: new GroupService({ ...persistence, registry, clock }),
     authenticator: new Authenticator(config),
     metrics,
     runEvents,
-    engine: new EngineRuntime(
-      { ...(scheduler && { scheduler }), ...(reaper && { reaper }), ...(worker && { worker }) },
-      logger,
-    ),
+    engine: new EngineRuntime({ loops, worker }, logger),
   };
 }

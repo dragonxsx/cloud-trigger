@@ -106,9 +106,12 @@ export function Dashboard() {
       </Group>
 
       <SimpleGrid
-        cols={4}
+        cols={5}
         spacing="xl"
-        breakpoints={[{ maxWidth: 'md', cols: 2 }]}
+        breakpoints={[
+          { maxWidth: 'lg', cols: 3 },
+          { maxWidth: 'sm', cols: 2 },
+        ]}
         className="ct-panel"
         p="lg"
       >
@@ -120,6 +123,13 @@ export function Dashboard() {
         />
         <Stat label="Median latency" value={duration(s?.p50Ms)} />
         <Stat label="p95 latency" value={duration(s?.p95Ms)} />
+        <Stat
+          label="Late"
+          value={s ? s.late.toLocaleString() : '—'}
+          hint={
+            s && s.total > 0 ? `${percent(s.late / s.total)} of runs broke an SLA` : 'SLA breaches'
+          }
+        />
       </SimpleGrid>
 
       <Stack className="ct-panel" p="lg" spacing="xs">

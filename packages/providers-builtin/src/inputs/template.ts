@@ -1,18 +1,11 @@
-import { Result, type RunContext, defineInput } from '@cloud-trigger/core';
-import { Liquid } from 'liquidjs';
+import { type RunContext, defineInput } from '@cloud-trigger/core';
 import { z } from 'zod';
 
-const validationEngine = new Liquid({ strictFilters: true, strictVariables: true, cache: true });
-validationEngine.registerFilter('secret', (name: unknown) => name);
-
-const tryParse = Result.fromThrowable((template: string) => validationEngine.parse(template));
-const isValidTemplate = (template: string): boolean => tryParse(template).isOk();
-
-const LiquidTemplate = z.string().refine(isValidTemplate, 'Invalid Liquid template');
+import { LiquidTemplate, renderWithSecrets } from '../shared/liquid.js';
 
 export const TemplateInputConfig = z.object({
   template: LiquidTemplate.describe(
-    'Liquid template. Variables: run.*, now. Filter: {{ "NAME" | secret }}',
+    'Liquid template. Variables: run.*, now, parent (chained runs). Filter: {{ "NAME" | secret }}',
   ),
   contentType: z.string().default('application/json'),
   attributes: z.record(z.string(), LiquidTemplate).default({}),
@@ -20,6 +13,15 @@ export const TemplateInputConfig = z.object({
 
 const scopeFor = (ctx: RunContext) => ({
   now: ctx.now.toISOString(),
+  parent: ctx.parent
+    ? {
+        runId: ctx.parent.runId,
+        jobId: ctx.parent.jobId,
+        jobName: ctx.parent.jobName,
+        status: ctx.parent.status,
+        result: ctx.parent.result,
+      }
+    : null,
   run: {
     id: ctx.runId,
     jobId: ctx.jobId,
@@ -30,20 +32,8 @@ const scopeFor = (ctx: RunContext) => ({
   },
 });
 
-const renderWithSecrets = async (template: string, ctx: RunContext): Promise<string> => {
-  const engine = new Liquid({ strictFilters: true, strictVariables: true });
-  engine.registerFilter('secret', async (name: unknown) => {
-    const value = typeof name === 'string' ? await ctx.secrets.get(name) : undefined;
-    if (value === undefined) {
-      throw new Error(`Missing secret "${String(name)}"`);
-    }
-
-    return value;
-  });
-  const output: unknown = await engine.parseAndRender(template, scopeFor(ctx));
-
-  return String(output);
-};
+const render = (template: string, ctx: RunContext) =>
+  renderWithSecrets(template, scopeFor(ctx), ctx.secrets);
 
 export const templateInput = defineInput({
   type: 'template',
@@ -53,12 +43,12 @@ export const templateInput = defineInput({
   resolve: async (config, ctx) => {
     const entries = await Promise.all(
       Object.entries(config.attributes).map(
-        async ([key, tpl]) => [key, await renderWithSecrets(tpl, ctx)] as const,
+        async ([key, tpl]) => [key, await render(tpl, ctx)] as const,
       ),
     );
 
     return {
-      body: await renderWithSecrets(config.template, ctx),
+      body: await render(config.template, ctx),
       contentType: config.contentType,
       attributes: Object.fromEntries(entries),
     };

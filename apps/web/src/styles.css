@@ -31,3 +31,8 @@
     transition: none !important;
   }
 }
+.ct-subpanel {
+  background: var(--ct-paper);
+  border: 1px solid var(--ct-line);
+  border-radius: 6px;
+}

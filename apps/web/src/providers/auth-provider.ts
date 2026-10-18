@@ -4,8 +4,12 @@ import { z } from 'zod';
 
 import { auth, client } from '../lib/api';
 import { isUnauthorized } from '../lib/errors';
+import { signIn, signOut } from '../lib/oidc';
 
-const LoginParams = z.object({ apiKey: z.string().trim().min(1) });
+const LoginParams = z.union([
+  z.object({ method: z.literal('oidc') }),
+  z.object({ apiKey: z.string().trim().min(1) }),
+]);
 
 let me: Promise<Awaited<ReturnType<typeof client.auth.me>>> | undefined;
 const whoAmI = () =>
@@ -19,6 +23,11 @@ export const authProvider: AuthProvider = {
     const parsed = LoginParams.safeParse(params);
     if (!parsed.success) {
       return { success: false, error: { name: 'Sign in failed', message: 'Enter an API key' } };
+    }
+    if ('method' in parsed.data) {
+      return (await signIn())
+        ? { success: true }
+        : { success: false, error: { name: 'Sign in failed', message: 'SSO is not configured' } };
     }
     auth.setApiKey(parsed.data.apiKey);
     me = undefined;
@@ -40,6 +49,7 @@ export const authProvider: AuthProvider = {
   },
   logout: async () => {
     auth.setApiKey(null);
+    await signOut();
     me = undefined;
 
     return { success: true, redirectTo: '/login' };
@@ -63,7 +73,13 @@ export const authProvider: AuthProvider = {
 
     return {
       id: identity.subject,
-      name: identity.via === 'disabled' ? 'Local (auth disabled)' : identity.subject,
+      via: identity.via,
+      name:
+        identity.via === 'disabled'
+          ? 'Local (auth disabled)'
+          : identity.via === 'anonymous'
+            ? 'Guest (read-only)'
+            : identity.subject,
     };
   },
 };
@@ -78,11 +94,17 @@ const WRITE_ACTIONS = new Set([
   'resume',
   'cancel',
   'replay',
+  'acknowledge',
+  'backfill',
 ]);
+const ADMIN_ACTIONS = new Set(['import', 'export']);
+
+const scopeFor = (action: string): Scope =>
+  ADMIN_ACTIONS.has(action) ? 'admin' : WRITE_ACTIONS.has(action) ? 'write' : 'read';
 
 export const accessControlProvider: AccessControlProvider = {
   can: async ({ action }) => {
-    const needed: Scope = WRITE_ACTIONS.has(action) ? 'write' : 'read';
+    const needed = scopeFor(action);
     try {
       const scopes = (await whoAmI()).scopes;
 

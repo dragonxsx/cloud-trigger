@@ -65,6 +65,9 @@ export class MongoJobRepository implements JobRepository {
     if (query.enabled !== undefined) {
       filter.enabled = query.enabled;
     }
+    if (query.slaBreached !== undefined) {
+      filter.slaBreachedAt = query.slaBreached ? { $ne: null } : null;
+    }
 
     return findNewestFirstPage(this.jobs, filter, query, fromJobDocument);
   }
@@ -91,6 +94,7 @@ export class MongoJobRepository implements JobRepository {
           version: expectedVersion + 1,
           schedulerLease: null,
           ...(reschedule && { 'schedule.nextFireAt': reschedule.nextFireAt }),
+          ...(update.upstreamJobIds && { upstreamJobIds: [...update.upstreamJobIds] }),
         },
       },
       { returnDocument: 'after' },
@@ -114,7 +118,7 @@ export class MongoJobRepository implements JobRepository {
   async patchSchedule(
     id: JobId,
     patch: Partial<ScheduleState>,
-    extra: { pausedReason?: string | null } = {},
+    extra: { pausedReason?: string | null; slaBreachedAt?: Date | null } = {},
   ): Promise<void> {
     const set: Record<string, unknown> = Object.fromEntries(
       Object.entries(patch).map(([key, value]) => [`schedule.${key}`, value]),
@@ -122,9 +126,55 @@ export class MongoJobRepository implements JobRepository {
     if (extra.pausedReason !== undefined) {
       set['pausedReason'] = extra.pausedReason;
     }
+    if (extra.slaBreachedAt !== undefined) {
+      set['slaBreachedAt'] = extra.slaBreachedAt;
+    }
     if (Object.keys(set).length > 0) {
       await this.jobs.updateOne({ _id: id }, { $set: set });
     }
+  }
+
+  async findDependants(jobId: JobId): Promise<readonly Job[]> {
+    const docs = await this.jobs.find({ upstreamJobIds: jobId }).sort({ _id: 1 }).toArray();
+
+    return docs.map(fromJobDocument);
+  }
+
+  async findByName(name: string): Promise<readonly Job[]> {
+    const docs = await this.jobs.find({ name }).sort({ _id: 1 }).toArray();
+
+    return docs.map(fromJobDocument);
+  }
+
+  async findStaleJobs(p: { now: Date; limit: number }): Promise<readonly Job[]> {
+    const docs = await this.jobs
+      .find({ enabled: true, slaBreachedAt: null, 'schedule.successDeadline': { $lte: p.now } })
+      .sort({ 'schedule.successDeadline': 1 })
+      .limit(p.limit)
+      .toArray();
+
+    return docs.map(fromJobDocument);
+  }
+
+  async updateSlaState(
+    job: Job,
+    update: { slaBreachedAt: Date | null; successDeadline: Date | null },
+  ): Promise<boolean> {
+    const res = await this.jobs.updateOne(
+      {
+        _id: job.id,
+        slaBreachedAt: job.slaBreachedAt,
+        'schedule.successDeadline': job.schedule.successDeadline,
+      },
+      {
+        $set: {
+          slaBreachedAt: update.slaBreachedAt,
+          'schedule.successDeadline': update.successDeadline,
+        },
+      },
+    );
+
+    return res.matchedCount === 1;
   }
 
   async recordFailure(id: JobId, p: { pauseAfter?: number | undefined }): Promise<void> {

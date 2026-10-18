@@ -3,13 +3,20 @@ import {
   type BoundInput,
   type BoundTarget,
   type Clock,
+  type DecisionLog,
   EngineErrorCode,
+  type GroupId,
+  type RateLimit,
   type FinishedRun,
+  type GroupRepository,
   type Job,
+  type JobPolicy,
   type JobRepository,
   type Logger,
+  type ParentSnapshot,
   type PendingRun,
   type ProviderRegistry,
+  type RateLimiter,
   type Run,
   type RunContext,
   type RunQueue,
@@ -24,14 +31,17 @@ import {
   failedResult,
   finishAttempt,
   noRetry,
+  parentSnapshotOf,
   requeueClaimedRun,
   skipClaimedRun,
   toError,
 } from '@cloud-trigger/core';
 
 import { bindJob } from './config-validation.js';
+import { DecisionRecorder } from './decisions.js';
 import type { RunLifecycleListener } from './lifecycle.js';
 import { PollingLoop } from './loop.js';
+import { PolicyResolver, rateLimitKey } from './policies.js';
 import { RunCompletion } from './run-completion.js';
 
 export interface WorkerOptions {
@@ -51,6 +61,9 @@ export interface WorkerDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly listeners: readonly RunLifecycleListener[];
+  readonly groups?: GroupRepository | undefined;
+  readonly rateLimiter?: RateLimiter | undefined;
+  readonly decisions?: DecisionLog | undefined;
 }
 
 class CancelledError extends Error {
@@ -66,12 +79,16 @@ const hasOlderClaim = (a: Run, b: RunningRun): boolean =>
 type OverlapDecision =
   | { action: 'run' }
   | { action: 'skip'; reason: string }
-  | { action: 'buffer' };
+  | { action: 'buffer' }
+  | { action: 'wait' };
 
 export class Worker {
   readonly #loop: PollingLoop;
   readonly #inFlight = new Set<Promise<void>>();
   readonly #completion: RunCompletion;
+  readonly #policies: PolicyResolver;
+  readonly #decisions: DecisionRecorder;
+  readonly #throttledRuns = new Set<string>();
 
   constructor(
     private readonly deps: WorkerDeps,
@@ -79,6 +96,18 @@ export class Worker {
   ) {
     this.#loop = new PollingLoop('worker', options.pollIntervalMs, () => this.tick(), deps.logger);
     this.#completion = new RunCompletion(deps);
+    this.#policies = new PolicyResolver(deps.groups, deps.clock);
+    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger);
+  }
+
+  #overlapSkipped(run: RunningRun, detail: string): Promise<void> {
+    return this.#decisions.record({
+      jobId: run.jobId,
+      runId: run.id,
+      fireTime: run.scheduledAt,
+      decision: 'overlap_skipped',
+      detail,
+    });
   }
 
   get activeRuns(): number {
@@ -120,19 +149,22 @@ export class Worker {
     return claimed > 0;
   }
 
-  async process(claimed: RunningRun): Promise<void> {
+  async process(initial: RunningRun): Promise<void> {
+    let claimed = initial;
     const job = await this.deps.jobs.get(claimed.jobId);
     if (!job) {
       await this.#finish(
         claimed,
         failedResult('job_deleted', 'Job no longer exists', false),
         undefined,
+        undefined,
       );
 
       return;
     }
 
-    const decision = await this.#overlapDecision(job, claimed);
+    const resolved = await this.#policies.resolve(job);
+    const decision = await this.#overlapDecision(job, resolved.policy, claimed);
     switch (decision.action) {
       case 'skip':
         await this.#commit(
@@ -140,8 +172,22 @@ export class Worker {
           skipClaimedRun(claimed, { reason: decision.reason, now: this.deps.clock.now() }),
           job,
         );
+        await this.#overlapSkipped(claimed, decision.reason);
 
         return;
+      case 'wait': {
+        const now = this.deps.clock.now();
+        await this.#commit(
+          claimed,
+          requeueClaimedRun(claimed, {
+            availableAt: new Date(now.getTime() + this.options.bufferedRequeueDelayMs),
+            now,
+          }),
+          job,
+        );
+
+        return;
+      }
       case 'buffer': {
         const now = this.deps.clock.now();
         const buffered = await this.deps.queue.buffer(
@@ -155,14 +201,13 @@ export class Worker {
           return;
         }
         if (buffered.error.code === 'buffer_full') {
+          const reason = 'overlap: buffer_one (buffer already full)';
           await this.#commit(
             claimed,
-            skipClaimedRun(claimed, {
-              reason: 'overlap: buffer_one (buffer already full)',
-              now: this.deps.clock.now(),
-            }),
+            skipClaimedRun(claimed, { reason, now: this.deps.clock.now() }),
             job,
           );
+          await this.#overlapSkipped(claimed, reason);
         } else {
           this.deps.logger.warn('Run changed concurrently; dropping update', { runId: claimed.id });
         }
@@ -173,29 +218,98 @@ export class Worker {
         break;
     }
 
+    if (resolved.rateLimit && job.groupId !== null && this.deps.rateLimiter) {
+      const throttled = await this.#throttle(claimed, job, resolved.rateLimit, job.groupId);
+      if (throttled === undefined) {
+        return;
+      }
+      claimed = throttled;
+    }
+
     const bound = bindJob(this.deps.registry, job);
     if (bound.isErr()) {
       const message = bound.error.issues.map((i) => `${i.path}: ${i.message}`).join('; ');
-      await this.#finish(claimed, failedResult(EngineErrorCode.configInvalid, message, false), job);
+      await this.#finish(
+        claimed,
+        failedResult(EngineErrorCode.configInvalid, message, false),
+        job,
+        resolved.policy,
+      );
 
       return;
     }
-    await this.#execute(claimed, job, bound.value.input, bound.value.target);
+    await this.#execute(claimed, job, resolved.policy, bound.value.input, bound.value.target);
   }
 
-  async #overlapDecision(job: Job, run: RunningRun): Promise<OverlapDecision> {
-    const policy = job.policy.overlap;
+  async #throttle(
+    claimed: RunningRun,
+    job: Job,
+    limit: RateLimit,
+    groupId: GroupId,
+  ): Promise<RunningRun | undefined> {
+    const limiter = this.deps.rateLimiter;
+    if (!limiter) {
+      return claimed;
+    }
+    const key = rateLimitKey(groupId);
+    const now = this.deps.clock.now();
+    const acquired = await limiter.tryAcquire(key, limit, now);
+    if (!acquired.ok) {
+      this.deps.logger.debug('Rate limited; requeueing run', { runId: claimed.id, key });
+      if (!this.#throttledRuns.has(claimed.id)) {
+        if (this.#throttledRuns.size >= 1_000) {
+          this.#throttledRuns.clear();
+        }
+        this.#throttledRuns.add(claimed.id);
+        await this.#decisions.record({
+          jobId: job.id,
+          runId: claimed.id,
+          fireTime: claimed.scheduledAt,
+          decision: 'rate_limited',
+          detail: `Group rate limit reached; waiting (next try ${acquired.retryAt.toISOString()})`,
+        });
+      }
+      await this.#commit(
+        claimed,
+        requeueClaimedRun(claimed, { availableAt: acquired.retryAt, now }),
+        job,
+      );
+
+      return undefined;
+    }
+    if (!acquired.holdsSlot) {
+      return claimed;
+    }
+    if (!(await this.deps.runs.markSlotHeld(claimed, key))) {
+      await limiter.release(key, this.deps.clock.now());
+
+      return undefined;
+    }
+
+    return { ...claimed, rateLimitKey: key };
+  }
+
+  async #overlapDecision(
+    job: Job,
+    jobPolicy: JobPolicy,
+    run: RunningRun,
+  ): Promise<OverlapDecision> {
+    const policy = jobPolicy.overlap;
     switch (policy) {
       case 'allow':
         return { action: 'run' };
       // Exclusion via the store's execution slot; claim timestamps disagree across replicas.
       case 'forbid':
-        return (await this.deps.queue.acquireExecution(run))
-          ? { action: 'run' }
-          : { action: 'skip', reason: 'overlap: forbid (previous run still active)' };
       case 'buffer_one':
-        return (await this.deps.queue.acquireExecution(run))
-          ? { action: 'run' }
+        if (await this.deps.queue.acquireExecution(run)) {
+          return { action: 'run' };
+        }
+        if (run.reason === 'backfill') {
+          return { action: 'wait' };
+        }
+
+        return policy === 'forbid'
+          ? { action: 'skip', reason: 'overlap: forbid (previous run still active)' }
           : { action: 'buffer' };
       case 'replace': {
         const olderRunning = (await this.deps.runs.findByStatus(job.id, ['running'])).filter(
@@ -213,13 +327,14 @@ export class Worker {
   async #execute(
     claimed: RunningRun,
     job: Job,
+    policy: JobPolicy,
     input: BoundInput,
     target: BoundTarget,
   ): Promise<void> {
     let current = claimed;
     let leaseLost = false;
     const cancel = new AbortController();
-    const signal = AbortSignal.any([AbortSignal.timeout(job.policy.timeoutMs), cancel.signal]);
+    const signal = AbortSignal.any([AbortSignal.timeout(policy.timeoutMs), cancel.signal]);
 
     const beat = async (): Promise<void> => {
       const until = new Date(this.deps.clock.now().getTime() + this.options.leaseMs);
@@ -254,7 +369,9 @@ export class Worker {
       Math.max(250, Math.floor(this.options.leaseMs / 3)),
     );
 
+    const parent = claimed.parent ?? (await this.#legacyParent(claimed));
     const ctx: RunContext = {
+      ...(parent && { parent }),
       runId: claimed.id,
       jobId: job.id,
       jobName: job.name,
@@ -295,7 +412,7 @@ export class Worker {
 
       return;
     }
-    await this.#finish(current, result, job);
+    await this.#finish(current, result, job, policy);
   }
 
   #settleOnAbort(signal: AbortSignal, work: () => Promise<TargetResult>): Promise<TargetResult> {
@@ -312,8 +429,19 @@ export class Worker {
     return Promise.race([work(), aborted]);
   }
 
-  async #finish(run: RunningRun, result: TargetResult, job: Job | undefined): Promise<void> {
-    const retry = job?.policy.retry ?? noRetry;
+  async #legacyParent(run: RunningRun): Promise<ParentSnapshot | undefined> {
+    const parent = run.parentRunId ? await this.deps.runs.get(run.parentRunId) : undefined;
+
+    return parent && parentSnapshotOf(parent);
+  }
+
+  async #finish(
+    run: RunningRun,
+    result: TargetResult,
+    job: Job | undefined,
+    policy: JobPolicy | undefined,
+  ): Promise<void> {
+    const retry = policy?.retry ?? noRetry;
     const next = finishAttempt(run, { result, retry, now: this.deps.clock.now() });
     await this.#commit(run, next, job);
   }

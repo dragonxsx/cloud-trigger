@@ -147,10 +147,14 @@ describe('API e2e (typed oRPC client)', () => {
 
     const page = await api.runs.list({ jobId: job.id, status: ['succeeded'] });
     expect(page.items).toHaveLength(1);
-    const summary = await api.analytics.summary({
-      from: new Date(Date.now() - 60_000).toISOString(),
-      to: new Date(Date.now() + 60_000).toISOString(),
-      jobId: job.id,
+    const summary = await waitFor(async () => {
+      const current = await api.analytics.summary({
+        from: new Date(Date.now() - 60_000).toISOString(),
+        to: new Date(Date.now() + 60_000).toISOString(),
+        jobId: job.id,
+      });
+
+      return current.total > 0 ? current : undefined;
     });
     expect(summary.byStatus).toEqual({ succeeded: 1 });
   });

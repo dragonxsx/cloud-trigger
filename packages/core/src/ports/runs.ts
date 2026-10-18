@@ -11,18 +11,37 @@ export interface RunQuery extends PageRequest {
   readonly reason?: RunReason | undefined;
   readonly from?: Date | undefined;
   readonly to?: Date | undefined;
+  readonly late?: boolean | undefined;
+  readonly acknowledged?: boolean | undefined;
+}
+
+export interface SlaUpdate {
+  readonly late: boolean;
+  readonly lateReasons: readonly string[];
+  readonly slaDeadline: Date | null;
 }
 
 export type StaleRunError = DomainError<'stale_run'>;
 
 export interface RunRepository {
-  insert(run: PendingRun): Promise<Result<PendingRun, DomainError<'duplicate_run'>>>;
+  insert(
+    run: PendingRun,
+    opts?: { durableKey?: boolean },
+  ): Promise<Result<PendingRun, DomainError<'duplicate_run'>>>;
   get(id: RunId): Promise<Run | undefined>;
   list(query: RunQuery): Promise<Page<Run>>;
   transition(previous: Run, next: Run): Promise<Result<Run, StaleRunError>>;
   countByStatus(jobId: JobId, statuses: readonly RunStatus[]): Promise<number>;
   findByStatus(jobId: JobId, statuses: readonly RunStatus[]): Promise<readonly Run[]>;
   prune(jobId: JobId, keep: { succeeded: number; failed: number }): Promise<number>;
+  countHoldingSlot(key: string): Promise<number>;
+  markSlotHeld(run: RunningRun, key: string): Promise<boolean>;
+  acknowledge(ids: readonly RunId[], at: Date): Promise<number>;
+  findLateCandidates(p: {
+    now: Date;
+    limit: number;
+  }): Promise<readonly (PendingRun | RunningRun)[]>;
+  updateSla(run: PendingRun | RunningRun, update: SlaUpdate): Promise<boolean>;
 }
 
 export interface RunQueue {

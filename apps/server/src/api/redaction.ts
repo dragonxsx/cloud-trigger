@@ -1,7 +1,10 @@
 import {
   type Job,
   type JobSpec,
+  type Group,
+  type GroupSpec,
   type JsonSchema,
+  type NotificationDelivery,
   type ProviderKind,
   type ProviderRef,
   type ProviderRegistry,
@@ -45,6 +48,47 @@ export class JobRedactor {
           config: keep('notifier', n.notifier, previous.notifications[i]?.notifier),
         },
       })),
+    };
+  }
+
+  redactGroup(group: Group): Group {
+    return {
+      ...group,
+      defaultNotifications: group.defaultNotifications.map((n) => ({
+        ...n,
+        notifier: { ...n.notifier, config: this.#redactRef('notifier', n.notifier) },
+      })),
+    };
+  }
+
+  restoreGroup(next: GroupSpec, previous: Group): GroupSpec {
+    return {
+      ...next,
+      defaultNotifications: next.defaultNotifications.map((n, i) => {
+        const prev = previous.defaultNotifications[i]?.notifier;
+
+        return {
+          ...n,
+          notifier: {
+            ...n.notifier,
+            config:
+              prev && prev.type === n.notifier.type
+                ? restoreRedacted(
+                    this.#schema('notifier', n.notifier.type),
+                    n.notifier.config,
+                    prev.config,
+                  )
+                : n.notifier.config,
+          },
+        };
+      }),
+    };
+  }
+
+  redactDelivery(delivery: NotificationDelivery): NotificationDelivery {
+    return {
+      ...delivery,
+      notifier: { ...delivery.notifier, config: this.#redactRef('notifier', delivery.notifier) },
     };
   }
 

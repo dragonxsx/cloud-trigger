@@ -5,3 +5,6 @@ export * from './jobs.js';
 export * from './runs.js';
 export * from './secrets.js';
 export * from './logger.js';
+export * from './notifications.js';
+export * from './groups.js';
+export * from './decisions.js';

@@ -1,9 +1,11 @@
-import { Badge, Loader } from '@mantine/core';
+import { RUN_STATUS_STYLE } from '@cloud-trigger/core';
+import { Badge, Loader, Tooltip } from '@mantine/core';
 import {
   IconAlertTriangle,
   IconBan,
   IconCircleCheck,
   IconCircleX,
+  IconClockExclamation,
   IconClockPause,
   IconPlayerSkipForward,
 } from '@tabler/icons-react';
@@ -19,14 +21,29 @@ interface StatusStyle {
 
 const size = 14;
 
+const ICONS: Record<RunStatusDto, ReactNode> = {
+  succeeded: <IconCircleCheck size={size} />,
+  failed: <IconCircleX size={size} />,
+  timed_out: <IconAlertTriangle size={size} />,
+  cancelled: <IconBan size={size} />,
+  skipped: <IconPlayerSkipForward size={size} />,
+  pending: <IconClockPause size={size} />,
+  running: <Loader size={10} color="signal" />,
+};
+
+const styleFor = (status: RunStatusDto): StatusStyle => ({
+  ...RUN_STATUS_STYLE[status],
+  icon: ICONS[status],
+});
+
 export const STATUS: Record<RunStatusDto, StatusStyle> = {
-  succeeded: { label: 'Succeeded', color: '#0ca30c', icon: <IconCircleCheck size={size} /> },
-  failed: { label: 'Failed', color: '#d03b3b', icon: <IconCircleX size={size} /> },
-  timed_out: { label: 'Timed out', color: '#e09a0e', icon: <IconAlertTriangle size={size} /> },
-  cancelled: { label: 'Cancelled', color: '#8a93a3', icon: <IconBan size={size} /> },
-  skipped: { label: 'Skipped', color: '#b3bac6', icon: <IconPlayerSkipForward size={size} /> },
-  pending: { label: 'Pending', color: '#557de7', icon: <IconClockPause size={size} /> },
-  running: { label: 'Running', color: '#2a5bd7', icon: <Loader size={10} color="signal" /> },
+  succeeded: styleFor('succeeded'),
+  failed: styleFor('failed'),
+  timed_out: styleFor('timed_out'),
+  cancelled: styleFor('cancelled'),
+  skipped: styleFor('skipped'),
+  pending: styleFor('pending'),
+  running: styleFor('running'),
 };
 
 export const CHART_STACK_ORDER = [
@@ -56,5 +73,21 @@ export function StatusBadge({ status }: { status: RunStatusDto }) {
     >
       {s.label}
     </Badge>
+  );
+}
+
+export function LateBadge({ reasons }: { reasons: readonly string[] }) {
+  return (
+    <Tooltip label={reasons.join('; ') || 'Breached its SLA'} withArrow multiline width={260}>
+      <Badge
+        variant="outline"
+        color="gray"
+        radius="sm"
+        leftSection={<IconClockExclamation size={12} style={{ display: 'block' }} />}
+        styles={{ root: { textTransform: 'none', fontWeight: 600, color: 'var(--ct-ink)' } }}
+      >
+        Late
+      </Badge>
+    </Tooltip>
   );
 }

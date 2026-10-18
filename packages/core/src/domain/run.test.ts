@@ -6,9 +6,9 @@ import { cancelPendingRun, expireLease, finishAttempt, newPendingRun, startRun }
 
 const t0 = new Date('2026-01-01T00:00:00Z');
 const at = (ms: number) => new Date(t0.getTime() + ms);
-const job = { id: newJobId(), name: 'ping', version: 1 };
+const job = { id: newJobId(), name: 'ping', version: 1, groupId: null };
 const pending = () =>
-  newPendingRun({ id: newRunId(), job, reason: 'scheduled', scheduledAt: t0, now: t0 });
+  newPendingRun({ id: newRunId(), job, reason: 'scheduled', scheduledAt: t0, sla: {}, now: t0 });
 const running = () => startRun(pending(), { workerId: 'w1', leaseMs: 10_000, now: at(10) });
 
 const failureWithBody = (body: string) => ({

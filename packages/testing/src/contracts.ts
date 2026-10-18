@@ -1,5 +1,12 @@
 import {
+  type DecisionLog,
+  type GroupRepository,
+  GroupSpec,
   type JobRepository,
+  type RateLimiter,
+  createGroup,
+  newGroupId,
+  type NotificationOutbox,
   type RunAnalytics,
   type RunQueue,
   type RunRepository,
@@ -10,7 +17,7 @@ import {
 } from '@cloud-trigger/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { T0, at, makeJob, makePendingRun } from './fixtures.js';
+import { T0, at, makeDelivery, makeJob, makePendingRun } from './fixtures.js';
 
 export interface PortsUnderTest {
   readonly jobs: JobRepository;
@@ -18,7 +25,14 @@ export interface PortsUnderTest {
   readonly runs: RunRepository;
   readonly queue: RunQueue;
   readonly analytics: RunAnalytics;
+  readonly outbox: NotificationOutbox;
+  readonly groups: GroupRepository;
+  readonly rateLimiter: RateLimiter;
+  readonly decisions: DecisionLog;
 }
+
+const makeGroup = (name: string) =>
+  createGroup({ id: newGroupId(), spec: GroupSpec.parse({ name }), now: T0 });
 
 const claimOne = async ({ jobs, runs, queue }: PortsUnderTest) => {
   const job = makeJob();
@@ -111,6 +125,27 @@ export function describePersistenceContract(
         );
         expect(stale._unsafeUnwrapErr().code).toBe('version_conflict');
         expect((await jobs.get(job.id))?.schedule.nextFireAt).toEqual(at(60_000));
+      });
+
+      it('finds dependants through upstream edges and jobs by name', async () => {
+        const { jobs } = setup.ports();
+        const parent = makeJob({ name: 'extract' });
+        const child = { ...makeJob({ name: 'load' }), upstreamJobIds: [parent.id] };
+        await jobs.insert(parent);
+        await jobs.insert(child);
+        await jobs.insert(makeJob({ name: 'unrelated' }));
+        expect((await jobs.findDependants(parent.id)).map((j) => j.id)).toEqual([child.id]);
+        expect(await jobs.findDependants(child.id)).toEqual([]);
+
+        const detached = await jobs.update(
+          child.id,
+          { spec: child, updatedAt: at(1), upstreamJobIds: [] },
+          child.version,
+        );
+        expect(detached._unsafeUnwrap().upstreamJobIds).toEqual([]);
+        expect(await jobs.findDependants(parent.id)).toEqual([]);
+        expect((await jobs.findByName('load')).map((j) => j.id)).toEqual([child.id]);
+        expect(await jobs.findByName('LOAD')).toEqual([]);
       });
 
       it('counts concurrent failures atomically and auto-pauses at the threshold', async () => {
@@ -297,6 +332,323 @@ export function describePersistenceContract(
       });
     });
 
+    describe('GroupRepository', () => {
+      it('round-trips, enforces unique names and versions, and deletes', async () => {
+        const { groups } = setup.ports();
+        const ops = makeGroup('ops');
+        expect((await groups.insert(ops))._unsafeUnwrap()).toEqual(ops);
+        expect((await groups.insert(makeGroup('ops')))._unsafeUnwrapErr().code).toBe('conflict');
+        await groups.insert(makeGroup('billing'));
+        expect(await groups.get(ops.id)).toEqual(ops);
+        expect((await groups.findByName('OPS'))?.id).toBe(ops.id);
+        expect(await groups.findByName('nope')).toBeUndefined();
+        expect((await groups.list({ limit: 10 })).total).toBe(2);
+        expect((await groups.list({ limit: 10, search: 'BILL' })).items.map((g) => g.name)).toEqual(
+          ['billing'],
+        );
+
+        const spec = GroupSpec.parse({ name: 'operations', rateLimit: { maxConcurrent: 2 } });
+        const renamed = await groups.update(ops.id, { spec, updatedAt: at(1) }, 1);
+        expect(renamed._unsafeUnwrap()).toMatchObject({ name: 'operations', version: 2 });
+        expect(
+          (await groups.update(ops.id, { spec, updatedAt: at(2) }, 1))._unsafeUnwrapErr().code,
+        ).toBe('version_conflict');
+        const taken = GroupSpec.parse({ name: 'billing' });
+        expect(
+          (await groups.update(ops.id, { spec: taken, updatedAt: at(3) }, 2))._unsafeUnwrapErr()
+            .code,
+        ).toBe('conflict');
+        expect(
+          (await groups.update(newGroupId(), { spec, updatedAt: at(4) }, 1))._unsafeUnwrapErr()
+            .code,
+        ).toBe('not_found');
+        expect(await groups.delete(ops.id)).toBe(true);
+        expect(await groups.get(ops.id)).toBeUndefined();
+      });
+    });
+
+    describe('RateLimiter', () => {
+      it('never hands out more concurrency slots than the limit under contention', async () => {
+        const { rateLimiter } = setup.ports();
+        const limit = { maxConcurrent: 2 };
+        const attempts = await Promise.all(
+          Array.from({ length: 8 }, () => rateLimiter.tryAcquire('g:1', limit, at(0))),
+        );
+        expect(attempts.filter((a) => a.ok)).toHaveLength(2);
+        const blocked = attempts.find((a) => !a.ok);
+        expect(blocked && !blocked.ok && blocked.retryAt > at(0)).toBe(true);
+        await rateLimiter.release('g:1', at(1));
+        expect(await rateLimiter.tryAcquire('g:1', limit, at(2))).toEqual({
+          ok: true,
+          holdsSlot: true,
+        });
+        expect((await rateLimiter.tryAcquire('g:1', limit, at(3))).ok).toBe(false);
+      });
+
+      it('refills tokens at the configured rate', async () => {
+        const { rateLimiter } = setup.ports();
+        const limit = { perSecond: 2 };
+        expect(await rateLimiter.tryAcquire('g:2', limit, at(0))).toEqual({
+          ok: true,
+          holdsSlot: false,
+        });
+        expect((await rateLimiter.tryAcquire('g:2', limit, at(0))).ok).toBe(true);
+        const third = await rateLimiter.tryAcquire('g:2', limit, at(0));
+        expect(third).toEqual({ ok: false, retryAt: at(500) });
+        expect((await rateLimiter.tryAcquire('g:2', limit, at(500))).ok).toBe(true);
+      });
+
+      it('reconciles a leaked counter only when idle', async () => {
+        const { rateLimiter } = setup.ports();
+        const limit = { maxConcurrent: 1 };
+        await rateLimiter.tryAcquire('g:3', limit, at(0));
+        expect(await rateLimiter.reconcile('g:3', { running: 0, idleSince: at(0) })).toBe(false);
+        expect(await rateLimiter.reconcile('g:3', { running: 0, idleSince: at(1) })).toBe(true);
+        expect((await rateLimiter.tryAcquire('g:3', limit, at(2))).ok).toBe(true);
+        expect(await rateLimiter.listHeld()).toEqual([{ key: 'g:3', running: 1 }]);
+      });
+
+      it('lets denied attempts age a leaked slot toward reconciliation', async () => {
+        const { rateLimiter } = setup.ports();
+        const limit = { maxConcurrent: 1 };
+        await rateLimiter.tryAcquire('g:4', limit, at(0));
+        for (const t of [100, 200, 300]) {
+          expect((await rateLimiter.tryAcquire('g:4', limit, at(t))).ok).toBe(false);
+        }
+        expect(await rateLimiter.reconcile('g:4', { running: 0, idleSince: at(50) })).toBe(true);
+        expect((await rateLimiter.tryAcquire('g:4', limit, at(400))).ok).toBe(true);
+      });
+
+      it('records slot holders on running runs without breaking their CAS', async () => {
+        const ports = setup.ports();
+        const running = await claimOne(ports);
+        expect(running.rateLimitKey).toBeNull();
+        expect(await ports.runs.markSlotHeld(running, 'group:x')).toBe(true);
+        expect(await ports.runs.countHoldingSlot('group:x')).toBe(1);
+        expect((await ports.runs.transition(running, succeed(running))).isOk()).toBe(true);
+        expect(await ports.runs.countHoldingSlot('group:x')).toBe(0);
+      });
+    });
+
+    describe('DecisionLog', () => {
+      it('returns the newest decisions for a job up to a point in time', async () => {
+        const { decisions } = setup.ports();
+        const job = makeJob();
+        const decision = (ms: number, kind: 'overlap_skipped' | 'paused') => ({
+          jobId: job.id,
+          runId: null,
+          at: at(ms),
+          fireTime: at(ms - 1),
+          decision: kind,
+          detail: `d${ms}`,
+        });
+        await decisions.record(decision(1_000, 'overlap_skipped'));
+        await decisions.record(decision(2_000, 'paused'));
+        await decisions.record(decision(3_000, 'overlap_skipped'));
+        await decisions.record({ ...decision(2_500, 'paused'), jobId: makeJob().id });
+
+        const recent = await decisions.listRecent(job.id, { before: at(2_000), limit: 10 });
+        expect(recent.map((d) => d.detail)).toEqual(['d2000', 'd1000']);
+        expect(recent[0]).toEqual(decision(2_000, 'paused'));
+        expect(await decisions.listRecent(job.id, { before: at(9_000), limit: 1 })).toHaveLength(1);
+      });
+    });
+
+    describe('Failed runs inbox', () => {
+      it('acknowledges only unacknowledged failures and filters them', async () => {
+        const { jobs, runs, queue } = setup.ports();
+        const job = makeJob();
+        await jobs.insert(job);
+        const finish = async (outcome: 'success' | 'failure', scheduledAt: Date) => {
+          await runs.insert(makePendingRun(job, { scheduledAt }));
+          const claimed = await queue.claimNext({ workerId: 'w', now: at(100), leaseMs: 1_000 });
+          if (!claimed) {
+            throw new Error('expected a claim');
+          }
+          const next = finishAttempt(claimed, {
+            result:
+              outcome === 'success'
+                ? { outcome, durationMs: 1 }
+                : { outcome, durationMs: 1, error: { code: 'x', message: 'x', retryable: false } },
+            retry: RetryPolicy.parse({ maxAttempts: 1 }),
+            now: at(200),
+          });
+
+          return (await runs.transition(claimed, next))._unsafeUnwrap();
+        };
+        const failed = await finish('failure', at(1));
+        const failedToo = await finish('failure', at(2));
+        const succeeded = await finish('success', at(3));
+        const inbox = { limit: 10, status: ['failed', 'timed_out'] as const, acknowledged: false };
+        expect((await runs.list(inbox)).total).toBe(2);
+
+        expect(await runs.acknowledge([failed.id, succeeded.id], at(300))).toBe(1);
+        expect(await runs.acknowledge([failed.id], at(400))).toBe(0);
+        expect((await runs.list(inbox)).items.map((r) => r.id)).toEqual([failedToo.id]);
+        expect((await runs.get(failed.id))?.acknowledgedAt).toEqual(at(300));
+        expect((await runs.get(succeeded.id))?.acknowledgedAt).toBeNull();
+      });
+    });
+
+    describe('SLA tracking', () => {
+      it('finds runs past their deadline and fences SLA updates', async () => {
+        const { jobs, runs, queue } = setup.ports();
+        const job = makeJob({ policy: { sla: { maxStartDelayMs: 1_000, maxDurationMs: 5_000 } } });
+        await jobs.insert(job);
+        const pending = makePendingRun(job);
+        expect(pending.slaDeadline).toEqual(at(1_000));
+        await runs.insert(pending);
+        await runs.insert(makePendingRun(makeJob(), { scheduledAt: at(1) }));
+
+        expect(await runs.findLateCandidates({ now: at(999), limit: 10 })).toHaveLength(0);
+        const [candidate] = await runs.findLateCandidates({ now: at(1_000), limit: 10 });
+        expect(candidate?.id).toBe(pending.id);
+        if (!candidate) {
+          throw new Error('expected a candidate');
+        }
+        const late = { late: true, lateReasons: ['slow start'], slaDeadline: null };
+        expect(await runs.updateSla(candidate, late)).toBe(true);
+        expect(await runs.updateSla(candidate, late)).toBe(false);
+        expect(await runs.findLateCandidates({ now: at(99_999), limit: 10 })).toHaveLength(0);
+
+        const claimed = await queue.claimNext({ workerId: 'w', now: at(2_000), leaseMs: 1_000 });
+        expect(claimed).toMatchObject({ late: true, lateReasons: ['slow start'] });
+        if (!claimed) {
+          throw new Error('expected a claim');
+        }
+        const saved = await runs.transition(claimed, {
+          ...succeed(claimed),
+          late: false,
+          lateReasons: [],
+        });
+        expect(saved._unsafeUnwrap()).toMatchObject({
+          status: 'succeeded',
+          late: true,
+          lateReasons: ['slow start'],
+        });
+      });
+
+      it('arms the duration deadline when a run is claimed', async () => {
+        const { jobs, runs, queue } = setup.ports();
+        const job = makeJob({ policy: { sla: { maxDurationMs: 5_000 } } });
+        await jobs.insert(job);
+        await runs.insert(makePendingRun(job));
+        const claimed = await queue.claimNext({ workerId: 'w', now: at(100), leaseMs: 60_000 });
+        expect(claimed?.slaDeadline).toEqual(at(5_100));
+        expect(await runs.findLateCandidates({ now: at(5_099), limit: 10 })).toHaveLength(0);
+        expect(await runs.findLateCandidates({ now: at(5_100), limit: 10 })).toHaveLength(1);
+        expect((await runs.list({ limit: 10, late: false })).total).toBe(1);
+      });
+
+      it('finds jobs past their success deadline and fences breach updates', async () => {
+        const { jobs } = setup.ports();
+        const job = makeJob({ policy: { sla: { maxSinceLastSuccessMs: 10_000 } } });
+        await jobs.insert(job);
+        await jobs.insert(makeJob());
+        expect(job.schedule.successDeadline).toEqual(at(10_000));
+        expect(await jobs.findStaleJobs({ now: at(9_999), limit: 10 })).toHaveLength(0);
+        const [stale] = await jobs.findStaleJobs({ now: at(10_000), limit: 10 });
+        if (!stale) {
+          throw new Error('expected a stale job');
+        }
+        const breach = { slaBreachedAt: at(10_000), successDeadline: null };
+        expect(await jobs.updateSlaState(stale, breach)).toBe(true);
+        expect(await jobs.updateSlaState(stale, breach)).toBe(false);
+        expect(await jobs.findStaleJobs({ now: at(99_999), limit: 10 })).toHaveLength(0);
+        expect((await jobs.list({ limit: 10, slaBreached: true })).items.map((j) => j.id)).toEqual([
+          job.id,
+        ]);
+
+        await jobs.patchSchedule(job.id, { successDeadline: at(50_000) }, { slaBreachedAt: null });
+        expect((await jobs.get(job.id))?.slaBreachedAt).toBeNull();
+      });
+    });
+
+    describe('NotificationOutbox', () => {
+      it('dedupes by key and hands each entry to one dispatcher', async () => {
+        const { outbox } = setup.ports();
+        const job = makeJob();
+        const first = makeDelivery(job, { subject: 'run-1' });
+        const again = makeDelivery(job, { subject: 'run-1' });
+        expect(await outbox.enqueue([first])).toBe(1);
+        expect(await outbox.enqueue([again, makeDelivery(job, { subject: 'run-2' })])).toBe(1);
+
+        const claims = await Promise.all(
+          ['d1', 'd2', 'd3'].map((workerId) =>
+            outbox.claimNext({ workerId, now: at(1), leaseMs: 1_000 }),
+          ),
+        );
+        const claimed = claims.filter((c) => c !== undefined);
+        expect(claimed).toHaveLength(2);
+        expect(new Set(claimed.map((c) => c.key)).size).toBe(2);
+        expect(claimed.every((c) => c.status === 'sending' && c.attempts === 1)).toBe(true);
+        expect(
+          await outbox.claimNext({ workerId: 'd4', now: at(2), leaseMs: 1_000 }),
+        ).toBeUndefined();
+      });
+
+      it('reclaims an entry whose lease expired and fences the old dispatcher', async () => {
+        const { outbox } = setup.ports();
+        const delivery = makeDelivery(makeJob());
+        await outbox.enqueue([delivery]);
+        const stale = await outbox.claimNext({ workerId: 'old', now: at(1), leaseMs: 1_000 });
+        expect(
+          await outbox.claimNext({ workerId: 'new', now: at(500), leaseMs: 1_000 }),
+        ).toBeUndefined();
+        const fresh = await outbox.claimNext({ workerId: 'new', now: at(2_000), leaseMs: 1_000 });
+        if (!stale || !fresh) {
+          throw new Error('expected claims');
+        }
+        expect(fresh.attempts).toBe(2);
+        expect(await outbox.complete(stale, at(2_001))).toBe(false);
+        expect(await outbox.complete(fresh, at(2_001))).toBe(true);
+        expect(
+          await outbox.claimNext({ workerId: 'x', now: at(9_000), leaseMs: 1_000 }),
+        ).toBeUndefined();
+      });
+
+      it('retries a failed entry later and gives up when no retry is scheduled', async () => {
+        const { outbox } = setup.ports();
+        const delivery = makeDelivery(makeJob());
+        await outbox.enqueue([delivery]);
+        const first = await outbox.claimNext({ workerId: 'd', now: at(1), leaseMs: 1_000 });
+        if (!first) {
+          throw new Error('expected a claim');
+        }
+        expect(await outbox.fail(first, { error: 'HTTP 500', retryAt: at(100), now: at(2) })).toBe(
+          true,
+        );
+        expect(
+          await outbox.claimNext({ workerId: 'd', now: at(50), leaseMs: 1_000 }),
+        ).toBeUndefined();
+        const second = await outbox.claimNext({ workerId: 'd', now: at(100), leaseMs: 1_000 });
+        if (!second) {
+          throw new Error('expected a retry claim');
+        }
+        expect(second.lastError).toBe('HTTP 500');
+        await outbox.fail(second, { error: 'HTTP 500', retryAt: null, now: at(101) });
+        expect(
+          await outbox.claimNext({ workerId: 'd', now: at(9_999), leaseMs: 1_000 }),
+        ).toBeUndefined();
+      });
+
+      it('lists deliveries for a run', async () => {
+        const { outbox } = setup.ports();
+        const job = makeJob();
+        const run = makePendingRun(job);
+        const delivery = { ...makeDelivery(job, { subject: run.id }), runId: run.id };
+        await outbox.enqueue([delivery]);
+        const claimed = await outbox.claimNext({ workerId: 'd', now: at(1), leaseMs: 1_000 });
+        if (!claimed) {
+          throw new Error('expected a claim');
+        }
+        await outbox.complete(claimed, at(3));
+        const listed = await outbox.listByRun(run.id);
+        expect(listed).toHaveLength(1);
+        expect(listed[0]).toMatchObject({ status: 'delivered', deliveredAt: at(3), lease: null });
+      });
+    });
+
     describe('RunAnalytics', () => {
       it('summarises, buckets and ranks errors', async () => {
         const { analytics } = setup.ports();
@@ -326,6 +678,7 @@ export function describePersistenceContract(
         });
         await analytics.record({
           ...base,
+          late: true,
           ts: at(90_000),
           status: 'failed',
           durationMs: 800,
@@ -335,6 +688,7 @@ export function describePersistenceContract(
         const range = { from: T0, to: at(3_600_000) };
         const summary = await analytics.summary(range);
         expect(summary.total).toBe(10);
+        expect(summary.late).toBe(1);
         expect(summary.successRate).toBeCloseTo(0.8);
         expect(summary.p95Ms).toBeGreaterThan(100);
 
