@@ -153,8 +153,8 @@ export const jobsHandlers = ({
       return { deleted: deleted.value };
     }),
 
-    validate: jobs.validate.handler(({ input, errors }) => {
-      const validated = jobService.validate(input);
+    validate: jobs.validate.handler(async ({ input, errors }) => {
+      const validated = await jobService.validate(input);
       if (validated.isErr()) {
         throw toApiError(errors, validated.error);
       }

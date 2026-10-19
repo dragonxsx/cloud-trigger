@@ -81,6 +81,8 @@ const sqliteTableOf = (name: TableName) => {
 export const jobs = sqliteTableOf('jobs');
 export const jobTags = sqliteTableOf('job_tags');
 export const jobUpstreams = sqliteTableOf('job_upstreams');
+export const jobConnections = sqliteTableOf('job_connections');
+export const connections = sqliteTableOf('connections');
 export const runs = sqliteTableOf('runs');
 export const fireKeys = sqliteTableOf('fire_keys');
 export const groups = sqliteTableOf('groups');

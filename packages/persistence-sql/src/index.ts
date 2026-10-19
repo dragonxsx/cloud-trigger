@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 
 import { SqlRunAnalytics } from './analytics.js';
 import { SqlApiKeyRepository, SqlAuthSettingsStore, SqlUserRepository } from './auth.js';
+import { SqlConnectionRepository } from './connections.js';
 import { SqlDecisionLog } from './decisions.js';
 import { SqlEventSourceLeases } from './event-sources.js';
 import type { ChangeSink, ClosableEventBus } from './events.js';
@@ -23,6 +24,7 @@ export { loadRunChanged, runFromRow };
 export {
   SqlApiKeyRepository,
   SqlAuthSettingsStore,
+  SqlConnectionRepository,
   SqlUserRepository,
   SqlDecisionLog,
   SqlEventSourceLeases,
@@ -89,6 +91,7 @@ export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersist
 
   return {
     jobs: new SqlJobRepository(session, changes),
+    connections: new SqlConnectionRepository(session),
     schedule: new SqlScheduleStore(session, changes),
     runs: new SqlRunRepository(session, changes),
     queue: new SqlRunQueue(session, changes),

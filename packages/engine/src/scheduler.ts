@@ -1,5 +1,6 @@
 import {
   type Clock,
+  type ConnectionRepository,
   type DecisionLog,
   type GroupRepository,
   type Job,
@@ -11,7 +12,7 @@ import {
   newRunId,
 } from '@cloud-trigger/core';
 
-import { bindJob } from './config-validation.js';
+import { bindJob, loadConnections } from './config-validation.js';
 import { DecisionRecorder } from './decisions.js';
 import { jitteredAvailableAt, planFires } from './fire-plan.js';
 import { PollingLoop } from './loop.js';
@@ -30,6 +31,7 @@ export interface SchedulerDeps {
   readonly registry: ProviderRegistry;
   readonly clock: Clock;
   readonly logger: Logger;
+  readonly connections?: ConnectionRepository | undefined;
   readonly groups?: GroupRepository | undefined;
   readonly decisions?: DecisionLog | undefined;
 }
@@ -72,7 +74,8 @@ export class Scheduler {
   }
 
   async #fire(job: Job, now: Date): Promise<void> {
-    const bound = bindJob(this.deps.registry, job);
+    const connections = await loadConnections(this.deps.connections, job.connectionRefs);
+    const bound = bindJob(this.deps.registry, job, connections);
     if (bound.isErr()) {
       this.deps.logger.warn('Pausing job with invalid configuration', {
         jobId: job.id,

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   type BoundTrigger,
   type Clock,
+  type ConnectionRepository,
   type ConfigError,
   type ConfigIssue,
   type ConflictError,
@@ -38,9 +39,10 @@ import {
   newRunId,
   ok,
   successDeadlineAfter,
+  targetConnectionRefs,
 } from '@cloud-trigger/core';
 
-import { bindJob } from './config-validation.js';
+import { bindJob, bindTrigger, loadConnections } from './config-validation.js';
 import { DecisionRecorder } from './decisions.js';
 import { type Explanation, explain } from './explain.js';
 import { upcomingFireTimes } from './fire-plan.js';
@@ -50,6 +52,7 @@ import { RunCompletion } from './run-completion.js';
 
 export interface JobServiceDeps {
   readonly jobs: JobRepository;
+  readonly connections?: ConnectionRepository | undefined;
   readonly runs: RunRepository;
   readonly queue: RunQueue;
   readonly events: EventBus;
@@ -117,9 +120,9 @@ export class JobService {
     const decisions = this.deps.decisions
       ? await this.deps.decisions.listRecent(id, { before: before ?? now, limit: 20 })
       : [];
-    const bound = bindJob(this.deps.registry, job);
+    const bound = bindTrigger(this.deps.registry, job);
     const wouldFireAt = bound.isOk()
-      ? bound.value.trigger.nextFireAt({
+      ? bound.value.nextFireAt({
           after: now,
           lastFiredAt: job.schedule.lastFiredAt,
           fireCount: job.schedule.fireCount,
@@ -209,24 +212,30 @@ export class JobService {
     };
   }
 
-  validate(
+  async validate(
     raw: unknown,
     jobId: string = 'preview',
     count = 5,
-  ): Result<{ spec: JobSpec; preview: SchedulePreview }, ConfigError> {
-    return this.#validate(raw, jobId, count).map(({ spec, preview }) => ({ spec, preview }));
+  ): Promise<Result<{ spec: JobSpec; preview: SchedulePreview }, ConfigError>> {
+    return (await this.#validate(raw, jobId, count)).map(({ spec, preview }) => ({
+      spec,
+      preview,
+    }));
   }
 
-  #validate(raw: unknown, jobId: string, count: number) {
+  async #validate(raw: unknown, jobId: string, count: number) {
     const parsed = JobSpec.safeParse(raw);
     if (!parsed.success) {
       return err(configErrorFromZod(parsed.error));
     }
+    const connectionRefs = targetConnectionRefs(this.deps.registry, parsed.data.target);
+    const connections = await loadConnections(this.deps.connections, connectionRefs);
     const now = this.deps.clock.now();
 
-    return bindJob(this.deps.registry, parsed.data).map(({ trigger }) => ({
+    return bindJob(this.deps.registry, parsed.data, connections).map(({ trigger }) => ({
       spec: parsed.data,
       trigger,
+      connectionRefs,
       preview: {
         description: trigger.describe(),
         nextFireTimes: upcomingFireTimes(trigger, { after: now, fireCount: 0, jobId })
@@ -242,11 +251,11 @@ export class JobService {
     opts: { readonly workflowId?: WorkflowId | undefined } = {},
   ): Promise<Result<Job, ConfigError>> {
     const id = newJobId();
-    const validated = this.#validate(raw, id, 1);
+    const validated = await this.#validate(raw, id, 1);
     if (validated.isErr()) {
       return err(validated.error);
     }
-    const { spec, preview, trigger } = validated.value;
+    const { spec, preview, trigger, connectionRefs } = validated.value;
     const group = await this.#checkGroup(spec);
     if (group.isErr()) {
       return err(group.error);
@@ -263,6 +272,7 @@ export class JobService {
       nextFireAt: preview.nextFireTimes[0] ?? null,
       successDeadline: successDeadlineAfter(now, policy.sla.maxSinceLastSuccessMs),
       upstreamJobIds: upstream.value,
+      connectionRefs,
       eventSource: trigger.source ? spec.trigger.type : null,
       workflowId: opts.workflowId ?? null,
       now,
@@ -285,11 +295,11 @@ export class JobService {
     if (current.workflowId !== null && opts.asWorkflow !== true) {
       return err(ownedByWorkflow(current));
     }
-    const validated = this.#validate(raw, id, 1);
+    const validated = await this.#validate(raw, id, 1);
     if (validated.isErr()) {
       return err(validated.error);
     }
-    const { spec, trigger } = validated.value;
+    const { spec, trigger, connectionRefs } = validated.value;
     const group = await this.#checkGroup(spec);
     if (group.isErr()) {
       return err(group.error);
@@ -325,6 +335,7 @@ export class JobService {
         updatedAt: now,
         reschedule,
         upstreamJobIds: upstream.value,
+        connectionRefs,
         eventSource: trigger.source ? spec.trigger.type : null,
       },
       expectedVersion,
@@ -389,11 +400,11 @@ export class JobService {
     if (!job) {
       return err(notFound('Job', id));
     }
-    const bound = bindJob(this.deps.registry, job);
+    const bound = bindTrigger(this.deps.registry, job);
     if (bound.isErr()) {
       return err(bound.error);
     }
-    const nextFireAt = bound.value.trigger.nextFireAt({
+    const nextFireAt = bound.value.nextFireAt({
       after: this.deps.clock.now(),
       lastFiredAt: job.schedule.lastFiredAt,
       fireCount: job.schedule.fireCount,
@@ -477,11 +488,11 @@ export class JobService {
     if (p.to.getTime() <= p.from.getTime()) {
       return err(invalidBackfill('to', 'Must be after "from"'));
     }
-    const bound = bindJob(this.deps.registry, job);
+    const bound = bindTrigger(this.deps.registry, job);
     if (bound.isErr()) {
       return err(bound.error);
     }
-    const { trigger } = bound.value;
+    const trigger = bound.value;
     if (trigger.matches) {
       return err(invalidBackfill('trigger', 'Event-triggered jobs have no schedule to backfill'));
     }
@@ -547,11 +558,11 @@ export class JobService {
         cursor,
       });
       for (const job of page.items.filter((j) => j.pausedReason === null)) {
-        const bound = bindJob(this.deps.registry, job);
-        if (bound.isErr() || bound.value.trigger.matches) {
+        const bound = bindTrigger(this.deps.registry, job);
+        if (bound.isErr() || bound.value.matches) {
           continue;
         }
-        const { trigger } = bound.value;
+        const trigger = bound.value;
         const times = upcomingFireTimes(trigger, {
           after: p.from,
           fireCount: job.schedule.fireCount,

@@ -20,6 +20,7 @@ import { type ReactNode, useMemo } from 'react';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
+import { TargetPicker } from '../../components/TargetPicker';
 import { type JobCreateInput, type JobDto, type ProviderDto, client } from '../../lib/api';
 import { type ConfigIssueDto, configIssues, errorMessage } from '../../lib/errors';
 import { dateTime } from '../../lib/format';
@@ -83,6 +84,12 @@ export const configIssuesFor = (
       ? [{ path: path.slice(`${prefix}.config`.length).replace(/^\./, ''), message }]
       : [],
   );
+
+export const fieldError = (errors: Record<string, ReactNode>, path: string): string | undefined => {
+  const message = errors[path];
+
+  return typeof message === 'string' ? message : undefined;
+};
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -273,16 +280,15 @@ export function JobFormFields({ form }: { form: JobForm }) {
 
       <Section
         title="Where it goes"
-        hint="Reference secrets as {{secret:NAME}} instead of pasting them."
+        hint="Pick a saved connection to reuse its address and credentials, or reference secrets as {{secret:NAME}} instead of pasting them."
       >
-        <ProviderConfigForm
-          label="Target"
+        <TargetPicker
           providers={byKind.target}
-          type={values.target.type}
-          config={values.target.config}
+          value={values.target}
           configIssues={configIssuesFor(errors, 'target')}
-          onTypeChange={(type) => form.setFieldValue('target', { type, config: {} })}
-          onConfigChange={(config) => form.setFieldValue('target.config', config)}
+          connectionError={fieldError(errors, 'target.connection.key')}
+          endpointError={fieldError(errors, 'target.connection.endpoint')}
+          onChange={(target) => form.setFieldValue('target', target)}
         />
       </Section>
 

@@ -1,9 +1,10 @@
+import type { ConnectionInUseError } from '../ports/connections.js';
 import type { ConflictError } from '../ports/groups.js';
 import type { StaleClaimError } from '../ports/jobs.js';
 import type { StaleRunError } from '../ports/runs.js';
 import type { DomainError, NotFoundError, VersionConflictError } from '../shared/errors.js';
 
-export type StoredEntity = 'Job' | 'Group' | 'Workflow' | 'User';
+export type StoredEntity = 'Job' | 'Group' | 'Workflow' | 'User' | 'Connection';
 
 export const notFound = (entity: StoredEntity, id: string): NotFoundError => ({
   code: 'not_found',
@@ -15,9 +16,18 @@ export const versionConflict = (entity: StoredEntity, id: string): VersionConfli
   message: `${entity} ${id} was modified concurrently`,
 });
 
-export const nameTaken = (entity: 'group' | 'user', name: string): ConflictError => ({
+export const nameTaken = (
+  entity: 'group' | 'user' | 'connection',
+  name: string,
+): ConflictError => ({
   code: 'conflict',
   message: `A ${entity} named "${name}" already exists`,
+});
+
+export const connectionInUse = (key: string, jobIds: readonly string[]): ConnectionInUseError => ({
+  code: 'connection_in_use',
+  message: `Connection ${key} is used by ${jobIds.length} job${jobIds.length === 1 ? '' : 's'}`,
+  jobIds,
 });
 
 export const setupAlreadyCompleted = (): ConflictError => ({

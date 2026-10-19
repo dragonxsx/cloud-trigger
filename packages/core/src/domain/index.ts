@@ -2,6 +2,7 @@ export * from './ids.js';
 export * from './job.js';
 export * from './policy.js';
 export * from './provider-ref.js';
+export * from './connection.js';
 export * from './run.js';
 export * from './target-result.js';
 export * from './notification.js';

@@ -2,7 +2,7 @@ import {
   ResultAsync,
   type TargetResult,
   abortedResult,
-  defineTarget,
+  defineConnectedTarget,
   failedResult,
   okAsync,
   secret,
@@ -11,6 +11,7 @@ import {
 import { request } from 'undici';
 import { z } from 'zod';
 
+import { httpConnection, prepareRequest, urlIssues } from '../connections/http.js';
 import { dispatcherFor, errorCode, flattenHeaders, readLimited } from '../shared/http-client.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
 import { SigningConfig, signatureHeaders } from '../shared/signing.js';
@@ -27,12 +28,13 @@ export const HttpTargetConfig = z.object({
   method: z.enum(METHODS).default('POST'),
   url: z
     .string()
-    .regex(/^https?:\/\//, 'Must start with http:// or https://')
-    .describe('May contain {{secret:NAME}} placeholders.'),
+    .describe(
+      'Absolute http(s) URL, or a path such as /v1/charges?x=1 when the target uses a connection. May contain {{secret:NAME}} placeholders.',
+    ),
   headers: z
     .record(z.string(), z.string())
     .default({})
-    .describe('Values may contain {{secret:NAME}}.'),
+    .describe('Values may contain {{secret:NAME}}. Override connection headers of the same name.'),
   secretHeaders: z
     .record(z.string(), secret(z.string()))
     .default({})
@@ -54,12 +56,14 @@ export const HttpTargetConfig = z.object({
 });
 export type HttpTargetConfig = z.output<typeof HttpTargetConfig>;
 
-export const httpTarget = defineTarget({
+export const httpTarget = defineConnectedTarget({
   type: 'http',
   displayName: 'HTTP request',
   description: 'Calls a REST/HTTP endpoint and verifies the response.',
   configSchema: HttpTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: httpConnection,
+  check: (config, connection) => urlIssues(config.url, connection),
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
     const resolved = await ResultAsync.combine([
@@ -72,11 +76,21 @@ export const httpTarget = defineTarget({
       return failedResult('missing_secret', resolved.error.message, false, elapsed());
     }
     const [rawUrl, headers, secretHeaders, signingSecret] = resolved.value;
+    const prepared = await prepareRequest(rawUrl, config.query, connection, ctx.secrets, {
+      now: ctx.now,
+      signal,
+    });
+    if (prepared.isErr()) {
+      const { code, message, retryable } = prepared.error;
 
-    const url = new URL(rawUrl);
-    for (const [k, v] of Object.entries(config.query)) {
-      url.searchParams.set(k, v);
+      return failedResult(code, message, retryable, elapsed());
     }
+    const { url } = prepared.value;
+    const signing = config.signing
+      ? signingSecret === undefined
+        ? undefined
+        : { config: config.signing, secret: signingSecret }
+      : prepared.value.connection?.signing;
 
     // GET and HEAD send no body, so headers and the signature must describe an empty one.
     const body =
@@ -90,13 +104,14 @@ export const httpTarget = defineTarget({
       ...(ctx.traceparent !== undefined && { traceparent: ctx.traceparent }),
       ...payload.attributes,
       ...(payload.contentType && body !== undefined ? { 'content-type': payload.contentType } : {}),
+      ...prepared.value.connection?.headers,
       ...headers,
       ...secretHeaders,
     };
-    if (config.signing && signingSecret !== undefined) {
+    if (signing) {
       Object.assign(
         outgoing,
-        signatureHeaders(config.signing, { secret: signingSecret, body, now: ctx.now }),
+        signatureHeaders(signing.config, { secret: signing.secret, body, now: ctx.now }),
       );
     }
 

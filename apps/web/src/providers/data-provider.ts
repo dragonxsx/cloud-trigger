@@ -1,11 +1,15 @@
 import {
+  ConnectionListQuery,
   RunListQuery,
+  UpdateConnectionInput,
   UpdateGroupInput,
   UpdateJobInput,
   UpdateWorkflowInput,
   WorkflowRunListQuery,
 } from '@cloud-trigger/api-contract';
 import {
+  ConnectionKey,
+  ConnectionSpec,
   GroupId,
   GroupSpec,
   JobId,
@@ -92,6 +96,42 @@ const groups: ResourceAdapter = {
   },
 };
 
+const ConnectionFilters = ConnectionListQuery.pick({ search: true, type: true });
+
+const connections: ResourceAdapter = {
+  list: async ({ limit, offset, filters }) => {
+    const page = await client.connections.list({
+      limit,
+      offset,
+      ...ConnectionFilters.parse(filters),
+    });
+
+    return { data: page.items.map((c) => ({ ...c, id: c.key })), total: page.total };
+  },
+  getOne: async (key) => {
+    const connection = await client.connections.get({ key: ConnectionKey.parse(key) });
+
+    return { ...connection, id: connection.key };
+  },
+  create: async (variables) => {
+    const created = await client.connections.create(ConnectionSpec.parse(variables));
+
+    return { ...created, id: created.key };
+  },
+  update: async (key, variables) => {
+    const updated = await client.connections.update(
+      UpdateConnectionInput.parse({ ...z.record(z.string(), z.unknown()).parse(variables), key }),
+    );
+
+    return { ...updated, id: updated.key };
+  },
+  deleteOne: async (key) => {
+    await client.connections.delete({ key: ConnectionKey.parse(key) });
+
+    return { id: key };
+  },
+};
+
 const runs: ResourceAdapter = {
   list: async ({ limit, offset, filters }) => {
     const parsed = RunFilters.parse(filters);
@@ -153,6 +193,7 @@ const RESOURCES: Readonly<Record<string, ResourceAdapter>> = {
   jobs,
   runs,
   groups,
+  connections,
   workflows,
   'workflow-runs': workflowRuns,
 };

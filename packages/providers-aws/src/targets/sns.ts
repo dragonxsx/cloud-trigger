@@ -2,41 +2,38 @@ import { type MessageAttributeValue, PublishCommand, SNSClient } from '@aws-sdk/
 import {
   ResultAsync,
   type TargetResult,
-  defineTarget,
+  defineInlineConnectedTarget,
   deliveryKey,
   failedResult,
 } from '@cloud-trigger/core';
 import { LiquidTemplate } from '@cloud-trigger/providers-builtin';
 import { z } from 'zod';
 
+import { awsConnection } from '../connection.js';
 import {
   AwsConnection,
-  PAIRED_CREDENTIALS,
   awsFailure,
   clientCache,
   dedupId,
-  hasPairedCredentials,
   messageBody,
   renderOptional,
   resolveClientConfig,
   runAttributes,
 } from '../shared.js';
 
-export const SnsTargetConfig = z
-  .object({
-    topicArn: z
-      .string()
-      .regex(/^arn:aws[\w-]*:sns:/, 'Must be an SNS topic ARN')
-      .describe('Topic ARN. FIFO topics end in .fifo.'),
-    ...AwsConnection,
-    subject: z.string().max(100).optional(),
-    messageGroupId: LiquidTemplate.optional().describe('FIFO only; defaults to the job id.'),
-    deduplicationId: LiquidTemplate.optional().describe(
-      'FIFO only; defaults to the run idempotency key.',
-    ),
-    attributes: z.record(z.string(), z.string()).default({}),
-  })
-  .refine(hasPairedCredentials, PAIRED_CREDENTIALS);
+export const SnsTargetConfig = z.object({
+  topicArn: z
+    .string()
+    .regex(/^arn:aws[\w-]*:sns:/, 'Must be an SNS topic ARN')
+    .describe('Topic ARN. FIFO topics end in .fifo.'),
+  ...AwsConnection,
+  subject: z.string().max(100).optional(),
+  messageGroupId: LiquidTemplate.optional().describe('FIFO only; defaults to the job id.'),
+  deduplicationId: LiquidTemplate.optional().describe(
+    'FIFO only; defaults to the run idempotency key.',
+  ),
+  attributes: z.record(z.string(), z.string()).default({}),
+});
 
 const snsClient = clientCache((config) => new SNSClient(config));
 
@@ -45,17 +42,18 @@ const stringAttributes = (values: Record<string, string>): Record<string, Messag
     Object.entries(values).map(([key, value]) => [key, { DataType: 'String', StringValue: value }]),
   );
 
-export const snsTarget = defineTarget({
+export const snsTarget = defineInlineConnectedTarget({
   type: 'sns',
   displayName: 'Amazon SNS publish',
   description: 'Publishes the payload to an SNS topic.',
   configSchema: SnsTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: awsConnection,
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
     const fifo = config.topicArn.endsWith('.fifo');
     const prepared = await ResultAsync.combine([
-      resolveClientConfig(config, ctx.secrets),
+      resolveClientConfig(connection.config, ctx.secrets),
       renderOptional(config.messageGroupId, ctx),
       renderOptional(config.deduplicationId, ctx),
     ] as const);

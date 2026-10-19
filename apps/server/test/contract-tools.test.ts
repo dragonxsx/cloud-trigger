@@ -13,6 +13,7 @@ describe('contract tools', () => {
       'explain_job',
       'get_job',
       'get_run',
+      'list_connections',
       'list_jobs',
       'list_runs',
       'list_workflows',
@@ -21,6 +22,10 @@ describe('contract tools', () => {
       'run_job',
     ]);
     expect(named('list_jobs')).toMatchObject({ path: ['jobs', 'list'], scope: 'read' });
+    expect(named('list_connections')).toMatchObject({
+      path: ['connections', 'list'],
+      scope: 'read',
+    });
     expect(named('approve_workflow_run')).toMatchObject({
       path: ['workflowRuns', 'approve'],
       scope: 'write',

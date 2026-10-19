@@ -1,11 +1,15 @@
 import {
+  type Connected,
+  type ConnectionTestResult,
   Result,
   ResultAsync,
   err,
   ok,
   type TargetResult,
+  abortable,
   abortedResult,
-  defineTarget,
+  defineConnectedTarget,
+  defineConnection,
   failedResult,
   okAsync,
   secret,
@@ -73,8 +77,38 @@ const ProtoSource = z.discriminatedUnion('type', [
     .meta({ title: 'Server reflection', description: 'Fetch the schema from the server.' }),
 ]);
 
+const GrpcTls = z.object({
+  enabled: z.boolean().default(false),
+  ca: z.string().optional().describe('PEM CA bundle; system roots when empty.'),
+  cert: z.string().optional().describe('PEM client certificate for mutual TLS.'),
+  key: secret(z.string()).optional().describe('PEM client key for mutual TLS.'),
+});
+type GrpcTls = z.output<typeof GrpcTls>;
+
+const PLAINTEXT: GrpcTls = { enabled: false };
+
+const Address = z.string().min(1).describe('host:port of the gRPC server, without a scheme.');
+const RequestMetadata = z
+  .record(z.string(), z.string())
+  .default({})
+  .describe('Request metadata. Values may contain {{secret:NAME}}.');
+const SecretMetadata = z
+  .record(z.string(), secret(z.string()))
+  .default({})
+  .describe('Credential metadata such as authorization. Shown as *** and kept on edit.');
+
+export const GrpcConnectionConfig = z.object({
+  address: Address,
+  tls: GrpcTls.prefault({}),
+  metadata: RequestMetadata,
+  secretMetadata: SecretMetadata,
+});
+export type GrpcConnectionConfig = z.output<typeof GrpcConnectionConfig>;
+
 export const GrpcTargetConfig = z.object({
-  address: z.string().min(1).describe('host:port of the gRPC server, without a scheme.'),
+  address: Address.optional().describe(
+    'host:port of the gRPC server, without a scheme. Comes from the connection when one is used.',
+  ),
   service: z.string().min(1).describe('Fully qualified service name, e.g. acme.billing.Invoices.'),
   method: z.string().min(1),
   protoSource: ProtoSource.prefault({ type: 'reflection' }),
@@ -82,22 +116,13 @@ export const GrpcTargetConfig = z.object({
     .string()
     .optional()
     .describe('JSON request message. Overrides the input payload body when set.'),
-  tls: z
-    .object({
-      enabled: z.boolean().default(false),
-      ca: z.string().optional().describe('PEM CA bundle; system roots when empty.'),
-      cert: z.string().optional().describe('PEM client certificate for mutual TLS.'),
-      key: secret(z.string()).optional().describe('PEM client key for mutual TLS.'),
-    })
-    .prefault({}),
-  metadata: z
-    .record(z.string(), z.string())
-    .default({})
-    .describe('Request metadata. Values may contain {{secret:NAME}}.'),
-  secretMetadata: z
-    .record(z.string(), secret(z.string()))
-    .default({})
-    .describe('Credential metadata such as authorization. Shown as *** and kept on edit.'),
+  tls: GrpcTls.optional().describe(
+    'Plaintext when unset. Comes from the connection when one is used.',
+  ),
+  metadata: RequestMetadata.describe(
+    'Request metadata, merged over the connection metadata. Values may contain {{secret:NAME}}.',
+  ),
+  secretMetadata: SecretMetadata,
   deadlineMs: z.int().positive().optional().describe('Per-call gRPC deadline.'),
   maxResponseBytes: z
     .int()
@@ -116,10 +141,7 @@ export const GrpcTargetConfig = z.object({
 });
 export type GrpcTargetConfig = z.output<typeof GrpcTargetConfig>;
 
-const channelCredentials = (
-  tls: GrpcTargetConfig['tls'],
-  key: string | undefined,
-): ChannelCredentials =>
+const channelCredentials = (tls: GrpcTls, key: string | undefined): ChannelCredentials =>
   tls.enabled
     ? grpcCredentials.createSsl(
         tls.ca === undefined ? null : Buffer.from(tls.ca),
@@ -190,18 +212,81 @@ const truncate = (text: string, limit: number) => {
   };
 };
 
-export const grpcTarget = defineTarget({
+const waitForReady = (client: Client, deadline: Date) =>
+  new Promise<void>((resolve, reject) => {
+    client.waitForReady(deadline, (error) => (error ? reject(error) : resolve()));
+  });
+
+export const grpcConnection = defineConnection({
+  type: 'grpc',
+  displayName: 'gRPC server',
+  description: 'Address, TLS and metadata shared by gRPC targets.',
+  configSchema: GrpcConnectionConfig,
+  async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
+    const key =
+      config.tls.key === undefined ? okAsync(undefined) : interpolate(secrets, config.tls.key);
+    const resolvedKey = await key;
+    if (resolvedKey.isErr()) {
+      return err({ message: resolvedKey.error.message });
+    }
+    const client = new Client(config.address, channelCredentials(config.tls, resolvedKey.value));
+    try {
+      await abortable(signal, waitForReady(client, new Date(Date.now() + 10_000)));
+
+      return ok({ message: `Connected to ${config.address}` });
+    } catch (error: unknown) {
+      return err({ message: toError(error).message });
+    } finally {
+      client.close();
+    }
+  },
+});
+
+const channelOf = (
+  config: GrpcTargetConfig,
+  connection: Connected<GrpcConnectionConfig> | undefined,
+) =>
+  connection
+    ? {
+        address: connection.config.address,
+        tls: connection.config.tls,
+        metadata: { ...connection.config.metadata, ...config.metadata },
+        secretMetadata: { ...connection.config.secretMetadata, ...config.secretMetadata },
+      }
+    : {
+        address: config.address ?? '',
+        tls: config.tls ?? PLAINTEXT,
+        metadata: config.metadata,
+        secretMetadata: config.secretMetadata,
+      };
+
+export const grpcTarget = defineConnectedTarget({
   type: 'grpc',
   displayName: 'gRPC call',
   description: 'Calls a unary gRPC method with a JSON request message.',
   configSchema: GrpcTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: grpcConnection,
+  check: (config, connection) => {
+    if (!connection) {
+      return config.address === undefined ? [{ path: 'address', message: 'Required' }] : [];
+    }
+
+    return (['address', 'tls'] as const).flatMap((field) =>
+      config[field] === undefined
+        ? []
+        : [{ path: field, message: `Set on the "${connection.key}" connection instead` }],
+    );
+  },
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
+    const channel = channelOf(config, connection);
     const resolved = await ResultAsync.combine([
-      interpolateValues(ctx.secrets, config.metadata),
-      interpolateValues(ctx.secrets, config.secretMetadata),
-      config.tls.key === undefined ? okAsync(undefined) : interpolate(ctx.secrets, config.tls.key),
+      interpolateValues(ctx.secrets, channel.metadata),
+      interpolateValues(ctx.secrets, channel.secretMetadata),
+      channel.tls.key === undefined
+        ? okAsync(undefined)
+        : interpolate(ctx.secrets, channel.tls.key),
     ] as const);
     if (resolved.isErr()) {
       return failedResult('missing_secret', resolved.error.message, false, elapsed());
@@ -213,7 +298,7 @@ export const grpcTarget = defineTarget({
       return failedResult('invalid_request', parsedRequest.error, false, elapsed());
     }
 
-    const credentials = channelCredentials(config.tls, tlsKey);
+    const credentials = channelCredentials(channel.tls, tlsKey);
     const deadline =
       config.deadlineMs === undefined ? undefined : new Date(Date.now() + config.deadlineMs);
     const metadata = new Metadata();
@@ -226,13 +311,13 @@ export const grpcTarget = defineTarget({
       metadata.set('traceparent', ctx.traceparent);
     }
 
-    const client = new Client(config.address, credentials);
+    const client = new Client(channel.address, credentials);
     try {
       const definition =
         config.protoSource.type === 'inline'
           ? inlineDefinition(config.protoSource.proto)
           : await reflectedDefinition(
-              config.address,
+              channel.address,
               credentials,
               config.service,
               deadline ?? new Date(Date.now() + 30_000),

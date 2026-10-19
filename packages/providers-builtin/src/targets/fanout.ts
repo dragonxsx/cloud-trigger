@@ -1,11 +1,15 @@
 import {
+  type ConfigIssue,
+  type ConnectionCatalog,
   type FanoutChild,
   type JsonSchema,
   type ProviderRegistry,
+  TargetConnectionRef,
   type TargetProvider,
   type TargetResult,
   abortedResult,
   defineTarget,
+  resolveTarget,
 } from '@cloud-trigger/core';
 import pLimit from 'p-limit';
 import { z } from 'zod';
@@ -16,6 +20,7 @@ const MAX_CHILDREN = 20;
 const ChildRef = z.object({
   type: z.string().min(1),
   name: z.string().max(100).optional(),
+  connection: TargetConnectionRef.optional(),
   config: z.unknown(),
 });
 
@@ -67,54 +72,43 @@ const childSchemas = (registry: ProviderRegistry): JsonSchema[] =>
       properties: {
         type: { type: 'string', const: provider.type, default: provider.type },
         name: { type: 'string', maxLength: 100, description: 'Label shown in run details.' },
+        ...(provider.connectionType !== undefined && {
+          connection: z.toJSONSchema(TargetConnectionRef, { io: 'input' }),
+        }),
         config: provider.jsonSchema(),
       },
       required: ['type', 'config'],
     }));
 
-export function createFanoutTarget(registry: ProviderRegistry): TargetProvider {
-  const configSchema = FanoutShape.superRefine((config, ctx) => {
-    config.targets.forEach((child, index) => {
-      if (child.type === FANOUT_TYPE) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['targets', index, 'type'],
-          message: 'Fan-out targets cannot be nested',
-        });
+function childIssues(
+  registry: ProviderRegistry,
+  config: FanoutConfig,
+  connections: ConnectionCatalog,
+): ConfigIssue[] {
+  return config.targets.flatMap((child, index) => {
+    if (child.type === FANOUT_TYPE) {
+      return [{ path: `targets.${index}.type`, message: 'Fan-out targets cannot be nested' }];
+    }
+    const resolved = resolveTarget(registry, child, connections);
 
-        return;
-      }
-      const bound = registry
-        .get('target', child.type)
-        .andThen((provider) => provider.bind(child.config));
-      if (bound.isOk()) {
-        return;
-      }
-      if (bound.error.code === 'unknown_provider') {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['targets', index, 'type'],
-          message: bound.error.message,
-        });
-
-        return;
-      }
-      for (const issue of bound.error.issues) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['targets', index, 'config', ...(issue.path ? issue.path.split('.') : [])],
+    return resolved.isOk()
+      ? []
+      : resolved.error.issues.map((issue) => ({
+          path: `targets.${index}.${issue.path}`,
           message: issue.message,
-        });
-      }
-    });
+        }));
   });
+}
 
+export function createFanoutTarget(registry: ProviderRegistry): TargetProvider {
   const provider = defineTarget({
     type: FANOUT_TYPE,
     displayName: 'Fan-out',
     description: 'Sends the payload to several targets in parallel and records each result.',
-    configSchema,
-    async execute(config, { payload, ctx, signal }) {
+    configSchema: FanoutShape,
+    check: (config, { connections }) => childIssues(registry, config, connections),
+    connectionRefs: (config) => config.targets.flatMap((child) => child.connection ?? []),
+    async execute(config, { payload, ctx, signal, connections }) {
       const started = performance.now();
       const limit = pLimit(config.parallelism);
       const children = await Promise.all(
@@ -126,7 +120,7 @@ export function createFanoutTarget(registry: ProviderRegistry): TargetProvider {
               type: child.type,
               ...(child.name !== undefined && { name: child.name }),
             };
-            const bound = registry.get('target', child.type).andThen((p) => p.bind(child.config));
+            const bound = resolveTarget(registry, child, connections);
             if (bound.isErr()) {
               return {
                 ...base,
@@ -135,7 +129,7 @@ export function createFanoutTarget(registry: ProviderRegistry): TargetProvider {
                 error: { code: 'invalid_config', message: bound.error.message, retryable: false },
               };
             }
-            const result = await bound.value
+            const result = await bound.value.target
               .execute({
                 payload,
                 ctx: {

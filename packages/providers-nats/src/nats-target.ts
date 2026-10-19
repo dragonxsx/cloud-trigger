@@ -1,15 +1,19 @@
 import { createHash } from 'node:crypto';
 
 import {
+  type ConnectionTestResult,
   ResultAsync,
   type SecretResolver,
   type TargetResult,
   abortable,
   assertNever,
   abortedResult,
-  defineTarget,
+  defineConnection,
+  defineInlineConnectedTarget,
   deliveryKey,
+  err,
   failedResult,
+  ok,
   okAsync,
   secret,
   toError,
@@ -57,11 +61,11 @@ export const NatsConnectionFields = {
     .prefault({}),
   timeoutMs: z.int().positive().default(10_000).describe('Connect and publish-ack timeout.'),
 };
-const NatsConnectionSchema = z.object(NatsConnectionFields);
-export type NatsConnectionConfig = z.output<typeof NatsConnectionSchema>;
+export const NatsConnectionSettings = z.object(NatsConnectionFields);
+export type NatsConnectionConfig = z.output<typeof NatsConnectionSettings>;
 
 export const NatsTargetConfig = z.object({
-  ...NatsConnectionFields,
+  ...NatsConnectionSettings.partial().shape,
   subject: z
     .string()
     .regex(/^[^\s*>]+$/, 'A concrete subject without wildcards')
@@ -186,15 +190,44 @@ export function natsFailure(error: unknown, signal: AbortSignal, durationMs: num
   return failedResult(`nats_${name}`, failure.message, !isPermanent(failure), durationMs);
 }
 
-export const natsTarget = defineTarget({
+export const natsConnection = defineConnection({
+  type: 'nats',
+  displayName: 'NATS servers',
+  description: 'Servers, credentials and TLS shared by NATS targets.',
+  configSchema: NatsConnectionSettings,
+  async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
+    const resolved = await resolveConnection(config, secrets);
+    if (resolved.isErr()) {
+      return err({ message: resolved.error.message });
+    }
+    try {
+      const nc = await abortable(
+        signal,
+        connect({ ...resolved.value.options, maxReconnectAttempts: 0, waitOnFirstConnect: false }),
+      );
+      try {
+        await abortable(signal, nc.flush());
+
+        return ok({ message: `Connected to ${nc.getServer()}` });
+      } finally {
+        await nc.close();
+      }
+    } catch (error: unknown) {
+      return err({ message: toError(error).message });
+    }
+  },
+});
+
+export const natsTarget = defineInlineConnectedTarget({
   type: 'nats',
   displayName: 'NATS message',
   description: 'Publishes the payload to a NATS subject, optionally through JetStream.',
   configSchema: NatsTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: natsConnection,
+  async execute(config, { payload, ctx, signal, connection: settings }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
-    const connection = await resolveConnection(config, ctx.secrets);
+    const connection = await resolveConnection(settings.config, ctx.secrets);
     if (connection.isErr()) {
       return failedResult('missing_secret', connection.error.message, false, elapsed());
     }
@@ -223,7 +256,7 @@ export const natsTarget = defineTarget({
         jetstream(nc).publish(config.subject, body, {
           headers,
           msgID: deliveryKey(ctx),
-          timeout: config.timeoutMs,
+          timeout: settings.config.timeoutMs,
         }),
       );
 

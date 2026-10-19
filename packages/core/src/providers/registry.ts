@@ -9,6 +9,8 @@ export interface ProviderInfo {
   readonly displayName: string;
   readonly description: string;
   readonly configSchema: JsonSchema;
+  readonly connectionType?: string | undefined;
+  readonly connectionFields?: string[] | undefined;
 }
 
 export interface ProviderPlugin {
@@ -23,6 +25,7 @@ export class ProviderRegistry {
     input: new Map(),
     target: new Map(),
     notifier: new Map(),
+    connection: new Map(),
   };
 
   register(...providers: readonly AnyProvider[]): this {
@@ -39,6 +42,9 @@ export class ProviderRegistry {
           break;
         case 'notifier':
           this.#add(this.#providers.notifier, provider);
+          break;
+        case 'connection':
+          this.#add(this.#providers.connection, provider);
           break;
       }
     }
@@ -96,6 +102,8 @@ export class ProviderRegistry {
         displayName: p.displayName,
         description: p.description,
         configSchema: p.jsonSchema(),
+        ...(p.connectionType !== undefined && { connectionType: p.connectionType }),
+        ...(p.connectionFields !== undefined && { connectionFields: [...p.connectionFields] }),
       })),
     );
   }

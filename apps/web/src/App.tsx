@@ -27,6 +27,7 @@ import {
   IconHierarchy2,
   IconKey,
   IconLayoutDashboard,
+  IconPlugConnected,
   IconMoon,
   IconSettings,
   IconShieldLock,
@@ -57,6 +58,10 @@ const GroupList = lazyNamed(() => import('./pages/groups/list'), 'GroupList');
 const GroupCreate = lazyNamed(() => import('./pages/groups/create'), 'GroupCreate');
 const GroupEdit = lazyNamed(() => import('./pages/groups/edit'), 'GroupEdit');
 const GroupShow = lazyNamed(() => import('./pages/groups/show'), 'GroupShow');
+const ConnectionList = lazyNamed(() => import('./pages/connections/list'), 'ConnectionList');
+const ConnectionCreate = lazyNamed(() => import('./pages/connections/create'), 'ConnectionCreate');
+const ConnectionEdit = lazyNamed(() => import('./pages/connections/edit'), 'ConnectionEdit');
+const ConnectionShow = lazyNamed(() => import('./pages/connections/show'), 'ConnectionShow');
 const WorkflowList = lazyNamed(() => import('./pages/workflows/list'), 'WorkflowList');
 const WorkflowCreate = lazyNamed(() => import('./pages/workflows/create'), 'WorkflowCreate');
 const WorkflowEdit = lazyNamed(() => import('./pages/workflows/edit'), 'WorkflowEdit');
@@ -220,6 +225,18 @@ export function App() {
                   meta: { label: 'Groups', icon: <IconFolders size={18} />, canDelete: true },
                 },
                 {
+                  name: 'connections',
+                  list: '/connections',
+                  create: '/connections/create',
+                  edit: '/connections/edit/:id',
+                  show: '/connections/show/:id',
+                  meta: {
+                    label: 'Connections',
+                    icon: <IconPlugConnected size={18} />,
+                    canDelete: true,
+                  },
+                },
+                {
                   name: 'settings',
                   meta: { label: 'Settings', icon: <IconSettings size={18} /> },
                 },
@@ -303,6 +320,12 @@ export function App() {
                       <Route path="create" element={<GroupCreate />} />
                       <Route path="edit/:id" element={<GroupEdit />} />
                       <Route path="show/:id" element={<GroupShow />} />
+                    </Route>
+                    <Route path="/connections">
+                      <Route index element={<ConnectionList />} />
+                      <Route path="create" element={<ConnectionCreate />} />
+                      <Route path="edit/:id" element={<ConnectionEdit />} />
+                      <Route path="show/:id" element={<ConnectionShow />} />
                     </Route>
                     <Route path="/settings">
                       <Route path="auth" element={<AuthSettingsPage />} />

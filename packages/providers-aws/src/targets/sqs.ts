@@ -2,43 +2,40 @@ import { type MessageAttributeValue, SQSClient, SendMessageCommand } from '@aws-
 import {
   ResultAsync,
   type TargetResult,
-  defineTarget,
+  defineInlineConnectedTarget,
   deliveryKey,
   failedResult,
 } from '@cloud-trigger/core';
 import { LiquidTemplate } from '@cloud-trigger/providers-builtin';
 import { z } from 'zod';
 
+import { awsConnection } from '../connection.js';
 import {
   AwsConnection,
-  PAIRED_CREDENTIALS,
   awsFailure,
   clientCache,
   dedupId,
-  hasPairedCredentials,
   messageBody,
   renderOptional,
   resolveClientConfig,
   runAttributes,
 } from '../shared.js';
 
-export const SqsTargetConfig = z
-  .object({
-    queueUrl: z.url().describe('Queue URL. FIFO queues end in .fifo.'),
-    ...AwsConnection,
-    messageGroupId: LiquidTemplate.optional().describe(
-      'FIFO only. Liquid template; defaults to the job id.',
-    ),
-    deduplicationId: LiquidTemplate.optional().describe(
-      'FIFO only. Liquid template; defaults to the run idempotency key.',
-    ),
-    delaySeconds: z.int().min(0).max(900).optional(),
-    attributes: z
-      .record(z.string(), z.string())
-      .default({})
-      .describe('String message attributes, merged over the payload attributes.'),
-  })
-  .refine(hasPairedCredentials, PAIRED_CREDENTIALS);
+export const SqsTargetConfig = z.object({
+  queueUrl: z.url().describe('Queue URL. FIFO queues end in .fifo.'),
+  ...AwsConnection,
+  messageGroupId: LiquidTemplate.optional().describe(
+    'FIFO only. Liquid template; defaults to the job id.',
+  ),
+  deduplicationId: LiquidTemplate.optional().describe(
+    'FIFO only. Liquid template; defaults to the run idempotency key.',
+  ),
+  delaySeconds: z.int().min(0).max(900).optional(),
+  attributes: z
+    .record(z.string(), z.string())
+    .default({})
+    .describe('String message attributes, merged over the payload attributes.'),
+});
 export type SqsTargetConfig = z.output<typeof SqsTargetConfig>;
 
 const sqsClient = clientCache((config) => new SQSClient(config));
@@ -50,17 +47,18 @@ export const stringAttributes = (
     Object.entries(values).map(([key, value]) => [key, { DataType: 'String', StringValue: value }]),
   );
 
-export const sqsTarget = defineTarget({
+export const sqsTarget = defineInlineConnectedTarget({
   type: 'sqs',
   displayName: 'Amazon SQS message',
   description: 'Sends the payload to an SQS queue. FIFO queues are deduplicated per run.',
   configSchema: SqsTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: awsConnection,
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
     const fifo = config.queueUrl.endsWith('.fifo');
     const prepared = await ResultAsync.combine([
-      resolveClientConfig(config, ctx.secrets),
+      resolveClientConfig(connection.config, ctx.secrets),
       renderOptional(config.messageGroupId, ctx),
       renderOptional(config.deduplicationId, ctx),
     ] as const);

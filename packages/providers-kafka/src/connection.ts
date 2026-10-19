@@ -1,17 +1,22 @@
 import { createHash } from 'node:crypto';
 
 import {
+  type ConnectionTestResult,
   ResultAsync,
   type SecretResolver,
   type TargetResult,
+  abortable,
   abortedResult,
+  defineConnection,
+  err,
   failedResult,
+  ok,
   okAsync,
   secret,
   toError,
 } from '@cloud-trigger/core';
 import { interpolate } from '@cloud-trigger/providers-builtin';
-import { GenericError, type ProducerOptions, findErrorBy } from '@platformatic/kafka';
+import { Admin, GenericError, type ProducerOptions, findErrorBy } from '@platformatic/kafka';
 import { z } from 'zod';
 
 export const KafkaConnection = {
@@ -39,8 +44,31 @@ export const KafkaConnection = {
   timeoutMs: z.int().positive().default(10_000).describe('Connect and request timeout.'),
 };
 
-const KafkaConnectionSchema = z.object(KafkaConnection);
-export type KafkaConnection = z.output<typeof KafkaConnectionSchema>;
+export const KafkaConnectionConfig = z.object(KafkaConnection);
+export type KafkaConnection = z.output<typeof KafkaConnectionConfig>;
+
+export const kafkaConnection = defineConnection({
+  type: 'kafka',
+  displayName: 'Kafka cluster',
+  description: 'Brokers, SASL and TLS shared by Kafka targets.',
+  configSchema: KafkaConnectionConfig,
+  async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
+    const options = await resolveConnection(config, secrets);
+    if (options.isErr()) {
+      return err({ message: options.error.message });
+    }
+    const admin = new Admin(options.value);
+    try {
+      const topics = await abortable(signal, admin.listTopics());
+
+      return ok({ message: `Connected; ${topics.length} topics visible` });
+    } catch (error: unknown) {
+      return err({ message: toError(error).message });
+    } finally {
+      await admin.close().catch(() => undefined);
+    }
+  },
+});
 
 export type KafkaClientOptions = Pick<
   ProducerOptions<string, string, string, string>,

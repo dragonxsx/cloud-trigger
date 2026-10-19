@@ -3,6 +3,10 @@ import {
   ApiKeyId,
   AuthMethods,
   ConfigIssue,
+  Connection,
+  ConnectionKey,
+  ConnectionSpec,
+  EndpointKey,
   Password,
   Scope,
   User,
@@ -144,6 +148,38 @@ export const ProviderInfo = z.object({
   displayName: z.string(),
   description: z.string(),
   configSchema: z.record(z.string(), z.unknown()),
+  connectionType: z
+    .string()
+    .optional()
+    .describe('For targets: the connection type they can run over.'),
+  connectionFields: z
+    .array(z.string())
+    .optional()
+    .describe('For targets: fields the connection owns. Omit them when target.connection is set.'),
+});
+
+export const ConnectionKeyParam = z.object({ key: ConnectionKey });
+export const ConnectionPage = page(Connection);
+export const ConnectionListQuery = PageQuery.extend({
+  search: z.string().optional(),
+  type: z.string().optional(),
+});
+export const UpdateConnectionInput = ConnectionSpec.extend({ expectedVersion: z.int().min(1) });
+export const ConnectionTestInput = z.object({
+  type: z.string().min(1),
+  config: z.unknown(),
+  key: ConnectionKey.optional().describe(
+    'Saved connection whose stored secrets replace *** values in config.',
+  ),
+});
+export const ConnectionTestOutcome = z.object({ ok: z.boolean(), message: z.string() });
+export const ConnectionUsage = z.object({
+  id: JobId,
+  name: z.string(),
+  enabled: z.boolean(),
+  endpoints: z
+    .array(EndpointKey)
+    .describe('Endpoints the job uses; empty for the base connection.'),
 });
 
 export const AnalyticsRange = z.object({

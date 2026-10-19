@@ -22,6 +22,13 @@
       "when": 1792343245016,
       "tag": "0002_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792402693441,
+      "tag": "0003_busy_nemesis",
+      "breakpoints": true
     }
   ]
 }

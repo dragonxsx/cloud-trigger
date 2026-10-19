@@ -3,7 +3,7 @@ import {
   ResultAsync,
   type TargetResult,
   abortedResult,
-  defineTarget,
+  defineConnectedTarget,
   err,
   failedResult,
   ok,
@@ -15,6 +15,7 @@ import { parse } from 'graphql';
 import { request } from 'undici';
 import { z } from 'zod';
 
+import { httpConnection, prepareRequest, urlIssues } from '../connections/http.js';
 import { templateScope } from '../inputs/template.js';
 import { dispatcherFor, errorCode, flattenHeaders, readLimited } from '../shared/http-client.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
@@ -42,8 +43,10 @@ const syntaxError = (query: string): string | undefined =>
 export const GraphqlTargetConfig = z.object({
   url: z
     .string()
-    .regex(/^https?:\/\//, 'Must start with http:// or https://')
-    .describe('May contain {{secret:NAME}} placeholders.'),
+    .default('')
+    .describe(
+      'Absolute http(s) URL, or a path such as /graphql (empty for the base URL) when the target uses a connection. May contain {{secret:NAME}} placeholders.',
+    ),
   query: z
     .string()
     .min(1)
@@ -112,12 +115,14 @@ const toVariables = (text: string | undefined): Result<Record<string, unknown>, 
   });
 };
 
-export const graphqlTarget = defineTarget({
+export const graphqlTarget = defineConnectedTarget({
   type: 'graphql',
   displayName: 'GraphQL operation',
   description: 'POSTs a GraphQL query or mutation and checks the response for errors.',
   configSchema: GraphqlTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: httpConnection,
+  check: (config, connection) => urlIssues(config.url, connection),
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
     const resolved = await ResultAsync.combine([
@@ -129,7 +134,22 @@ export const graphqlTarget = defineTarget({
     if (resolved.isErr()) {
       return failedResult('missing_secret', resolved.error.message, false, elapsed());
     }
-    const [url, headers, secretHeaders, signingSecret] = resolved.value;
+    const [rawUrl, headers, secretHeaders, signingSecret] = resolved.value;
+    const prepared = await prepareRequest(rawUrl, {}, connection, ctx.secrets, {
+      now: ctx.now,
+      signal,
+    });
+    if (prepared.isErr()) {
+      const { code, message, retryable } = prepared.error;
+
+      return failedResult(code, message, retryable, elapsed());
+    }
+    const { url } = prepared.value;
+    const signing = config.signing
+      ? signingSecret === undefined
+        ? undefined
+        : { config: config.signing, secret: signingSecret }
+      : prepared.value.connection?.signing;
 
     const rendered = await ResultAsync.fromPromise(
       config.variables === undefined
@@ -161,14 +181,15 @@ export const graphqlTarget = defineTarget({
       'x-cloud-trigger-run-id': ctx.runId,
       'x-cloud-trigger-attempt': String(ctx.attempt),
       ...(ctx.traceparent !== undefined && { traceparent: ctx.traceparent }),
+      ...prepared.value.connection?.headers,
       ...headers,
       ...secretHeaders,
       'content-type': 'application/json',
     };
-    if (config.signing && signingSecret !== undefined) {
+    if (signing) {
       Object.assign(
         outgoing,
-        signatureHeaders(config.signing, { secret: signingSecret, body, now: ctx.now }),
+        signatureHeaders(signing.config, { secret: signing.secret, body, now: ctx.now }),
       );
     }
 

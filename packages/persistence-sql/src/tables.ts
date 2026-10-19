@@ -68,6 +68,32 @@ export const TABLES = {
     primaryKey: ['job_id', 'upstream_id'],
     indexes: [{ name: 'job_upstreams_upstream', on: ['upstream_id'] }],
   },
+  job_connections: {
+    columns: { job_id: req('text'), connection_key: req('text'), endpoint_key: req('text') },
+    indexes: [
+      {
+        name: 'job_connections_job',
+        on: ['job_id', 'connection_key', 'endpoint_key'],
+        unique: true,
+      },
+      { name: 'job_connections_connection', on: ['connection_key', 'endpoint_key'] },
+    ],
+  },
+  connections: {
+    columns: {
+      id,
+      key: req('text'),
+      name: req('text'),
+      type: req('text'),
+      version: req('int'),
+      created_at: req('ms'),
+      doc: req('doc'),
+    },
+    indexes: [
+      { name: 'connections_key', on: ['key'], unique: true },
+      { name: 'connections_type', on: ['type', 'key'] },
+    ],
+  },
   runs: {
     columns: {
       id,

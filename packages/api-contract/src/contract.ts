@@ -1,4 +1,6 @@
 import {
+  Connection,
+  ConnectionSpec,
   Group,
   GroupSpec,
   Job,
@@ -43,6 +45,13 @@ import {
   BackfillInput,
   BackfillResult,
   ConfigIssue,
+  ConnectionKeyParam,
+  ConnectionListQuery,
+  ConnectionPage,
+  ConnectionTestInput,
+  ConnectionTestOutcome,
+  ConnectionUsage,
+  UpdateConnectionInput,
   ExplainQuery,
   ExportQuery,
   ImportInput,
@@ -147,7 +156,7 @@ const jobs = {
       writeTool({
         name: 'create_job',
         description:
-          'Create a job. Provider configs follow the JSON Schemas from GET /api/providers; reference secrets as {{secret:NAME}}.',
+          'Create a job. Provider configs follow the JSON Schemas from GET /api/providers; reference secrets as {{secret:NAME}}. To call a saved API, set target.connection to { key, endpoint } from list_connections; target.config then only overrides the endpoint fields.',
       }),
     )
     .input(JobSpec)
@@ -295,6 +304,60 @@ const groups = {
       summary: 'Delete a group; CONFLICT while it still has jobs',
     })
     .input(GroupIdParam)
+    .output(z.object({ deleted: z.boolean() })),
+};
+
+const connections = {
+  test: write
+    .route({
+      method: 'POST',
+      path: '/connections/test',
+      summary: 'Check that a connection is reachable and its credentials work',
+    })
+    .input(ConnectionTestInput)
+    .output(ConnectionTestOutcome),
+  list: base
+    .route({ method: 'GET', path: '/connections', summary: 'List connections by key' })
+    .meta(
+      readTool({
+        name: 'list_connections',
+        description:
+          'List saved connections (base URL, credentials and named endpoints) that job targets can reference by key.',
+      }),
+    )
+    .input(ConnectionListQuery)
+    .output(ConnectionPage),
+  create: write
+    .route({ method: 'POST', path: '/connections', successStatus: 201 })
+    .input(ConnectionSpec)
+    .output(Connection),
+  get: base
+    .route({ method: 'GET', path: '/connections/{key}' })
+    .input(ConnectionKeyParam)
+    .output(Connection),
+  usages: base
+    .route({
+      method: 'GET',
+      path: '/connections/{key}/jobs',
+      summary: 'Jobs that use a connection',
+    })
+    .input(ConnectionKeyParam)
+    .output(z.array(ConnectionUsage)),
+  update: write
+    .route({
+      method: 'PUT',
+      path: '/connections/{key}',
+      summary: 'Update a connection; INVALID_CONFIG when a job using it would break',
+    })
+    .input(UpdateConnectionInput)
+    .output(Connection),
+  delete: write
+    .route({
+      method: 'DELETE',
+      path: '/connections/{key}',
+      summary: 'Delete a connection; CONFLICT while jobs use it',
+    })
+    .input(ConnectionKeyParam)
     .output(z.object({ deleted: z.boolean() })),
 };
 
@@ -529,6 +592,7 @@ export const contract = oc.prefix('/api').router({
   jobs: oc.tag('Jobs').router(jobs),
   runs: oc.tag('Runs').router(runs),
   groups: oc.tag('Groups').router(groups),
+  connections: oc.tag('Connections').router(connections),
   workflows: oc.tag('Workflows').router(workflows),
   workflowRuns: oc.tag('Workflows').router(workflowRuns),
   calendar: oc.tag('Calendar').router(calendar),

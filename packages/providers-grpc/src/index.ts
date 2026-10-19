@@ -1,13 +1,18 @@
 import type { ProviderPlugin } from '@cloud-trigger/core';
 
-import { grpcTarget } from './grpc-target.js';
+import { grpcConnection, grpcTarget } from './grpc-target.js';
 
-export { GrpcTargetConfig, grpcTarget } from './grpc-target.js';
+export {
+  GrpcConnectionConfig,
+  GrpcTargetConfig,
+  grpcConnection,
+  grpcTarget,
+} from './grpc-target.js';
 
 export const grpcProviders: ProviderPlugin = {
   name: '@cloud-trigger/providers-grpc',
   register: (registry) => {
-    registry.register(grpcTarget);
+    registry.register(grpcConnection, grpcTarget);
   },
 };
 

@@ -1,3 +1,4 @@
+import { mapSecretResolver } from '@cloud-trigger/core';
 import { contractRunContext, describeTargetContract } from '@cloud-trigger/testing';
 import {
   Server,
@@ -13,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { parseInlineProto } from './definitions.js';
-import { grpcTarget } from './grpc-target.js';
+import { grpcConnection, grpcTarget } from './grpc-target.js';
 
 const PROTO = `
 syntax = "proto3";
@@ -128,6 +129,30 @@ describeTargetContract(grpcTarget, {
   lastTraceparent: () => Promise.resolve(seenTraceparents.at(-1)),
 });
 
+const overConnection = (method: string, extra: Record<string, unknown> = {}) => ({
+  service: 'test.v1.Echo',
+  method,
+  protoSource: { type: 'inline', proto: PROTO },
+  ...extra,
+});
+
+describeTargetContract(grpcTarget, {
+  setup: startServer,
+  teardown: stopServer,
+  connection: () => ({
+    key: 'echo',
+    version: 1,
+    config: { address, metadata: { authorization: 'Bearer base' } },
+  }),
+  succeeding: () => overConnection('Say', { secretMetadata: { 'x-token': 't' } }),
+  slow: () => overConnection('Slow'),
+  retryableFailure: () => overConnection('Unavailable'),
+  terminalFailure: () => overConnection('Invalid'),
+  invalid: overConnection('Say', { address: '127.0.0.1:1' }),
+  secretPaths: [['secretMetadata', 'x-token']],
+  lastTraceparent: () => Promise.resolve(seenTraceparents.at(-1)),
+});
+
 const call = async (config: Record<string, unknown>, body = '{"text":"hi","count":"42"}') => {
   const bound = grpcTarget.bind(config);
   if (bound.isErr()) {
@@ -156,6 +181,18 @@ describe('grpc target', () => {
       auth: 'Bearer s3cr3t',
       count: '42',
     });
+  });
+
+  it('tests a connection by waiting for the channel', async () => {
+    const ctx = {
+      secrets: mapSecretResolver({}),
+      signal: AbortSignal.timeout(15_000),
+      now: new Date(),
+    };
+    const ready = await grpcConnection.bind({ address })._unsafeUnwrap().test(ctx);
+    expect(ready._unsafeUnwrap().message).toMatch(/Connected/);
+    const missing = grpcTarget.bind({ service: 'test.v1.Echo', method: 'Say' });
+    expect(missing.isErr() && missing.error.issues.map((i) => i.path)).toEqual(['address']);
   });
 
   it('loads the schema through server reflection', async () => {

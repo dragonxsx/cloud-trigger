@@ -1,5 +1,10 @@
 import { type Contract, contract } from '@cloud-trigger/api-contract';
-import { type ConfigError, type DomainError, assertNever } from '@cloud-trigger/core';
+import {
+  type ConfigError,
+  type ConnectionInUseError,
+  type DomainError,
+  assertNever,
+} from '@cloud-trigger/core';
 import type { InferContractRouterErrorMap } from '@orpc/contract';
 import { implement } from '@orpc/nest';
 import type { ORPCErrorConstructorMap } from '@orpc/server';
@@ -47,6 +52,7 @@ export type Api = ReturnType<typeof createApi>;
 
 type KnownError =
   | ConfigError
+  | ConnectionInUseError
   | DomainError<
       | 'not_found'
       | 'version_conflict'
@@ -86,6 +92,7 @@ export function toApiError(errors: ErrorFactories, error: KnownError): Error {
     case 'not_finished':
     case 'not_cancellable':
     case 'conflict':
+    case 'connection_in_use':
       return errors.CONFLICT({ message: error.message });
     default:
       return assertNever(error);

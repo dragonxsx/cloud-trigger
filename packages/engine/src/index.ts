@@ -1,5 +1,6 @@
 export * from './chain-listener.js';
 export * from './config-validation.js';
+export * from './connection-service.js';
 export * from './consumer-supervisor.js';
 export * from './event-ingestor.js';
 export * from './explain.js';

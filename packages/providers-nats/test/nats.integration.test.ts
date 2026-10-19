@@ -12,7 +12,7 @@ import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainer
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { natsSource } from '../src/nats-source.js';
-import { closeConnections, natsTarget } from '../src/nats-target.js';
+import { closeConnections, natsConnection, natsTarget } from '../src/nats-target.js';
 
 const NATS_IMAGE = process.env['NATS_IMAGE'] ?? 'nats:2.12-alpine';
 
@@ -142,6 +142,39 @@ describe('nats target', () => {
     const second = await publish(config, 'manual:job:abc');
     expect(first.metadata).toMatchObject({ stream: 'CONTRACT', duplicate: false });
     expect(second.metadata).toMatchObject({ stream: 'CONTRACT', duplicate: true });
+  });
+
+  it('publishes over a saved connection and tests it', async () => {
+    const binding = { key: 'bus', version: 1, config: { servers: [env().server] } };
+    const bound = natsTarget
+      .bind({ subject: 'plain.events', mode: 'core' }, { connection: binding })
+      ._unsafeUnwrap();
+    const result = await bound.execute({
+      payload: { body: 'via connection', contentType: 'text/plain', attributes: {} },
+      ctx: contractRunContext(),
+      signal: AbortSignal.timeout(5_000),
+    });
+    expect(result.outcome).toBe('success');
+    await env().observer.flush();
+    expect(env().coreMessages).toContain('via connection');
+    const doubled = natsTarget.bind(
+      { subject: 'plain.events', servers: [env().server] },
+      { connection: binding },
+    );
+    expect(doubled.isErr() && doubled.error.issues.map((i) => i.path)).toEqual(['servers']);
+
+    const ctx = {
+      secrets: mapSecretResolver({}),
+      signal: AbortSignal.timeout(5_000),
+      now: new Date(),
+    };
+    const tested = await natsConnection.bind(binding.config)._unsafeUnwrap().test(ctx);
+    expect(tested._unsafeUnwrap().message).toMatch(/Connected/);
+    const refused = await natsConnection
+      .bind({ servers: [env().refused], timeoutMs: 1_000 })
+      ._unsafeUnwrap()
+      .test(ctx);
+    expect(refused.isErr()).toBe(true);
   });
 
   it('publishes core messages without a stream', async () => {

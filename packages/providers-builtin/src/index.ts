@@ -1,5 +1,6 @@
 import type { ProviderPlugin } from '@cloud-trigger/core';
 
+import { httpConnection } from './connections/http.js';
 import { eventInput } from './inputs/event.js';
 import { staticInput } from './inputs/static.js';
 import { templateInput } from './inputs/template.js';
@@ -18,6 +19,7 @@ import { webhookTrigger } from './triggers/webhook.js';
 
 export {
   afterJobTrigger,
+  httpConnection,
   eventInput,
   webhookTrigger,
   cronTrigger,
@@ -41,6 +43,13 @@ export {
 } from './notifiers/email.js';
 export { expandHashTokens } from './triggers/hash-expression.js';
 export { templateScope } from './inputs/template.js';
+export {
+  HttpAuth,
+  HttpConnectionConfig,
+  clearHttpTokenCache,
+  isRelativeUrl,
+  joinUrl,
+} from './connections/http.js';
 export { FANOUT_TYPE, type FanoutConfig, createFanoutTarget } from './targets/fanout.js';
 export { interpolate, interpolateValues } from './shared/interpolate.js';
 export { LiquidTemplate, renderWithSecrets } from './shared/liquid.js';
@@ -63,6 +72,7 @@ export const builtinProviders: ProviderPlugin = {
   name: '@cloud-trigger/providers-builtin',
   register: (registry) => {
     registry.register(
+      httpConnection,
       cronTrigger,
       intervalTrigger,
       onceTrigger,

@@ -104,9 +104,10 @@ export class SqlJobRepository implements JobRepository {
     );
   }
 
-  async #writeEdges(job: Pick<Job, 'id' | 'tags' | 'upstreamJobIds'>): Promise<void> {
-    await this.session.run(sql`DELETE FROM job_tags WHERE job_id = ${job.id}`);
-    await this.session.run(sql`DELETE FROM job_upstreams WHERE job_id = ${job.id}`);
+  async #writeEdges(
+    job: Pick<Job, 'id' | 'tags' | 'upstreamJobIds' | 'connectionRefs'>,
+  ): Promise<void> {
+    await this.#deleteEdges(job.id);
     for (const tag of new Set(job.tags)) {
       await this.session.run(insertInto(this.session, 'job_tags', { job_id: job.id, tag }));
     }
@@ -115,6 +116,28 @@ export class SqlJobRepository implements JobRepository {
         insertInto(this.session, 'job_upstreams', { job_id: job.id, upstream_id: upstream }),
       );
     }
+    const edges = new Map(
+      job.connectionRefs.map((ref) => {
+        const endpoint = ref.endpoint ?? '';
+
+        return [`${ref.key}/${endpoint}`, { key: ref.key, endpoint }];
+      }),
+    );
+    for (const edge of edges.values()) {
+      await this.session.run(
+        insertInto(this.session, 'job_connections', {
+          job_id: job.id,
+          connection_key: edge.key,
+          endpoint_key: edge.endpoint,
+        }),
+      );
+    }
+  }
+
+  async #deleteEdges(id: JobId): Promise<void> {
+    await this.session.run(sql`DELETE FROM job_tags WHERE job_id = ${id}`);
+    await this.session.run(sql`DELETE FROM job_upstreams WHERE job_id = ${id}`);
+    await this.session.run(sql`DELETE FROM job_connections WHERE job_id = ${id}`);
   }
 
   async insert(job: Job): Promise<void> {
@@ -179,6 +202,9 @@ export class SqlJobRepository implements JobRepository {
           upstreamJobIds: update.upstreamJobIds
             ? [...update.upstreamJobIds]
             : current.upstreamJobIds,
+          connectionRefs: update.connectionRefs
+            ? [...update.connectionRefs]
+            : current.connectionRefs,
           eventSource: update.eventSource === undefined ? current.eventSource : update.eventSource,
           version: expectedVersion + 1,
           updatedAt: update.updatedAt,
@@ -215,8 +241,7 @@ export class SqlJobRepository implements JobRepository {
 
   async delete(id: JobId): Promise<boolean> {
     const deleted = await this.session.transaction(async () => {
-      await this.session.run(sql`DELETE FROM job_tags WHERE job_id = ${id}`);
-      await this.session.run(sql`DELETE FROM job_upstreams WHERE job_id = ${id}`);
+      await this.#deleteEdges(id);
 
       return this.session.run(sql`DELETE FROM jobs WHERE id = ${id}`);
     });
@@ -260,6 +285,17 @@ export class SqlJobRepository implements JobRepository {
     const rows = await this.session.all(sql`
       SELECT jobs.* FROM jobs JOIN job_upstreams u ON u.job_id = jobs.id
       WHERE u.upstream_id = ${jobId} ORDER BY jobs.id`);
+
+    return rows.map(jobFromRow);
+  }
+
+  async findByConnection(key: string, endpoint?: string): Promise<readonly Job[]> {
+    const rows = await this.session.all(sql`
+      SELECT * FROM jobs WHERE EXISTS (
+        SELECT 1 FROM job_connections c
+        WHERE c.job_id = jobs.id AND c.connection_key = ${key}
+        ${endpoint === undefined ? sql`` : sql`AND c.endpoint_key = ${endpoint}`}
+      ) ORDER BY id`);
 
     return rows.map(jobFromRow);
   }

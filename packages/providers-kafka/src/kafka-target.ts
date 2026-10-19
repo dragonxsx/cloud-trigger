@@ -2,7 +2,7 @@ import {
   ResultAsync,
   type TargetResult,
   abortable,
-  defineTarget,
+  defineInlineConnectedTarget,
   failedResult,
   okAsync,
   toError,
@@ -13,14 +13,15 @@ import { z } from 'zod';
 
 import {
   type KafkaClientOptions,
-  KafkaConnection,
+  KafkaConnectionConfig,
+  kafkaConnection,
   kafkaFailure,
   optionsKey,
   resolveConnection,
 } from './connection.js';
 
 export const KafkaTargetConfig = z.object({
-  ...KafkaConnection,
+  ...KafkaConnectionConfig.partial().shape,
   topic: z
     .string()
     .regex(/^[\w.-]{1,249}$/, 'Letters, digits, ".", "_" and "-" only')
@@ -57,16 +58,17 @@ export const closeProducers = async (): Promise<void> => {
   await Promise.allSettled(open.map((producer) => producer.close(true)));
 };
 
-export const kafkaTarget = defineTarget({
+export const kafkaTarget = defineInlineConnectedTarget({
   type: 'kafka',
   displayName: 'Kafka message',
   description: 'Produces the payload to a Kafka topic with acks=all.',
   configSchema: KafkaTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: kafkaConnection,
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
     const prepared = await ResultAsync.combine([
-      resolveConnection(config, ctx.secrets),
+      resolveConnection(connection.config, ctx.secrets),
       config.key === undefined
         ? okAsync(undefined)
         : ResultAsync.fromPromise(

@@ -15,7 +15,7 @@ import {
 } from '@cloud-trigger/core';
 import { z } from 'zod';
 
-import { bindJob } from './config-validation.js';
+import { bindTrigger } from './config-validation.js';
 import type { JobService } from './job-service.js';
 
 export const ExportedJob = JobSpec.omit({ groupId: true }).extend({
@@ -163,8 +163,8 @@ export class JobTransfer {
   }
 
   async #upstreamNames(job: Job): Promise<Record<string, string>> {
-    const bound = bindJob(this.deps.registry, job);
-    const refs = bound.isOk() ? (bound.value.trigger.upstream?.() ?? []) : [];
+    const bound = bindTrigger(this.deps.registry, job);
+    const refs = bound.isOk() ? (bound.value.upstream?.() ?? []) : [];
     const names: Record<string, string> = {};
     for (const ref of refs) {
       const parent = job.upstreamJobIds.find((id) => id === ref.jobId);
@@ -190,7 +190,7 @@ export class JobTransfer {
     const plans = await this.#plan(docs, issues);
     const existing = await allJobs(this.deps.jobs, {});
     const ids = new Map<string, JobId>(existing.map((job) => [job.name, job.id]));
-    this.#validate(plans, ids, opts.restore, issues);
+    await this.#validate(plans, ids, opts.restore, issues);
     if (issues.length > 0) {
       return { ...empty, issues };
     }
@@ -305,12 +305,12 @@ export class JobTransfer {
     return plans;
   }
 
-  #validate(
+  async #validate(
     plans: readonly Plan[],
     existing: ReadonlyMap<string, JobId>,
     restore: (next: JobSpec, previous: Job) => JobSpec,
     issues: ImportIssue[],
-  ): void {
+  ): Promise<void> {
     const inFile = new Set(plans.map((p) => p.doc.name));
     for (const plan of cyclic(plans, existing)) {
       issues.push({
@@ -338,7 +338,7 @@ export class JobTransfer {
       const ids = new Map([...existing, ...placeholders]);
       const candidate = withUpstream(specOf(doc, plan.groupId), ids, doc);
       const spec = plan.previous ? restore(candidate, plan.previous) : candidate;
-      const validated = this.deps.service.validate(spec);
+      const validated = await this.deps.service.validate(spec);
       if (validated.isErr()) {
         for (const issue of validated.error.issues) {
           issues.push({ document: index, name: doc.name, ...issue });

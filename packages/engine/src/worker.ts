@@ -1,8 +1,7 @@
 import {
   assertNever,
-  type BoundInput,
-  type BoundTarget,
   type Clock,
+  type ConnectionRepository,
   type DecisionLog,
   EngineErrorCode,
   type GroupId,
@@ -39,7 +38,7 @@ import {
   toError,
 } from '@cloud-trigger/core';
 
-import { bindJob } from './config-validation.js';
+import { type BoundJob, bindJob, loadConnections } from './config-validation.js';
 import { DecisionRecorder } from './decisions.js';
 import type { RunLifecycleListener } from './lifecycle.js';
 import { PollingLoop } from './loop.js';
@@ -56,6 +55,7 @@ export interface WorkerOptions {
 
 export interface WorkerDeps {
   readonly jobs: JobRepository;
+  readonly connections?: ConnectionRepository | undefined;
   readonly runs: RunRepository;
   readonly queue: RunQueue;
   readonly registry: ProviderRegistry;
@@ -229,7 +229,8 @@ export class Worker {
       claimed = throttled;
     }
 
-    const bound = bindJob(this.deps.registry, job);
+    const connections = await loadConnections(this.deps.connections, job.connectionRefs);
+    const bound = bindJob(this.deps.registry, job, connections);
     if (bound.isErr()) {
       const message = bound.error.issues.map((i) => `${i.path}: ${i.message}`).join('; ');
       await this.#finish(
@@ -241,7 +242,7 @@ export class Worker {
 
       return;
     }
-    await this.#execute(claimed, job, resolved.policy, bound.value.input, bound.value.target);
+    await this.#execute(claimed, job, resolved.policy, bound.value);
   }
 
   async #throttle(
@@ -331,8 +332,7 @@ export class Worker {
     claimed: RunningRun,
     job: Job,
     policy: JobPolicy,
-    input: BoundInput,
-    target: BoundTarget,
+    { input, target, connection }: BoundJob,
   ): Promise<void> {
     let current = claimed;
     let leaseLost = false;
@@ -419,6 +419,9 @@ export class Worker {
       await beating;
     }
     span.end({ outcome: result.outcome, errorCode: result.error?.code });
+    if (connection) {
+      result = { ...result, metadata: { ...result.metadata, connection } };
+    }
 
     if (leaseLost) {
       this.deps.logger.warn('Discarding result: lease lost (run was reclaimed)', {

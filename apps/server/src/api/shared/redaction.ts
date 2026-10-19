@@ -1,4 +1,6 @@
 import {
+  type Connection,
+  type ConnectionSpec,
   type Job,
   type JobSpec,
   type Group,
@@ -166,6 +168,50 @@ export class JobRedactor {
               config: keep('trigger', next.schedule, previous.schedule ?? undefined),
             },
     };
+  }
+
+  redactConnection(connection: Connection): Connection {
+    return {
+      ...connection,
+      config: this.#redactRef('connection', connection),
+      endpoints: connection.endpoints.map((endpoint) => ({
+        ...endpoint,
+        target: { ...endpoint.target, config: this.#redactRef('target', endpoint.target) },
+      })),
+    };
+  }
+
+  restoreConnection(next: ConnectionSpec, previous: Connection): ConnectionSpec {
+    return {
+      ...next,
+      config: this.restoreConnectionConfig(next, previous),
+      endpoints: next.endpoints.map((endpoint) => {
+        const before = previous.endpoints.find((candidate) => candidate.key === endpoint.key);
+
+        return before && before.target.type === endpoint.target.type
+          ? {
+              ...endpoint,
+              target: {
+                ...endpoint.target,
+                config: restoreRedacted(
+                  this.#schema('target', endpoint.target.type),
+                  endpoint.target.config,
+                  before.target.config,
+                ),
+              },
+            }
+          : endpoint;
+      }),
+    };
+  }
+
+  restoreConnectionConfig(
+    next: Pick<ConnectionSpec, 'type' | 'config'>,
+    previous: Pick<Connection, 'type' | 'config'>,
+  ): unknown {
+    return next.type === previous.type
+      ? restoreRedacted(this.#schema('connection', next.type), next.config, previous.config)
+      : next.config;
   }
 
   redactDelivery(delivery: NotificationDelivery): NotificationDelivery {

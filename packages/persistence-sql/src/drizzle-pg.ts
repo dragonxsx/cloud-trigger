@@ -84,6 +84,8 @@ const pgTableOf = (name: TableName) => {
 export const jobs = pgTableOf('jobs');
 export const jobTags = pgTableOf('job_tags');
 export const jobUpstreams = pgTableOf('job_upstreams');
+export const jobConnections = pgTableOf('job_connections');
+export const connections = pgTableOf('connections');
 export const runs = pgTableOf('runs');
 export const fireKeys = pgTableOf('fire_keys');
 export const groups = pgTableOf('groups');

@@ -1,5 +1,6 @@
 export * from './analytics.js';
 export * from './common.js';
+export * from './connections.js';
 export * from './events.js';
 export * from './jobs.js';
 export * from './runs.js';

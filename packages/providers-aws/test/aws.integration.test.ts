@@ -18,6 +18,7 @@ import {
 import { LocalstackContainer, type StartedLocalStackContainer } from '@testcontainers/localstack';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { awsConnection } from '../src/connection.js';
 import { sqsSource } from '../src/sources/sqs.js';
 import { eventBridgeTarget } from '../src/targets/eventbridge.js';
 import { snsTarget } from '../src/targets/sns.js';
@@ -191,6 +192,51 @@ describe('sqs target', () => {
     expect(messages[0]?.Body).toBe('hello');
     expect(messages[0]?.Attributes?.['MessageGroupId']).toBe(ctx.jobId);
     expect(messages[0]?.MessageAttributes?.['kind']?.StringValue).toBe('tick');
+  });
+
+  it('sends over a saved connection', async () => {
+    const bound = sqsTarget
+      .bind(
+        { queueUrl: env().queueUrl },
+        { connection: { key: 'aws', version: 1, config: connection() } },
+      )
+      ._unsafeUnwrap();
+    const result = await bound.execute({
+      payload: { body: 'via connection', contentType: 'text/plain', attributes: {} },
+      ctx: contractRunContext(),
+      signal: AbortSignal.timeout(5_000),
+    });
+    expect(result.outcome).toBe('success');
+    expect((await receiveAll(env().queueUrl)).some((m) => m.Body === 'via connection')).toBe(true);
+  });
+
+  it('takes region and credentials from a connection, never from both', () => {
+    const binding = { key: 'aws', version: 1, config: { region: 'eu-west-1' } };
+    expect(sqsTarget.bind({ queueUrl: 'http://localhost/q' }, { connection: binding }).isOk()).toBe(
+      true,
+    );
+    const doubled = sqsTarget.bind(
+      { queueUrl: 'http://localhost/q', region: 'us-east-1' },
+      { connection: binding },
+    );
+    expect(doubled.isErr() && doubled.error.issues).toEqual([
+      { path: 'region', message: 'Set on the "aws" connection instead' },
+    ]);
+  });
+
+  it('tests a connection with STS', async () => {
+    const ctx = {
+      secrets: mapSecretResolver({}),
+      signal: AbortSignal.timeout(10_000),
+      now: new Date(),
+    };
+    const ok = await awsConnection.bind(connection())._unsafeUnwrap().test(ctx);
+    expect(ok._unsafeUnwrap().message).toMatch(/Authenticated as arn:aws/);
+    const down = await awsConnection
+      .bind({ ...connection(), endpoint: env().unavailable.url })
+      ._unsafeUnwrap()
+      .test(ctx);
+    expect(down.isErr()).toBe(true);
   });
 
   it('rejects half-configured static credentials', () => {

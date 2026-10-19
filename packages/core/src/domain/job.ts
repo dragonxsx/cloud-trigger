@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { TargetConnectionRef, TargetRef } from './connection.js';
 import { GroupId, JobId, WorkflowId } from './ids.js';
 import { JobPolicyPatch } from './policy.js';
 import { ProviderRef } from './provider-ref.js';
@@ -44,7 +45,7 @@ export const JobSpec = z.object({
   enabled: z.boolean().default(true),
   input: ProviderRef.default({ type: 'static', config: { format: 'none' } }),
   trigger: TriggerRef,
-  target: ProviderRef,
+  target: TargetRef,
   notifications: z.array(NotificationRule).default([]),
   policy: JobPolicyPatch.prefault({}),
 });
@@ -63,6 +64,10 @@ export const Job = JobSpec.extend({
     .nullable()
     .default(null)
     .describe('Trigger type of a long-lived event source (sqs, kafka, nats) the consumers poll.'),
+  connectionRefs: z
+    .array(TargetConnectionRef)
+    .default([])
+    .describe('Connections and endpoints the target uses, derived from the spec on save.'),
   slaBreachedAt: z
     .date()
     .nullable()
@@ -102,6 +107,7 @@ export function createJob(params: {
   nextFireAt: Date | null;
   successDeadline?: Date | null;
   upstreamJobIds?: readonly JobId[];
+  connectionRefs?: readonly TargetConnectionRef[];
   eventSource?: string | null;
   workflowId?: WorkflowId | null;
   now: Date;
@@ -111,6 +117,7 @@ export function createJob(params: {
     id: params.id,
     pausedReason: null,
     upstreamJobIds: [...(params.upstreamJobIds ?? [])],
+    connectionRefs: [...(params.connectionRefs ?? [])],
     eventSource: params.eventSource ?? null,
     workflowId: params.workflowId ?? null,
     slaBreachedAt: null,

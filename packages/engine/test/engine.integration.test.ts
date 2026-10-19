@@ -408,8 +408,8 @@ describe('engine', () => {
     expect((await runsOf(job.id))[0]?.status).toBe('cancelled');
   });
 
-  it('validates configuration and previews the schedule', () => {
-    const invalid = service().validate({
+  it('validates configuration and previews the schedule', async () => {
+    const invalid = await service().validate({
       name: 'x',
       trigger: { type: 'cron', config: { expression: 'bad' } },
       target: { type: 'nope', config: {} },
@@ -418,7 +418,7 @@ describe('engine', () => {
       'trigger.config.expression',
       'target.type',
     ]);
-    const valid = service().validate({
+    const valid = await service().validate({
       name: 'x',
       trigger: { type: 'cron', config: { expression: '*/5 * * * *' } },
       target: { type: 'http', config: { url: base } },

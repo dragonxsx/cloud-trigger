@@ -14,5 +14,21 @@ export default defineConfig({
       ),
     ),
   },
-  build: { outDir: 'dist', sourcemap: true, chunkSizeWarningLimit: 600 },
+  build: {
+    outDir: 'dist',
+    sourcemap: true,
+    chunkSizeWarningLimit: 600,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react-vendor',
+              test: /node_modules[\\/](react|react-dom|react-router|scheduler|@tanstack)[\\/]/,
+            },
+          ],
+        },
+      },
+    },
+  },
 });

@@ -19,9 +19,10 @@ import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
+import { TargetPicker } from '../../components/TargetPicker';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
 import { type ProviderDto, type WorkflowSpecDto, client } from '../../lib/api';
-import { configIssuesFor } from '../jobs/form';
+import { configIssuesFor, fieldError } from '../jobs/form';
 
 type FormNode = WorkflowSpecDto['nodes'][number];
 type FormEdge = { from: string; to: string; on: 'succeeded' | 'failed' | 'any' };
@@ -185,16 +186,13 @@ function NodeEditor({
         )}
         {node.kind === 'inline' && (
           <SimpleGrid cols={2} spacing="md" breakpoints={[{ maxWidth: 'md', cols: 1 }]}>
-            <ProviderConfigForm
-              label="Target"
+            <TargetPicker
               providers={providers.target}
-              type={node.job.target.type}
-              config={node.job.target.config}
+              value={node.job.target}
               configIssues={configIssuesFor(form.errors, `${path}.job.target`)}
-              onTypeChange={(type) =>
-                form.setFieldValue(`${path}.job.target`, { type, config: {} })
-              }
-              onConfigChange={(config) => form.setFieldValue(`${path}.job.target.config`, config)}
+              connectionError={fieldError(form.errors, `${path}.job.target.connection.key`)}
+              endpointError={fieldError(form.errors, `${path}.job.target.connection.endpoint`)}
+              onChange={(target) => form.setFieldValue(`${path}.job.target`, target)}
             />
             <ProviderConfigForm
               label="Payload"

@@ -1,3 +1,4 @@
+import type { ConnectionSpec } from '../domain/connection.js';
 import type { GroupSpec } from '../domain/group.js';
 import { JobSpec } from '../domain/job.js';
 import type { NotificationDelivery } from '../domain/notification.js';
@@ -33,6 +34,11 @@ export const userEditableJobFields = (
 
 export const groupUpdateFields = (
   update: { readonly spec: GroupSpec; readonly updatedAt: Date },
+  expectedVersion: number,
+) => ({ ...update.spec, updatedAt: update.updatedAt, version: expectedVersion + 1 });
+
+export const connectionUpdateFields = (
+  update: { readonly spec: ConnectionSpec; readonly updatedAt: Date },
   expectedVersion: number,
 ) => ({ ...update.spec, updatedAt: update.updatedAt, version: expectedVersion + 1 });
 

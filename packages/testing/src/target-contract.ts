@@ -1,4 +1,6 @@
 import {
+  type BindEnv,
+  type ConnectionBinding,
   type Payload,
   REDACTED,
   type RunContext,
@@ -24,6 +26,7 @@ export interface TargetContractHarness {
   readonly payload?: Payload;
   readonly lastTraceparent?: () => Promise<string | undefined>;
   readonly timeoutMs?: number;
+  readonly connection?: () => ConnectionBinding;
 }
 
 export const CONTRACT_TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
@@ -58,9 +61,11 @@ export function describeTargetContract(provider: TargetProvider, harness: Target
     attributes: {},
   };
   const timeoutMs = harness.timeoutMs ?? 10_000;
+  const env = (): BindEnv => (harness.connection ? { connection: harness.connection() } : {});
+  const label = harness.connection ? ' over a connection' : '';
 
   const execute = (config: unknown, signal: AbortSignal): Promise<TargetResult> => {
-    const bound = provider.bind(config);
+    const bound = provider.bind(config, env());
     if (bound.isErr()) {
       throw new Error(`Harness config does not bind: ${bound.error.message}`);
     }
@@ -68,7 +73,7 @@ export function describeTargetContract(provider: TargetProvider, harness: Target
     return bound.value.execute({ payload, ctx: contractRunContext(harness.secrets), signal });
   };
 
-  describe(`${provider.type}: target contract`, { timeout: timeoutMs + 5_000 }, () => {
+  describe(`${provider.type}: target contract${label}`, { timeout: timeoutMs + 5_000 }, () => {
     beforeAll(async () => {
       await harness.setup?.();
     }, 180_000);
@@ -121,7 +126,7 @@ export function describeTargetContract(provider: TargetProvider, harness: Target
 
     it('redacts every secret field', () => {
       const config = harness.withSecrets?.() ?? harness.succeeding();
-      expect(provider.bind(config).isOk()).toBe(true);
+      expect(provider.bind(config, env()).isOk()).toBe(true);
       const redacted = redactBySchema(provider.jsonSchema(), config);
       for (const path of harness.secretPaths) {
         expect({ path: path.join('.'), value: valueAt(redacted, path) }).toEqual({
@@ -132,7 +137,7 @@ export function describeTargetContract(provider: TargetProvider, harness: Target
     });
 
     it('rejects an invalid config with field issues', () => {
-      const bound = provider.bind(harness.invalid);
+      const bound = provider.bind(harness.invalid, env());
       expect(bound.isErr()).toBe(true);
       expect(bound.isErr() && bound.error.issues.length).toBeGreaterThan(0);
     });

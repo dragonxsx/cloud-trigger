@@ -33,3 +33,7 @@ export const newUserId = (): UserId => UserId.parse(uuidv7());
 export const ApiKeyId = z.uuidv7().brand<'ApiKeyId'>();
 export type ApiKeyId = z.output<typeof ApiKeyId>;
 export const newApiKeyId = (): ApiKeyId => ApiKeyId.parse(uuidv7());
+
+export const ConnectionId = z.uuidv7().brand<'ConnectionId'>();
+export type ConnectionId = z.output<typeof ConnectionId>;
+export const newConnectionId = (): ConnectionId => ConnectionId.parse(uuidv7());

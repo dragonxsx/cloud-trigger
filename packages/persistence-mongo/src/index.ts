@@ -17,6 +17,7 @@ import {
   MongoUserRepository,
   type UserDocument,
 } from './auth.js';
+import { type ConnectionDocument, MongoConnectionRepository } from './connections.js';
 import { type DecisionDocument, MongoDecisionLog } from './decisions.js';
 import type { JobDocument, RunDocument } from './documents.js';
 import { type EventSourceLeaseDocument, MongoEventSourceLeases } from './event-sources.js';
@@ -74,6 +75,7 @@ async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
     { key: { tags: 1 }, name: 'tags' },
     { key: { groupId: 1 }, name: 'group' },
     { key: { upstreamJobIds: 1 }, name: 'upstream_jobs' },
+    { key: { 'connectionRefs.key': 1, 'connectionRefs.endpoint': 1 }, name: 'connections' },
     {
       key: { eventSource: 1 },
       name: 'event_sourced',
@@ -141,6 +143,7 @@ export async function createMongoPersistence(
   const runs = db.collection<RunDocument>('runs');
   const metrics = analyticsDb.collection<RunMetricDocument>(MongoRunAnalytics.collectionName);
   const groups = db.collection<GroupDocument>(MongoGroupRepository.collectionName);
+  const connections = db.collection<ConnectionDocument>(MongoConnectionRepository.collectionName);
   const rateLimits = db.collection<RateLimitDocument>(MongoRateLimiter.collectionName);
   const outbox = db.collection<NotificationDocument>(MongoNotificationOutbox.collectionName);
   const events = new MongoChangeStreamEventBus(runs, jobs, options.onEventBusError);
@@ -153,6 +156,7 @@ export async function createMongoPersistence(
 
   return {
     jobs: new MongoJobRepository(jobs),
+    connections: new MongoConnectionRepository(connections),
     schedule: new MongoScheduleStore(client, jobs, runs),
     runs: new MongoRunRepository(
       runs,
@@ -182,6 +186,7 @@ export async function createMongoPersistence(
       await ensureIndexes(db, retention.runDays);
       await MongoNotificationOutbox.ensureIndexes(outbox);
       await MongoGroupRepository.ensureIndexes(groups);
+      await MongoConnectionRepository.ensureIndexes(connections);
       await MongoWorkflowRepository.ensureIndexes(workflows);
       await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
       await MongoUserRepository.ensureIndexes(users);

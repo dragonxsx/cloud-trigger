@@ -2,32 +2,29 @@ import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge
 import {
   Result,
   type TargetResult,
-  defineTarget,
+  defineInlineConnectedTarget,
   failedResult,
   isRecord,
   toError,
 } from '@cloud-trigger/core';
 import { z } from 'zod';
 
+import { awsConnection } from '../connection.js';
 import {
   AwsConnection,
-  PAIRED_CREDENTIALS,
   awsFailure,
   clientCache,
-  hasPairedCredentials,
   messageBody,
   resolveClientConfig,
 } from '../shared.js';
 
-export const EventBridgeTargetConfig = z
-  .object({
-    eventBusName: z.string().min(1).default('default').describe('Bus name or ARN.'),
-    ...AwsConnection,
-    source: z.string().min(1).describe('Event source, e.g. com.acme.billing.'),
-    detailType: z.string().min(1).describe('The DetailType of the event.'),
-    resources: z.array(z.string().min(1)).default([]),
-  })
-  .refine(hasPairedCredentials, PAIRED_CREDENTIALS);
+export const EventBridgeTargetConfig = z.object({
+  eventBusName: z.string().min(1).default('default').describe('Bus name or ARN.'),
+  ...AwsConnection,
+  source: z.string().min(1).describe('Event source, e.g. com.acme.billing.'),
+  detailType: z.string().min(1).describe('The DetailType of the event.'),
+  resources: z.array(z.string().min(1)).default([]),
+});
 
 const RETRYABLE_ENTRY_ERRORS = new Set([
   'ThrottlingException',
@@ -39,15 +36,16 @@ const eventBridgeClient = clientCache((config) => new EventBridgeClient(config))
 
 const parseObject = Result.fromThrowable((text: string): unknown => JSON.parse(text), toError);
 
-export const eventBridgeTarget = defineTarget({
+export const eventBridgeTarget = defineInlineConnectedTarget({
   type: 'eventbridge',
   displayName: 'Amazon EventBridge event',
   description: 'Puts the payload on an EventBridge bus as the event detail (a JSON object).',
   configSchema: EventBridgeTargetConfig,
-  async execute(config, { payload, ctx, signal }): Promise<TargetResult> {
+  connection: awsConnection,
+  async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
-    const clientConfig = await resolveClientConfig(config, ctx.secrets);
+    const clientConfig = await resolveClientConfig(connection.config, ctx.secrets);
     if (clientConfig.isErr()) {
       return failedResult('missing_secret', clientConfig.error.message, false, elapsed());
     }

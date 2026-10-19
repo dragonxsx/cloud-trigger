@@ -12,6 +12,7 @@ import { Admin, Consumer, type Message, stringDeserializers } from '@platformati
 import { KafkaContainer, type StartedKafkaContainer } from '@testcontainers/kafka';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { kafkaConnection } from '../src/connection.js';
 import { kafkaSource } from '../src/kafka-source.js';
 import { closeProducers, kafkaTarget } from '../src/kafka-target.js';
 
@@ -154,6 +155,37 @@ describe('kafka target', () => {
     expect(message?.value).toBe('{"n":1}');
     expect(message?.headers.get('source')).toBe('test');
     expect(message?.headers.get('traceparent')).toBe(contractRunContext().traceparent);
+  });
+
+  it('produces over a saved connection and tests it', async () => {
+    const topic = `connected-${randomUUID()}`;
+    await createTopic(env().broker, topic);
+    const binding = { key: 'events', version: 1, config: { brokers: [env().broker] } };
+    const bound = kafkaTarget.bind({ topic }, { connection: binding })._unsafeUnwrap();
+    const result = await bound.execute({
+      payload: { body: 'via connection', contentType: undefined, attributes: {} },
+      ctx: contractRunContext(),
+      signal: AbortSignal.timeout(30_000),
+    });
+    expect(result.outcome).toBe('success');
+    expect((await readAll(topic, 1))[0]?.value).toBe('via connection');
+
+    const doubled = kafkaTarget.bind({ topic, brokers: [env().broker] }, { connection: binding });
+    expect(doubled.isErr() && doubled.error.issues.map((i) => i.path)).toEqual(['brokers']);
+    expect(kafkaTarget.bind({ topic }).isErr()).toBe(true);
+
+    const ctx = {
+      secrets: mapSecretResolver({}),
+      signal: AbortSignal.timeout(30_000),
+      now: new Date(),
+    };
+    const tested = await kafkaConnection.bind(binding.config)._unsafeUnwrap().test(ctx);
+    expect(tested._unsafeUnwrap().message).toMatch(/topics visible/);
+    const refused = await kafkaConnection
+      .bind({ brokers: [env().refused], timeoutMs: 1_000 })
+      ._unsafeUnwrap()
+      .test({ ...ctx, signal: AbortSignal.timeout(10_000) });
+    expect(refused.isErr()).toBe(true);
   });
 
   it('does not auto-create missing topics', async () => {

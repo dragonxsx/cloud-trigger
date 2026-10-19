@@ -1,5 +1,9 @@
 import {
   type ApiKeyRepository,
+  type ConnectionRepository,
+  ConnectionSpec,
+  createConnection,
+  newConnectionId,
   type AuthSettingsStore,
   type UserRepository,
   type DecisionLog,
@@ -41,6 +45,7 @@ import {
 
 export interface PortsUnderTest {
   readonly jobs: JobRepository;
+  readonly connections: ConnectionRepository;
   readonly schedule: ScheduleStore;
   readonly runs: RunRepository;
   readonly queue: RunQueue;
@@ -60,6 +65,18 @@ export interface PortsUnderTest {
 
 const makeGroup = (name: string) =>
   createGroup({ id: newGroupId(), spec: GroupSpec.parse({ name }), now: T0 });
+
+const makeConnection = (key: string, type = 'http') =>
+  createConnection({
+    id: newConnectionId(),
+    spec: ConnectionSpec.parse({
+      key,
+      type,
+      config: { baseUrl: `https://${key}.test` },
+      endpoints: [{ key: 'ping', target: { type: 'http', config: { url: '/ping' } } }],
+    }),
+    now: T0,
+  });
 
 const claimOne = async ({ jobs, runs, queue }: PortsUnderTest) => {
   const job = makeJob();
@@ -392,6 +409,36 @@ export function describePersistenceContract(
         expect(await jobs.findByName('LOAD')).toEqual([]);
       });
 
+      it('finds jobs by the connections and endpoints they use', async () => {
+        const { jobs } = setup.ports();
+        const charge = {
+          ...makeJob({ name: 'charge' }),
+          connectionRefs: [{ key: 'billing', endpoint: 'charge' }, { key: 'audit' }],
+        };
+        const refund = { ...makeJob({ name: 'refund' }), connectionRefs: [{ key: 'billing' }] };
+        await jobs.insert(charge);
+        await jobs.insert(refund);
+        await jobs.insert(makeJob({ name: 'inline' }));
+        const ids = async (key: string, endpoint?: string) =>
+          (await jobs.findByConnection(key, endpoint)).map((j) => j.name).toSorted();
+        expect(await ids('billing')).toEqual(['charge', 'refund']);
+        expect(await ids('billing', 'charge')).toEqual(['charge']);
+        expect(await ids('audit')).toEqual(['charge']);
+        expect(await ids('nope')).toEqual([]);
+        expect((await jobs.get(charge.id))?.connectionRefs).toEqual(charge.connectionRefs);
+
+        const moved = await jobs.update(
+          refund.id,
+          { spec: refund, updatedAt: at(1), connectionRefs: [{ key: 'audit', endpoint: 'log' }] },
+          refund.version,
+        );
+        expect(moved._unsafeUnwrap().connectionRefs).toEqual([{ key: 'audit', endpoint: 'log' }]);
+        expect(await ids('billing')).toEqual(['charge']);
+        expect(await ids('audit', 'log')).toEqual(['refund']);
+        expect(await jobs.delete(charge.id)).toBe(true);
+        expect(await ids('audit')).toEqual(['refund']);
+      });
+
       it('counts concurrent failures atomically and auto-pauses at the threshold', async () => {
         const { jobs } = setup.ports();
         const job = makeJob();
@@ -608,6 +655,59 @@ export function describePersistenceContract(
         ).toBe('not_found');
         expect(await groups.delete(ops.id)).toBe(true);
         expect(await groups.get(ops.id)).toBeUndefined();
+      });
+    });
+
+    describe('ConnectionRepository', () => {
+      it('round-trips, enforces unique keys and versions, filters and deletes', async () => {
+        const { connections } = setup.ports();
+        const billing = makeConnection('billing');
+        expect((await connections.insert(billing))._unsafeUnwrap()).toEqual(billing);
+        expect((await connections.insert(makeConnection('billing')))._unsafeUnwrapErr().code).toBe(
+          'conflict',
+        );
+        await connections.insert(makeConnection('events', 'aws'));
+        await connections.insert(makeConnection('audit'));
+        expect(await connections.get('billing')).toEqual(billing);
+        expect(await connections.get('nope')).toBeUndefined();
+        expect(
+          (await connections.getMany(['events', 'billing', 'nope'])).map((c) => c.key).toSorted(),
+        ).toEqual(['billing', 'events']);
+        expect(await connections.getMany([])).toEqual([]);
+
+        const page = await connections.list({ limit: 2 });
+        expect(page.items.map((c) => c.key)).toEqual(['audit', 'billing']);
+        expect(page.total).toBe(3);
+        const rest = await connections.list({ limit: 2, cursor: page.nextCursor ?? undefined });
+        expect(rest.items.map((c) => c.key)).toEqual(['events']);
+        expect(rest.nextCursor).toBeNull();
+        expect(
+          (await connections.list({ limit: 10, type: 'aws' })).items.map((c) => c.key),
+        ).toEqual(['events']);
+        expect(
+          (await connections.list({ limit: 10, search: 'BILL' })).items.map((c) => c.key),
+        ).toEqual(['billing']);
+
+        const spec = ConnectionSpec.parse({ ...billing, name: 'Billing API', endpoints: [] });
+        const renamed = await connections.update('billing', { spec, updatedAt: at(1) }, 1);
+        expect(renamed._unsafeUnwrap()).toMatchObject({
+          key: 'billing',
+          name: 'Billing API',
+          endpoints: [],
+          version: 2,
+          createdAt: T0,
+          updatedAt: at(1),
+        });
+        expect(
+          (await connections.update('billing', { spec, updatedAt: at(2) }, 1))._unsafeUnwrapErr()
+            .code,
+        ).toBe('version_conflict');
+        expect(
+          (await connections.update('nope', { spec, updatedAt: at(2) }, 1))._unsafeUnwrapErr().code,
+        ).toBe('not_found');
+        expect(await connections.delete('billing')).toBe(true);
+        expect(await connections.delete('billing')).toBe(false);
+        expect(await connections.get('billing')).toBeUndefined();
       });
     });
 

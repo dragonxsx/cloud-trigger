@@ -28,15 +28,19 @@ export const AwsConnection = {
   sessionToken: secret(z.string().min(1)).optional(),
 };
 
-const AwsConnectionSchema = z.object(AwsConnection);
-export type AwsConnection = z.output<typeof AwsConnectionSchema>;
-
-export const hasPairedCredentials = (config: AwsConnection) =>
-  (config.accessKeyId === undefined) === (config.secretAccessKey === undefined);
+export const hasPairedCredentials = (config: {
+  readonly accessKeyId?: string | undefined;
+  readonly secretAccessKey?: string | undefined;
+}) => (config.accessKeyId === undefined) === (config.secretAccessKey === undefined);
 export const PAIRED_CREDENTIALS = {
   message: 'Set both accessKeyId and secretAccessKey, or neither',
   path: ['secretAccessKey'],
 };
+
+export const AwsConnectionConfig = z
+  .object(AwsConnection)
+  .refine(hasPairedCredentials, PAIRED_CREDENTIALS);
+export type AwsConnection = z.output<typeof AwsConnectionConfig>;
 
 export interface AwsClientConfig {
   readonly region: string;
