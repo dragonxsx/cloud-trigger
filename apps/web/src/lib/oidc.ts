@@ -4,7 +4,13 @@ import type { z } from 'zod';
 
 export type AuthConfigDto = z.output<typeof AuthConfig>;
 
-const FALLBACK: AuthConfigDto = { oidc: null, apiKeys: true, anonymous: false };
+const FALLBACK: AuthConfigDto = {
+  setupRequired: false,
+  local: true,
+  oidc: null,
+  apiKeys: true,
+  anonymous: false,
+};
 
 let config: Promise<AuthConfigDto> | undefined;
 let manager: Promise<UserManager | null> | undefined;
@@ -14,6 +20,11 @@ const loadConfig = async (): Promise<AuthConfigDto> => {
   const json: unknown = await response.json();
 
   return AuthConfig.parse(json);
+};
+
+export const resetAuthConfig = (): void => {
+  config = undefined;
+  manager = undefined;
 };
 
 export const authConfig = (): Promise<AuthConfigDto> =>

@@ -4,15 +4,20 @@ import type { InferContractRouterErrorMap } from '@orpc/contract';
 import { implement } from '@orpc/nest';
 import type { ORPCErrorConstructorMap } from '@orpc/server';
 
-import { type Authenticator, type Principal, hasScope } from '../../auth/authenticator.js';
+import { type Authenticate, type Principal, hasScope } from '../../auth/authenticator.js';
 
 export interface ApiInitialContext {
   readonly reqHeaders?: Headers;
 }
 
-const PUBLIC_PRINCIPAL: Principal = { subject: 'public', via: 'anonymous', scopes: [] };
+const PUBLIC_PRINCIPAL: Principal = {
+  subject: 'public',
+  name: 'Public',
+  via: 'anonymous',
+  scopes: [],
+};
 
-export const createApi = (authenticator: Authenticator) =>
+export const createApi = (authenticator: Authenticate) =>
   implement(contract)
     .$context<ApiInitialContext>()
     .use(async ({ context, next, procedure, errors }) => {
@@ -20,6 +25,9 @@ export const createApi = (authenticator: Authenticator) =>
         return next({ context: { principal: PUBLIC_PRINCIPAL } });
       }
       const result = await authenticator.authenticate(context.reqHeaders);
+      if (result === 'setup_required') {
+        throw errors.SETUP_REQUIRED({ message: 'Finish the setup wizard first' });
+      }
       if (result === 'missing') {
         throw errors.UNAUTHORIZED({ message: 'Authentication required' });
       }
@@ -46,11 +54,19 @@ type KnownError =
       | 'not_finished'
       | 'not_cancellable'
       | 'conflict'
+      | 'setup_required'
+      | 'invalid_credentials'
+      | 'throttled'
     >;
 
 export type ErrorFactories = Pick<
   ORPCErrorConstructorMap<InferContractRouterErrorMap<Contract>>,
-  'NOT_FOUND' | 'CONFLICT' | 'INVALID_CONFIG'
+  | 'NOT_FOUND'
+  | 'CONFLICT'
+  | 'INVALID_CONFIG'
+  | 'SETUP_REQUIRED'
+  | 'UNAUTHORIZED'
+  | 'TOO_MANY_REQUESTS'
 >;
 
 export function toApiError(errors: ErrorFactories, error: KnownError): Error {
@@ -59,6 +75,12 @@ export function toApiError(errors: ErrorFactories, error: KnownError): Error {
       return errors.NOT_FOUND({ message: error.message });
     case 'invalid_config':
       return errors.INVALID_CONFIG({ message: error.message, data: { issues: [...error.issues] } });
+    case 'setup_required':
+      return errors.SETUP_REQUIRED({ message: error.message });
+    case 'invalid_credentials':
+      return errors.UNAUTHORIZED({ message: error.message });
+    case 'throttled':
+      return errors.TOO_MANY_REQUESTS({ message: error.message });
     case 'version_conflict':
     case 'duplicate_run':
     case 'not_finished':

@@ -14,7 +14,7 @@ import {
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 
-import { Authenticator, hasScope } from '../auth/authenticator.js';
+import { Authenticator, hasScope, isAuthFailure } from '../auth/authenticator.js';
 import { CalendarTokens } from '../auth/calendar-tokens.js';
 import { headersOf } from '../common/http/headers.js';
 import { ConfigService } from '../config/config.module.js';
@@ -41,7 +41,10 @@ export class FeedsController {
       return;
     }
     const principal = await this.authenticator.authenticate(headersOf(req));
-    if (principal === 'missing' || principal === 'invalid') {
+    if (principal === 'setup_required') {
+      throw new HttpException('Finish the setup wizard first', HttpStatus.SERVICE_UNAVAILABLE);
+    }
+    if (isAuthFailure(principal)) {
       throw new HttpException('Authentication required', HttpStatus.UNAUTHORIZED);
     }
     if (!hasScope(principal, 'read')) {

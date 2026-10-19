@@ -1,4 +1,7 @@
 import {
+  type ApiKeyRepository,
+  type AuthSettingsStore,
+  type UserRepository,
   type DecisionLog,
   type EventSourceLeases,
   type WorkflowRepository,
@@ -26,9 +29,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   T0,
   at,
+  makeApiKey,
+  makeAuthSettings,
   makeDelivery,
   makeJob,
   makePendingRun,
+  makeUser,
   makeWorkflow,
   makeWorkflowRun,
 } from './fixtures.js';
@@ -47,6 +53,9 @@ export interface PortsUnderTest {
   readonly workflows: WorkflowRepository;
   readonly workflowRuns: WorkflowRunRepository;
   readonly unitOfWork: UnitOfWork;
+  readonly authSettings: AuthSettingsStore;
+  readonly users: UserRepository;
+  readonly apiKeys: ApiKeyRepository;
 }
 
 const makeGroup = (name: string) =>
@@ -599,6 +608,82 @@ export function describePersistenceContract(
         ).toBe('not_found');
         expect(await groups.delete(ops.id)).toBe(true);
         expect(await groups.get(ops.id)).toBeUndefined();
+      });
+    });
+
+    describe('AuthSettingsStore', () => {
+      it('creates once and updates with CAS', async () => {
+        const { authSettings } = setup.ports();
+        expect(await authSettings.get()).toBeUndefined();
+        const settings = makeAuthSettings({ anonymous: { scopes: ['read'] } });
+        expect((await authSettings.create(settings))._unsafeUnwrap()).toEqual(settings);
+        expect((await authSettings.create(makeAuthSettings()))._unsafeUnwrapErr().code).toBe(
+          'conflict',
+        );
+        expect(await authSettings.get()).toEqual(settings);
+
+        const next = { ...settings, oidc: { ...settings.oidc, enabled: true }, version: 2 };
+        expect((await authSettings.update(next, 1))._unsafeUnwrap()).toEqual(next);
+        expect(
+          (await authSettings.update({ ...next, version: 2 }, 1))._unsafeUnwrapErr().code,
+        ).toBe('version_conflict');
+        expect(await authSettings.get()).toEqual(next);
+      });
+    });
+
+    describe('UserRepository', () => {
+      it('enforces unique usernames, versions updates and counts active admins', async () => {
+        const { users } = setup.ports();
+        const admin = makeUser({ username: 'Admin' });
+        expect((await users.insert(admin))._unsafeUnwrap()).toEqual(admin);
+        expect((await users.insert(makeUser({ username: 'admin' })))._unsafeUnwrapErr().code).toBe(
+          'conflict',
+        );
+        const viewer = makeUser({ username: 'viewer', scopes: ['read'] });
+        await users.insert(viewer);
+        await users.insert(makeUser({ username: 'old-admin', disabled: true }));
+
+        expect(await users.get(admin.id)).toEqual(admin);
+        expect((await users.findByUsername('ADMIN'))?.id).toBe(admin.id);
+        expect(await users.findByUsername('nobody')).toBeUndefined();
+        expect(await users.countActiveAdmins()).toBe(1);
+        expect((await users.list({ limit: 10 })).total).toBe(3);
+        expect((await users.list({ limit: 10, search: 'VIEW' })).items.map((u) => u.id)).toEqual([
+          viewer.id,
+        ]);
+
+        const promoted = { ...viewer, scopes: ['admin' as const], version: 2, updatedAt: at(1) };
+        expect((await users.update(promoted, 1))._unsafeUnwrap()).toEqual(promoted);
+        expect(await users.countActiveAdmins()).toBe(2);
+        expect((await users.update({ ...promoted, version: 2 }, 1))._unsafeUnwrapErr().code).toBe(
+          'version_conflict',
+        );
+        expect(
+          (await users.update(makeUser({ username: 'ghost' }), 1))._unsafeUnwrapErr().code,
+        ).toBe('not_found');
+        expect(await users.delete(viewer.id)).toBe(true);
+        expect(await users.delete(viewer.id)).toBe(false);
+        expect(await users.countActiveAdmins()).toBe(1);
+      });
+    });
+
+    describe('ApiKeyRepository', () => {
+      it('finds keys by hash, touches and revokes them', async () => {
+        const { apiKeys } = setup.ports();
+        const key = makeApiKey({ hash: 'b'.repeat(64) });
+        expect((await apiKeys.insert(key))._unsafeUnwrap()).toEqual(key);
+        expect(
+          (await apiKeys.insert(makeApiKey({ hash: 'b'.repeat(64) })))._unsafeUnwrapErr().code,
+        ).toBe('conflict');
+        await apiKeys.insert(makeApiKey({ name: 'other', hash: 'c'.repeat(64) }));
+        expect(await apiKeys.findByHash('b'.repeat(64))).toEqual(key);
+        expect(await apiKeys.findByHash('d'.repeat(64))).toBeUndefined();
+
+        await apiKeys.touch(key.id, at(5));
+        expect((await apiKeys.findByHash(key.hash))?.lastUsedAt).toEqual(at(5));
+        expect(await apiKeys.revoke(key.id, at(6))).toBe(true);
+        expect((await apiKeys.findByHash(key.hash))?.revokedAt).toEqual(at(6));
+        expect((await apiKeys.list()).map((k) => k.name).toSorted()).toEqual(['ci', 'other']);
       });
     });
 

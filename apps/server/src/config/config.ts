@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 
-import { Scope } from '@cloud-trigger/api-contract';
+import { type ConfigIssue, type Result, assertNever, err, ok } from '@cloud-trigger/core';
 import { z } from 'zod';
 
 const splitCsv = (s: string): string[] =>
@@ -12,19 +12,6 @@ const csv = z.string().default('').transform(splitCsv);
 
 const Role = z.enum(['api', 'scheduler', 'worker', 'consumer']);
 export type Role = z.output<typeof Role>;
-
-const ApiKeys = csv.pipe(
-  z.array(
-    z
-      .string()
-      .transform((entry) => entry.split(':'))
-      .pipe(
-        z.tuple([z.string().min(1), z.string().regex(/^[0-9a-f]{64}$/, 'sha256 hex'), z.string()]),
-      )
-      .transform(([name, hash, scopes]) => ({ name, hash, scopes: scopes.split('|') }))
-      .pipe(z.object({ name: z.string(), hash: z.string(), scopes: z.array(Scope) })),
-  ),
-);
 
 const ConfigShape = z.object({
   APP_ROLE: z
@@ -38,8 +25,10 @@ const ConfigShape = z.object({
 
   DB_DRIVER: z
     .enum(['mongo', 'postgres', 'sqlite'])
-    .default('mongo')
-    .describe('Storage adapter. sqlite is for single-node installs (APP_ROLE=all, 1 replica).'),
+    .optional()
+    .describe(
+      'Storage adapter, inferred from MONGO_URI or POSTGRES_URL when unset. sqlite is for single-node installs (APP_ROLE=all, 1 replica). Without one, the server starts the setup wizard.',
+    ),
   MONGO_URI: z.string().min(1).optional(),
   POSTGRES_URL: z.string().min(1).optional(),
   POSTGRES_MAX_CONNECTIONS: z.coerce.number().int().positive().default(10),
@@ -75,19 +64,11 @@ const ConfigShape = z.object({
     .describe('Default per-job rate limit for inbound webhooks without their own limit.'),
   WEBHOOK_MAX_BODY_BYTES: z.coerce.number().int().positive().max(262_144).default(262_144),
 
-  AUTH_DISABLED: z.stringbool().default(false),
-  OIDC_ISSUER: z.url().optional(),
-  OIDC_AUDIENCE: z.string().optional(),
-  OIDC_JWKS_URI: z.url().optional(),
-  OIDC_SCOPE_PREFIX: z.string().default('cloud-trigger:'),
-  OIDC_CLIENT_ID: z.string().optional().describe('Public client the web UI signs in with (PKCE).'),
-  OIDC_UI_SCOPE: z
+  SETUP_TOKEN: z
     .string()
-    .default('openid profile cloud-trigger:read cloud-trigger:write')
-    .describe('Scopes the web UI requests.'),
-  OIDC_DEFAULT_SCOPES: csv.pipe(z.array(Scope)).default(['read']),
-  API_KEYS: ApiKeys,
-  ANONYMOUS_SCOPES: csv.pipe(z.array(Scope)),
+    .min(16)
+    .optional()
+    .describe('Presets the first-run setup token; set it when several replicas serve the API.'),
   CORS_ORIGINS: csv,
   BADGES_PUBLIC: z.stringbool().default(false),
   CALENDAR_TOKEN_SECRET: z
@@ -110,16 +91,6 @@ const ConfigShape = z.object({
 const ALL_ROLES: readonly Role[] = ['api', 'scheduler', 'worker', 'consumer'];
 
 export const AppConfig = ConfigShape.superRefine((config, ctx) => {
-  if (config.DB_DRIVER === 'mongo' && config.MONGO_URI === undefined) {
-    ctx.addIssue({ code: 'custom', path: ['MONGO_URI'], message: 'Required when DB_DRIVER=mongo' });
-  }
-  if (config.DB_DRIVER === 'postgres' && config.POSTGRES_URL === undefined) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['POSTGRES_URL'],
-      message: 'Required when DB_DRIVER=postgres',
-    });
-  }
   if (config.DB_DRIVER === 'sqlite' && !ALL_ROLES.every((role) => config.APP_ROLE.includes(role))) {
     ctx.addIssue({
       code: 'custom',
@@ -129,6 +100,58 @@ export const AppConfig = ConfigShape.superRefine((config, ctx) => {
   }
 });
 export type AppConfig = z.output<typeof AppConfig>;
+
+export type DatabaseConfig =
+  | {
+      readonly driver: 'mongo';
+      readonly uri: string;
+      readonly dbName: string;
+      readonly analyticsUri: string | undefined;
+      readonly analyticsDbName: string | undefined;
+    }
+  | { readonly driver: 'postgres'; readonly url: string; readonly maxConnections: number }
+  | { readonly driver: 'sqlite'; readonly path: string };
+
+export type DatabaseDriver = DatabaseConfig['driver'];
+
+export const inferDriver = (config: AppConfig): DatabaseDriver | undefined =>
+  config.DB_DRIVER ??
+  (config.MONGO_URI !== undefined
+    ? 'mongo'
+    : config.POSTGRES_URL !== undefined
+      ? 'postgres'
+      : undefined);
+
+const missing = (path: string, driver: string): ConfigIssue => ({
+  path,
+  message: `Required when DB_DRIVER=${driver}`,
+});
+
+export function databaseConfig(config: AppConfig): Result<DatabaseConfig, ConfigIssue[]> {
+  const driver = inferDriver(config);
+  switch (driver) {
+    case undefined:
+      return err([{ path: 'DB_DRIVER', message: 'No database is configured' }]);
+    case 'mongo':
+      return config.MONGO_URI === undefined
+        ? err([missing('MONGO_URI', driver)])
+        : ok({
+            driver,
+            uri: config.MONGO_URI,
+            dbName: config.MONGO_DB,
+            analyticsUri: config.ANALYTICS_MONGO_URI,
+            analyticsDbName: config.ANALYTICS_MONGO_DB,
+          });
+    case 'postgres':
+      return config.POSTGRES_URL === undefined
+        ? err([missing('POSTGRES_URL', driver)])
+        : ok({ driver, url: config.POSTGRES_URL, maxConnections: config.POSTGRES_MAX_CONNECTIONS });
+    case 'sqlite':
+      return ok({ driver, path: config.SQLITE_PATH });
+    default:
+      return assertNever(driver);
+  }
+}
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = AppConfig.safeParse(env);

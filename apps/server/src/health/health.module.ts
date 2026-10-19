@@ -12,7 +12,7 @@ import { Readiness } from './readiness.js';
     factoryProvider(
       Readiness,
       [PERSISTENCE, ConfigService],
-      (persistence, { values }) => new Readiness(persistence, values.APP_ROLE),
+      (persistence, { values }) => new Readiness(() => persistence.ping(), values.APP_ROLE),
     ),
   ],
 })

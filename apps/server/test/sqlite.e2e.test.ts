@@ -44,7 +44,6 @@ beforeAll(async () => {
   const config = loadConfig({
     DB_DRIVER: 'sqlite',
     SQLITE_PATH: join(dir, 'app.db'),
-    AUTH_DISABLED: 'true',
     WORKER_POLL_MS: '100',
     SCHEDULER_INTERVAL_MS: '200',
   });
@@ -66,9 +65,7 @@ afterAll(async () => {
 
 describe('DB_DRIVER=sqlite', () => {
   it('refuses split roles at startup', () => {
-    expect(() =>
-      loadConfig({ DB_DRIVER: 'sqlite', APP_ROLE: 'api', AUTH_DISABLED: 'true' }),
-    ).toThrow(/APP_ROLE=all/);
+    expect(() => loadConfig({ DB_DRIVER: 'sqlite', APP_ROLE: 'api' })).toThrow(/APP_ROLE=all/);
   });
 
   it('runs a job end to end and streams its changes in-process', async () => {

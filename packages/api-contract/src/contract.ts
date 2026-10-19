@@ -15,7 +15,30 @@ import { z } from 'zod';
 
 import {
   AnalyticsRange,
+  ApiKeyIdParam,
+  ApiKeyView,
   AuthConfig,
+  AuthSettingsView,
+  ChangePasswordInput,
+  CreateApiKeyInput,
+  CreateUserInput,
+  CreatedApiKey,
+  DatabaseTestInput,
+  DatabaseTestResult,
+  LoginInput,
+  OidcTestInput,
+  OidcTestResult,
+  ResetPasswordInput,
+  SessionToken,
+  SetupCompleteInput,
+  SetupStatus,
+  SetupTokenInput,
+  UpdateAuthSettingsInput,
+  UpdateUserInput,
+  UserIdParam,
+  UserListQuery,
+  UserPage,
+  UserView,
   AnalyticsSummary,
   BackfillInput,
   BackfillResult,
@@ -79,9 +102,12 @@ const base = oc.$meta<ApiMeta>({ minimumScope: 'read' }).errors({
   NOT_FOUND: { status: 404 },
   CONFLICT: { status: 409 },
   INVALID_CONFIG: { status: 422, data: z.object({ issues: z.array(ConfigIssue) }) },
+  SETUP_REQUIRED: { status: 503 },
+  TOO_MANY_REQUESTS: { status: 429 },
 });
 const write = base.meta({ minimumScope: 'write' });
 const admin = base.meta({ minimumScope: 'admin' });
+const open = base.meta({ minimumScope: 'read', public: true });
 
 const jobs = {
   list: base
@@ -383,8 +409,7 @@ const workflowRuns = {
 
 const auth = {
   me: base.route({ method: 'GET', path: '/me' }).input(z.object({})).output(Me),
-  config: base
-    .meta({ minimumScope: 'read', public: true })
+  config: open
     .route({
       method: 'GET',
       path: '/auth/config',
@@ -392,6 +417,112 @@ const auth = {
     })
     .input(z.object({}))
     .output(AuthConfig),
+  login: open
+    .route({ method: 'POST', path: '/auth/login', summary: 'Sign in with a username and password' })
+    .input(LoginInput)
+    .output(SessionToken),
+  changePassword: base
+    .route({
+      method: 'POST',
+      path: '/auth/password',
+      summary: 'Change your own password; signs out your other sessions',
+    })
+    .input(ChangePasswordInput)
+    .output(SessionToken),
+};
+
+const setup = {
+  status: open
+    .route({ method: 'GET', path: '/setup/status', summary: 'Which first-run setup step is due' })
+    .input(z.object({}))
+    .output(SetupStatus),
+  verifyToken: open
+    .route({ method: 'POST', path: '/setup/verify', summary: 'Check the one-time setup token' })
+    .input(SetupTokenInput)
+    .output(z.object({ ok: z.literal(true) })),
+  testDatabase: open
+    .route({
+      method: 'POST',
+      path: '/setup/database/test',
+      summary: 'Try a database connection and return the env vars that select it',
+    })
+    .input(DatabaseTestInput)
+    .output(DatabaseTestResult),
+  testOidc: open
+    .route({
+      method: 'POST',
+      path: '/setup/oidc/test',
+      summary: 'Fetch OpenID discovery for an issuer (setup token, or the admin scope)',
+    })
+    .input(OidcTestInput)
+    .output(OidcTestResult),
+  complete: open
+    .route({
+      method: 'POST',
+      path: '/setup/complete',
+      summary: 'Save the sign-in methods and create the first admin account',
+    })
+    .input(SetupCompleteInput)
+    .output(SessionToken),
+};
+
+const authSettings = {
+  get: admin
+    .route({ method: 'GET', path: '/auth-settings' })
+    .input(z.object({}))
+    .output(AuthSettingsView),
+  update: admin
+    .route({ method: 'PUT', path: '/auth-settings' })
+    .input(UpdateAuthSettingsInput)
+    .output(AuthSettingsView),
+  rotateSessionSecret: admin
+    .route({
+      method: 'POST',
+      path: '/auth-settings/rotate-session-secret',
+      summary: 'Sign out every password session, including yours',
+    })
+    .input(z.object({}))
+    .output(AuthSettingsView),
+};
+
+const users = {
+  list: admin.route({ method: 'GET', path: '/users' }).input(UserListQuery).output(UserPage),
+  create: admin
+    .route({ method: 'POST', path: '/users', successStatus: 201 })
+    .input(CreateUserInput)
+    .output(UserView),
+  get: admin.route({ method: 'GET', path: '/users/{id}' }).input(UserIdParam).output(UserView),
+  update: admin
+    .route({ method: 'PUT', path: '/users/{id}' })
+    .input(UpdateUserInput)
+    .output(UserView),
+  delete: admin
+    .route({ method: 'DELETE', path: '/users/{id}' })
+    .input(UserIdParam)
+    .output(z.object({ deleted: z.boolean() })),
+  resetPassword: admin
+    .route({
+      method: 'POST',
+      path: '/users/{id}/password',
+      summary: "Set a user's password and sign out their sessions",
+    })
+    .input(ResetPasswordInput)
+    .output(UserView),
+};
+
+const apiKeys = {
+  list: admin
+    .route({ method: 'GET', path: '/api-keys' })
+    .input(z.object({}))
+    .output(z.array(ApiKeyView)),
+  create: admin
+    .route({ method: 'POST', path: '/api-keys', successStatus: 201 })
+    .input(CreateApiKeyInput)
+    .output(CreatedApiKey),
+  revoke: admin
+    .route({ method: 'DELETE', path: '/api-keys/{id}' })
+    .input(ApiKeyIdParam)
+    .output(z.object({ revoked: z.boolean() })),
 };
 
 export const contract = oc.prefix('/api').router({
@@ -404,6 +535,10 @@ export const contract = oc.prefix('/api').router({
   analytics: oc.tag('Analytics').router(analytics),
   providers: oc.tag('Providers').router(providers),
   auth: oc.tag('Auth').router(auth),
+  setup: oc.tag('Setup').router(setup),
+  authSettings: oc.tag('Access').router(authSettings),
+  users: oc.tag('Access').router(users),
+  apiKeys: oc.tag('Access').router(apiKeys),
 });
 
 export type Contract = typeof contract;

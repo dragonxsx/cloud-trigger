@@ -3,13 +3,21 @@ import type { AccessControlProvider, AuthProvider } from '@refinedev/core';
 import { z } from 'zod';
 
 import { auth, client } from '../lib/api';
-import { isUnauthorized } from '../lib/errors';
+import { errorMessage, isUnauthorized } from '../lib/errors';
 import { signIn, signOut } from '../lib/oidc';
+import { passwordSession } from '../lib/session';
 
 const LoginParams = z.union([
   z.object({ method: z.literal('oidc') }),
+  z.object({ username: z.string().trim().min(1), password: z.string().min(1) }),
   z.object({ apiKey: z.string().trim().min(1) }),
 ]);
+
+export const startPasswordSession = (session: { token: string; expiresAt: string }): void => {
+  auth.setApiKey(null);
+  passwordSession.set(session);
+  me = undefined;
+};
 
 let me: Promise<Awaited<ReturnType<typeof client.auth.me>>> | undefined;
 const whoAmI = () =>
@@ -22,14 +30,30 @@ export const authProvider: AuthProvider = {
   login: async (params: unknown) => {
     const parsed = LoginParams.safeParse(params);
     if (!parsed.success) {
-      return { success: false, error: { name: 'Sign in failed', message: 'Enter an API key' } };
+      return { success: false, error: { name: 'Sign in failed', message: 'Fill in every field' } };
     }
-    if ('method' in parsed.data) {
+    const credentials = parsed.data;
+    if ('method' in credentials) {
       return (await signIn())
         ? { success: true }
         : { success: false, error: { name: 'Sign in failed', message: 'SSO is not configured' } };
     }
-    auth.setApiKey(parsed.data.apiKey);
+    if ('username' in credentials) {
+      try {
+        startPasswordSession(
+          await client.auth.login({
+            username: credentials.username,
+            password: credentials.password,
+          }),
+        );
+
+        return { success: true, redirectTo: '/' };
+      } catch (error: unknown) {
+        return { success: false, error: { name: 'Sign in failed', message: errorMessage(error) } };
+      }
+    }
+    passwordSession.set(null);
+    auth.setApiKey(credentials.apiKey);
     me = undefined;
     try {
       await whoAmI();
@@ -49,6 +73,7 @@ export const authProvider: AuthProvider = {
   },
   logout: async () => {
     auth.setApiKey(null);
+    passwordSession.set(null);
     await signOut();
     me = undefined;
 
@@ -74,12 +99,7 @@ export const authProvider: AuthProvider = {
     return {
       id: identity.subject,
       via: identity.via,
-      name:
-        identity.via === 'disabled'
-          ? 'Local (auth disabled)'
-          : identity.via === 'anonymous'
-            ? 'Guest (read-only)'
-            : identity.subject,
+      name: identity.via === 'anonymous' ? 'Guest' : identity.name,
     };
   },
 };
@@ -98,13 +118,18 @@ const WRITE_ACTIONS = new Set([
   'backfill',
 ]);
 const ADMIN_ACTIONS = new Set(['import', 'export']);
+const ADMIN_RESOURCES = new Set(['settings', 'users', 'api-keys', 'auth-settings']);
 
-const scopeFor = (action: string): Scope =>
-  ADMIN_ACTIONS.has(action) ? 'admin' : WRITE_ACTIONS.has(action) ? 'write' : 'read';
+const scopeFor = (action: string, resource: string | undefined): Scope =>
+  ADMIN_ACTIONS.has(action) || (resource !== undefined && ADMIN_RESOURCES.has(resource))
+    ? 'admin'
+    : WRITE_ACTIONS.has(action)
+      ? 'write'
+      : 'read';
 
 export const accessControlProvider: AccessControlProvider = {
-  can: async ({ action }) => {
-    const needed = scopeFor(action);
+  can: async ({ action, resource }) => {
+    const needed = scopeFor(action, resource);
     try {
       const scopes = (await whoAmI()).scopes;
 

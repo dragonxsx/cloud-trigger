@@ -2,6 +2,7 @@ import type { Persistence } from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
 
 import { SqlRunAnalytics } from './analytics.js';
+import { SqlApiKeyRepository, SqlAuthSettingsStore, SqlUserRepository } from './auth.js';
 import { SqlDecisionLog } from './decisions.js';
 import { SqlEventSourceLeases } from './event-sources.js';
 import type { ChangeSink, ClosableEventBus } from './events.js';
@@ -19,6 +20,9 @@ export * from './events.js';
 export * from './session.js';
 export { loadRunChanged, runFromRow };
 export {
+  SqlApiKeyRepository,
+  SqlAuthSettingsStore,
+  SqlUserRepository,
   SqlDecisionLog,
   SqlEventSourceLeases,
   SqlGroupRepository,
@@ -94,6 +98,9 @@ export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersist
     eventSources: new SqlEventSourceLeases(session),
     workflows: new SqlWorkflowRepository(session),
     workflowRuns: new SqlWorkflowRunRepository(session),
+    authSettings: new SqlAuthSettingsStore(session),
+    users: new SqlUserRepository(session),
+    apiKeys: new SqlApiKeyRepository(session),
     events: options.events,
     unitOfWork: session,
     migrate: options.migrate,

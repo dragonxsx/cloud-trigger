@@ -1,4 +1,5 @@
 import type { RunAnalytics } from './analytics.js';
+import type { ApiKeyRepository, AuthSettingsStore, UserRepository } from './auth.js';
 import type { DecisionLog } from './decisions.js';
 import type { EventSourceLeases } from './event-sources.js';
 import type { EventBus } from './events.js';
@@ -26,6 +27,9 @@ export interface Persistence {
   readonly eventSources: EventSourceLeases;
   readonly workflows: WorkflowRepository;
   readonly workflowRuns: WorkflowRunRepository;
+  readonly authSettings: AuthSettingsStore;
+  readonly users: UserRepository;
+  readonly apiKeys: ApiKeyRepository;
   readonly events: StartableEventBus;
   readonly unitOfWork: UnitOfWork;
   readonly migrate: () => Promise<void>;

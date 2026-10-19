@@ -32,6 +32,9 @@ export const ALL_TABLES = [
   'event_sources',
   'workflows',
   'workflow_runs',
+  'auth_settings',
+  'users',
+  'api_keys',
 ] as const;
 
 export interface TestDatabase {

@@ -43,7 +43,6 @@ beforeAll(async () => {
   const config = loadConfig({
     DB_DRIVER: 'postgres',
     POSTGRES_URL: container.getConnectionUri(),
-    AUTH_DISABLED: 'true',
     WORKER_POLL_MS: '100',
     SCHEDULER_INTERVAL_MS: '200',
   });

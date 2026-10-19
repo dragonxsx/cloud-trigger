@@ -17,7 +17,7 @@ Self-hosted service that triggers remote endpoints on a schedule and records eve
 - **Notifications:** webhook (signed, with an `Idempotency-Key` header), Slack and email on success, failure, permanent failure or late. Delivery goes through a retried Mongo outbox.
 - **Operations:** OpenTelemetry tracing (a span per run attempt, with `traceparent` forwarded to every target), run history, live updates over SSE, a dashboard (outcomes, p50/p95 latency, late runs, top errors), a failed-runs inbox with bulk replay and dismiss, a "Why didn't it run?" explainer, YAML import and export (`/api/jobs/export`, admin scope), status badges (`/badges/jobs/<id>.svg`), an iCal feed of upcoming runs (`/calendar.ics`), Prometheus `/metrics`, and OpenAPI docs at `/docs`.
 - **MCP:** an MCP server at `/mcp` (Streamable HTTP, same API keys and OIDC scopes) lets AI agents list, create, run, pause and explain jobs, read runs and analytics, and approve workflow gates.
-- **Security:** OIDC (the UI signs in with authorization code + PKCE) or hashed API keys, with `read`/`write`/`admin` scopes. `ANONYMOUS_SCOPES=read` serves read-only wallboards. Secrets are referenced as `{{secret:NAME}}` and redacted in every response and export.
+- **Security:** sign-in is configured in the UI and stored in the database: username and password accounts (argon2), OIDC (the UI signs in with authorization code + PKCE) and hashed API keys, with `read`/`write`/`admin` scopes. Anonymous `read` access serves wallboards. A first-run wizard picks the database and creates the first admin. Secrets are referenced as `{{secret:NAME}}` and redacted in every response and export.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ How the scheduler works:
 - Each fire time gets an **idempotency key**, backed by a unique index, so a fire time can never run twice.
 - Workers claim runs under **renewable leases**. If a worker dies, the reaper requeues its runs.
 
-The storage layer sits behind ports in `packages/core`. Pick it with `DB_DRIVER`: MongoDB (default), Postgres, or SQLite for single-node installs. Every adapter passes the same contract suite in `packages/testing`.
+The storage layer sits behind ports in `packages/core`. Pick it with `DB_DRIVER`: MongoDB, Postgres, or SQLite for single-node installs. It is inferred from `MONGO_URI` or `POSTGRES_URL` when unset. Every adapter passes the same contract suite in `packages/testing`.
 
 ## Quick start
 
@@ -59,7 +59,20 @@ pnpm --filter @cloud-trigger/server start   # http://localhost:8080 (API, /docs)
 pnpm --filter @cloud-trigger/web dev        # http://localhost:5173 (UI, proxies to :8080)
 ```
 
-SSO locally: `docker compose -f deploy/docker-compose.yml --profile auth up -d` starts Keycloak on :8081 (user `demo`/`demo`). Then set the `OIDC_*` variables shown in `.env.example`.
+### First run
+
+Open the UI. Until setup is done, every page redirects to the wizard at `/setup`:
+
+1. **Setup token.** The server logs a one-time token (`Setup required: open /setup and enter the setup token …`). Set `SETUP_TOKEN` to choose it yourself; you must when more than one replica serves the API.
+2. **Database.** Without a usable database the server serves only the wizard. Test a SQLite, Postgres or MongoDB connection there, copy the env vars it prints, and restart. If the configured database is only unreachable, the server keeps retrying and starts once it answers.
+3. **Sign-in methods.** Passwords are always on for the admin. Optionally enable OIDC (issuer, UI client id, audience, scope mapping) and anonymous access.
+4. **Admin account.** The wizard signs you in as this admin when you finish.
+
+Afterwards, admins change sign-in methods, users and API keys under **Settings**. Until setup is finished every API, MCP and feed request answers `503 SETUP_REQUIRED`. Locked out? `pnpm --filter @cloud-trigger/server reset-admin <username>` (or `node dist/cli.js reset-admin <username>` in the image) sets a new random password, re-enables the account, grants it `admin` and turns password sign-in back on if it was off.
+
+SSO locally: `docker compose -f deploy/docker-compose.yml --profile auth up -d` starts Keycloak on :8081 (user `demo`/`demo`). In Settings → Sign-in methods, enable OIDC with issuer `http://localhost:8081/realms/cloud-trigger`, audience `cloud-trigger` and UI client id `cloud-trigger-web`.
+
+> **Upgrading:** `AUTH_DISABLED`, `API_KEYS`, `ANONYMOUS_SCOPES` and the `OIDC_*` variables were removed and are ignored. After upgrading, the wizard runs once: re-create your API keys and OIDC settings in the UI. `DB_DRIVER` no longer defaults to `mongo`.
 
 Everything in one container: `docker compose -f deploy/docker-compose.yml --profile app up --build`.
 
@@ -68,12 +81,12 @@ Kubernetes:
 ```bash
 helm install ct deploy/helm/cloud-trigger \
   --set secrets.values.MONGO_URI='mongodb://…/?replicaSet=rs0' \
-  --set secrets.values.API_KEYS='ci:<sha256>:write'
+  --set secrets.values.SETUP_TOKEN="$(openssl rand -hex 16)"
 ```
 
 The chart deploys `api`, `scheduler` and `worker` as separate Deployments, with an HPA on workers. Set `combined.enabled=true` to run a single Deployment instead.
 
-API keys are stored as hashes. Generate one with: `printf %s "$KEY" | shasum -a 256`.
+API keys are created in Settings → API keys. The key is shown once, and only its SHA-256 hash is stored.
 
 ## Development
 

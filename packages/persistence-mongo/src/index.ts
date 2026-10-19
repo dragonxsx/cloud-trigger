@@ -2,6 +2,14 @@ import { type Persistence, ResultAsync, nonAtomicUnitOfWork, toError } from '@cl
 import { type Db, MongoClient } from 'mongodb';
 
 import { MongoRunAnalytics, type RunMetricDocument } from './analytics.js';
+import {
+  type ApiKeyDocument,
+  type AuthSettingsDocument,
+  MongoApiKeyRepository,
+  MongoAuthSettingsStore,
+  MongoUserRepository,
+  type UserDocument,
+} from './auth.js';
 import { type DecisionDocument, MongoDecisionLog } from './decisions.js';
 import type { JobDocument, RunDocument } from './documents.js';
 import { type EventSourceLeaseDocument, MongoEventSourceLeases } from './event-sources.js';
@@ -23,6 +31,9 @@ import {
 } from './workflows.js';
 
 export {
+  MongoApiKeyRepository,
+  MongoAuthSettingsStore,
+  MongoUserRepository,
   MongoChangeStreamEventBus,
   MongoEventSourceLeases,
   MongoDecisionLog,
@@ -47,6 +58,7 @@ export interface MongoPersistenceOptions {
   readonly metricsRetentionDays?: number;
   readonly decisionRetentionDays?: number;
   readonly onEventBusError?: (error: unknown) => void;
+  readonly serverSelectionTimeoutMs?: number | undefined;
 }
 
 export type MongoPersistence = Persistence;
@@ -105,7 +117,13 @@ async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
 export async function createMongoPersistence(
   options: MongoPersistenceOptions,
 ): Promise<MongoPersistence> {
-  const clientOptions = { ignoreUndefined: true, appName: 'cloud-trigger' } as const;
+  const clientOptions = {
+    ignoreUndefined: true,
+    appName: 'cloud-trigger',
+    ...(options.serverSelectionTimeoutMs !== undefined && {
+      serverSelectionTimeoutMS: options.serverSelectionTimeoutMs,
+    }),
+  };
   const client = await MongoClient.connect(options.uri, clientOptions);
   const analyticsClient = options.analyticsUri
     ? await MongoClient.connect(options.analyticsUri, clientOptions)
@@ -124,6 +142,8 @@ export async function createMongoPersistence(
   const workflowRuns = db.collection<WorkflowRunDocument>(
     MongoWorkflowRunRepository.collectionName,
   );
+  const users = db.collection<UserDocument>(MongoUserRepository.collectionName);
+  const apiKeys = db.collection<ApiKeyDocument>(MongoApiKeyRepository.collectionName);
 
   return {
     jobs: new MongoJobRepository(jobs),
@@ -145,6 +165,11 @@ export async function createMongoPersistence(
     ),
     workflows: new MongoWorkflowRepository(workflows),
     workflowRuns: new MongoWorkflowRunRepository(workflowRuns),
+    authSettings: new MongoAuthSettingsStore(
+      db.collection<AuthSettingsDocument>(MongoAuthSettingsStore.collectionName),
+    ),
+    users: new MongoUserRepository(users),
+    apiKeys: new MongoApiKeyRepository(apiKeys),
     events,
     unitOfWork: nonAtomicUnitOfWork,
     async migrate() {
@@ -153,6 +178,8 @@ export async function createMongoPersistence(
       await MongoGroupRepository.ensureIndexes(groups);
       await MongoWorkflowRepository.ensureIndexes(workflows);
       await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
+      await MongoUserRepository.ensureIndexes(users);
+      await MongoApiKeyRepository.ensureIndexes(apiKeys);
       await MongoDecisionLog.ensureIndexes(db, options.decisionRetentionDays ?? 14);
       await MongoRunAnalytics.ensureCollection(analyticsDb, options.metricsRetentionDays ?? 90);
     },

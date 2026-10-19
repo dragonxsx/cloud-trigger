@@ -1,4 +1,12 @@
 import {
+  type ApiKey,
+  AuthMethods,
+  type AuthMethodsInput,
+  type AuthSettings,
+  type Scope,
+  type User,
+  newApiKeyId,
+  newUserId,
   type Workflow,
   type WorkflowRun,
   WorkflowSpec,
@@ -111,3 +119,34 @@ export const makeWorkflowRun = (
     idempotencyKey: p.key ?? null,
     now: p.now ?? T0,
   }).run;
+
+export const makeAuthSettings = (methods: AuthMethodsInput = {}): AuthSettings => ({
+  ...AuthMethods.parse(methods),
+  version: 1,
+  sessionSecret: 'x'.repeat(48),
+  completedAt: T0,
+  updatedAt: T0,
+});
+
+export const makeUser = (
+  p: { username?: string; scopes?: Scope[]; disabled?: boolean } = {},
+): User => ({
+  id: newUserId(),
+  username: p.username ?? 'admin',
+  passwordHash: '$argon2id$fake',
+  scopes: p.scopes ?? ['admin'],
+  disabled: p.disabled ?? false,
+  tokenVersion: 0,
+  version: 1,
+  createdAt: T0,
+  updatedAt: T0,
+});
+
+export const makeApiKey = (p: { name?: string; hash?: string; scopes?: Scope[] } = {}): ApiKey => ({
+  id: newApiKeyId(),
+  name: p.name ?? 'ci',
+  hash: p.hash ?? 'a'.repeat(64),
+  prefix: 'ct_abcde',
+  scopes: p.scopes ?? ['write'],
+  createdAt: T0,
+});

@@ -48,12 +48,6 @@ config:
   DECISION_RETENTION_DAYS: "14"
   BADGES_PUBLIC: "false"
   PUBLIC_URL: ""
-  OIDC_ISSUER: ""
-  OIDC_AUDIENCE: ""
-  OIDC_JWKS_URI: ""
-  OIDC_CLIENT_ID: ""
-  OIDC_UI_SCOPE: ""
-  ANONYMOUS_SCOPES: ""
 
 # Sensitive settings. Prefer `existingSecret` in production (e.g. managed by External Secrets).
 secrets:
@@ -61,8 +55,9 @@ secrets:
   values:
     MONGO_URI: ""
     POSTGRES_URL: ""
-    API_KEYS: ""
     CALENDAR_TOKEN_SECRET: ""
+    # First-run /setup token; set it when running more than one API replica.
+    SETUP_TOKEN: ""
 
 # Job-level secrets referenced as {{secret:NAME}}; mounted as files under /var/run/secrets/cloud-trigger.
 jobSecrets:

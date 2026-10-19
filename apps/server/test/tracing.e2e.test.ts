@@ -62,7 +62,6 @@ beforeAll(async () => {
   const config = loadConfig({
     DB_DRIVER: 'sqlite',
     SQLITE_PATH: join(dir, 'app.db'),
-    AUTH_DISABLED: 'true',
     WORKER_POLL_MS: '50',
   });
   ({ app } = await createTestApp(config, {

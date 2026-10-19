@@ -1,5 +1,13 @@
 import {
+  ApiKey,
+  ApiKeyId,
+  AuthMethods,
   ConfigIssue,
+  Password,
+  Scope,
+  User,
+  UserId,
+  Username,
   Group,
   GroupId,
   GroupSpec,
@@ -23,10 +31,7 @@ import {
 } from '@cloud-trigger/core';
 import { z } from 'zod';
 
-export { ConfigIssue, LintIssue, ProviderKind, SchedulePreview };
-
-export const Scope = z.enum(['read', 'write', 'admin']);
-export type Scope = z.output<typeof Scope>;
+export { AuthMethods, ConfigIssue, LintIssue, ProviderKind, SchedulePreview, Scope };
 
 export const QueryDate = z.iso.datetime({ offset: true }).transform((s) => new Date(s));
 
@@ -171,6 +176,8 @@ export const TopErrorsQuery = AnalyticsRange.extend({ limit: z.int().min(1).max(
 export const TopError = z.object({ errorCode: z.string(), jobId: JobId, count: z.number() });
 
 export const AuthConfig = z.object({
+  setupRequired: z.boolean().describe('True until the first-run wizard has been completed.'),
+  local: z.boolean().describe('Whether username and password sign-in is available.'),
   oidc: z
     .object({ authority: z.url(), clientId: z.string(), scope: z.string() })
     .nullable()
@@ -181,8 +188,96 @@ export const AuthConfig = z.object({
 
 export const Me = z.object({
   subject: z.string(),
-  via: z.enum(['oidc', 'api_key', 'anonymous', 'disabled']),
+  name: z.string(),
+  via: z.enum(['local', 'oidc', 'api_key', 'anonymous']),
   scopes: z.array(Scope),
+});
+
+export const LoginInput = z.object({ username: z.string().min(1), password: z.string().min(1) });
+export const SessionToken = z.object({ token: z.string(), expiresAt: z.date() });
+export const ChangePasswordInput = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: Password,
+});
+
+export const DatabaseDriver = z.enum(['mongo', 'postgres', 'sqlite']);
+export const SetupStage = z.enum(['database', 'auth', 'done']);
+export const SetupStatus = z.object({
+  stage: SetupStage,
+  database: z.object({
+    driver: DatabaseDriver.nullable(),
+    issues: z.array(ConfigIssue).describe('Why the configured database cannot be used, if so.'),
+  }),
+});
+
+const SetupToken = z.string().min(1).describe('The one-time setup token from the server log.');
+export const SetupTokenInput = z.object({ token: SetupToken });
+
+export const DatabaseSettings = z.discriminatedUnion('driver', [
+  z.object({
+    driver: z.literal('mongo'),
+    uri: z.string().min(1).meta({ title: 'Connection string' }),
+    database: z.string().min(1).default('cloud_trigger'),
+  }),
+  z.object({ driver: z.literal('postgres'), url: z.string().min(1) }),
+  z.object({
+    driver: z.literal('sqlite'),
+    path: z.string().min(1).default('./data/cloud-trigger.db'),
+  }),
+]);
+export const DatabaseTestInput = z.object({ token: SetupToken, database: DatabaseSettings });
+export const DatabaseTestResult = z.object({
+  ok: z.boolean(),
+  error: z.string().nullable(),
+  env: z
+    .record(z.string(), z.string())
+    .describe('Environment variables that select this database.'),
+});
+
+export const OidcTestInput = z.object({ token: SetupToken.optional(), issuer: z.url() });
+export const OidcTestResult = z.object({
+  ok: z.boolean(),
+  error: z.string().nullable(),
+  jwksUri: z.string().nullable(),
+});
+
+export const SetupCompleteInput = z.object({
+  token: SetupToken,
+  admin: z.object({ username: Username, password: Password }),
+  methods: AuthMethods,
+});
+
+export const AuthSettingsView = AuthMethods.extend({
+  version: z.int().min(1),
+  updatedAt: z.date(),
+});
+export const UpdateAuthSettingsInput = AuthMethods.extend({ expectedVersion: z.int().min(1) });
+
+export const UserView = User.omit({ passwordHash: true, tokenVersion: true });
+export const UserPage = page(UserView);
+export const UserIdParam = z.object({ id: UserId });
+export const UserListQuery = PageQuery.extend({ search: z.string().optional() });
+export const CreateUserInput = z.object({
+  username: Username,
+  password: Password,
+  scopes: z.array(Scope).min(1),
+});
+export const UpdateUserInput = z.object({
+  id: UserId,
+  expectedVersion: z.int().min(1),
+  scopes: z.array(Scope).min(1),
+  disabled: z.boolean(),
+});
+export const ResetPasswordInput = z.object({ id: UserId, password: Password });
+
+export const ApiKeyView = ApiKey.omit({ hash: true });
+export const ApiKeyIdParam = z.object({ id: ApiKeyId });
+export const CreateApiKeyInput = z.object({
+  name: z.string().trim().min(1).max(100),
+  scopes: z.array(Scope).min(1),
+});
+export const CreatedApiKey = ApiKeyView.extend({
+  key: z.string().describe('The key itself. It is shown only once.'),
 });
 
 export const WorkflowIdParam = z.object({ id: WorkflowId });

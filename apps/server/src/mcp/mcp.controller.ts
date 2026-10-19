@@ -3,7 +3,7 @@ import { All, Controller, Inject, Req, Res } from '@nestjs/common';
 import type { Request, Response } from 'express';
 
 import { ApiRouter } from '../api/app-router.js';
-import { Authenticator } from '../auth/authenticator.js';
+import { Authenticator, isAuthFailure } from '../auth/authenticator.js';
 import { headersOf } from '../common/http/headers.js';
 import { buildMcpServer } from './mcp-server.js';
 import { TransportBridge } from './transport-bridge.js';
@@ -19,7 +19,16 @@ export class McpController {
   async handle(@Req() req: Request, @Res() res: Response): Promise<void> {
     const headers = headersOf(req);
     const principal = await this.authenticator.authenticate(headers);
-    if (principal === 'missing' || principal === 'invalid') {
+    if (principal === 'setup_required') {
+      res.status(503).json({
+        jsonrpc: '2.0',
+        error: { code: -32002, message: 'Finish the setup wizard first' },
+        id: null,
+      });
+
+      return;
+    }
+    if (isAuthFailure(principal)) {
       res
         .status(401)
         .setHeader('WWW-Authenticate', 'Bearer')

@@ -5,6 +5,7 @@ import { experimental_ZodSmartCoercionPlugin as ZodSmartCoercionPlugin } from '@
 
 import { factory, factoryProvider } from '../common/tokens.js';
 import { LOGGER } from '../infra/logging/logging.module.js';
+import { AccessModule } from './access/access.module.js';
 import { AnalyticsModule } from './analytics/analytics.module.js';
 import { APP_ROUTER_PARTS, ApiRouter, composeAppRouter } from './app-router.js';
 import { CalendarModule } from './calendar/calendar.module.js';
@@ -14,21 +15,25 @@ import { JobsModule } from './jobs/jobs.module.js';
 import { OpenApiController } from './openapi.controller.js';
 import { RunsModule } from './runs/runs.module.js';
 import { SessionModule } from './session/session.module.js';
+import { SetupModule } from './setup/setup.module.js';
 import { WorkflowsModule } from './workflows/workflows.module.js';
+
+export const orpcRootModule = () =>
+  ORPCModule.forRootAsync(
+    factory([LOGGER], (logger) => ({
+      context: {},
+      plugins: [new RequestHeadersPlugin(), new ZodSmartCoercionPlugin()],
+      interceptors: [
+        onError((error) => {
+          logger.debug('API procedure error', { err: error });
+        }),
+      ],
+    })),
+  );
 
 @Module({
   imports: [
-    ORPCModule.forRootAsync(
-      factory([LOGGER], (logger) => ({
-        context: {},
-        plugins: [new RequestHeadersPlugin(), new ZodSmartCoercionPlugin()],
-        interceptors: [
-          onError((error) => {
-            logger.debug('API procedure error', { err: error });
-          }),
-        ],
-      })),
-    ),
+    orpcRootModule(),
     JobsModule,
     RunsModule,
     GroupsModule,
@@ -37,6 +42,8 @@ import { WorkflowsModule } from './workflows/workflows.module.js';
     AnalyticsModule,
     CatalogModule,
     SessionModule,
+    SetupModule,
+    AccessModule,
   ],
   controllers: [OpenApiController],
   providers: [

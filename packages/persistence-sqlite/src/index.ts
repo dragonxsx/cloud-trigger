@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { Mutex } from '@cloud-trigger/core';
 import {
   type CompiledQuery,
   InProcessEventBus,
@@ -51,20 +52,6 @@ const executorFor = (db: Database.Database): RawExecutor => ({
   },
   run: (query) => Promise.resolve(db.prepare(query.text).run(...params(query)).changes),
 });
-
-class Mutex {
-  #tail: Promise<unknown> = Promise.resolve();
-
-  lock<T>(work: () => Promise<T>): Promise<T> {
-    const run = this.#tail.then(work);
-    this.#tail = run.then(
-      () => undefined,
-      () => undefined,
-    );
-
-    return run;
-  }
-}
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
 const GUARD_KEY = 'sqlite:single-node';

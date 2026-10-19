@@ -11,3 +11,4 @@ export * from './decision.js';
 export * from './status-palette.js';
 export * from './workflow.js';
 export * from './workflow-run.js';
+export * from './auth.js';

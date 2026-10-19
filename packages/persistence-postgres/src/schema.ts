@@ -223,3 +223,31 @@ export const workflowRuns = pgTable(
     index('workflow_runs_queued').on(t.hasQueued),
   ],
 );
+
+export const authSettings = pgTable('auth_settings', {
+  id: text('id').primaryKey(),
+  version: integer('version').notNull(),
+  doc: jsonb('doc').notNull(),
+});
+
+export const users = pgTable(
+  'users',
+  {
+    id: text('id').primaryKey(),
+    usernameLower: text('username_lower').notNull(),
+    activeAdmin: integer('active_admin').notNull(),
+    version: integer('version').notNull(),
+    doc: jsonb('doc').notNull(),
+  },
+  (t) => [uniqueIndex('users_username').on(t.usernameLower)],
+);
+
+export const apiKeys = pgTable(
+  'api_keys',
+  {
+    id: text('id').primaryKey(),
+    hash: text('hash').notNull(),
+    doc: jsonb('doc').notNull(),
+  },
+  (t) => [uniqueIndex('api_keys_hash').on(t.hash)],
+);

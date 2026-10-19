@@ -6,6 +6,7 @@ import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
 
 import { accessToken } from './oidc';
+import { passwordSession } from './session';
 import { bestEffortStorage } from './storage';
 
 const API_KEY = 'cloud-trigger.api-key';
@@ -20,7 +21,7 @@ export type ApiClient = JsonifiedClient<ContractRouterClient<Contract, ClientRet
 const link = new OpenAPILink<ClientRetryPluginContext>(contract, {
   url: window.location.origin,
   headers: async () => {
-    const token = await accessToken();
+    const token = (await accessToken()) ?? passwordSession.current();
     if (token) {
       return { authorization: `Bearer ${token}` };
     }
@@ -45,3 +46,9 @@ export type WorkflowDto = Out<ApiClient['workflows']['get']>;
 export type WorkflowRunDto = Out<ApiClient['workflowRuns']['get']>;
 export type WorkflowSpecDto = Parameters<ApiClient['workflows']['create']>[0];
 export type NodeStatusDto = WorkflowRunDto['nodes'][string]['status'];
+export type SetupStatusDto = Out<ApiClient['setup']['status']>;
+export type AuthSettingsDto = Out<ApiClient['authSettings']['get']>;
+export type UserDto = Out<ApiClient['users']['get']>;
+export type ApiKeyDto = Out<ApiClient['apiKeys']['list']>[number];
+export type CreatedApiKeyDto = Out<ApiClient['apiKeys']['create']>;
+export type AuthMethodsInput = Parameters<ApiClient['setup']['complete']>[0]['methods'];

@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-import { createHash } from 'node:crypto';
 import { Server, createServer } from 'node:http';
 
 import { type Contract, contract } from '@cloud-trigger/api-contract';
@@ -16,11 +15,17 @@ import { z } from 'zod';
 
 import { loadConfig } from '../src/config/config.js';
 import { TransportBridge } from '../src/mcp/transport-bridge.js';
-import { type TestApp, createTestApp } from './support/app.js';
+import { type SeedAuth, type TestApp, createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
-const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const API_KEYS: SeedAuth = {
+  apiKeys: [
+    { name: 'admin', key: 'a-key', scopes: ['admin'] },
+    { name: 'writer', key: 'w-key', scopes: ['write'] },
+    { name: 'reader', key: 'r-key', scopes: ['read'] },
+  ],
+};
 let container: StartedMongoDBContainer;
 let app: INestApplication;
 let persistence: TestApp['persistence'];
@@ -74,13 +79,8 @@ beforeAll(async () => {
     SCHEDULER_INTERVAL_MS: '200',
     NOTIFY_POLL_MS: '100',
     CALENDAR_TOKEN_SECRET: 'calendar-secret-calendar-secret-calendar-secret',
-    API_KEYS: [
-      `admin:${sha256('a-key')}:admin`,
-      `writer:${sha256('w-key')}:write`,
-      `reader:${sha256('r-key')}:read`,
-    ].join(','),
   });
-  ({ app, persistence } = await createTestApp(config));
+  ({ app, persistence } = await createTestApp(config, { auth: API_KEYS }));
   app.enableShutdownHooks();
   await app.init();
   const http: unknown = app.getHttpServer();

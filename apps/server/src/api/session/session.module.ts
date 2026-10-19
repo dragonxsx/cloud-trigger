@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 
+import { AccessService } from '../../auth/access-service.js';
+import { AuthSettingsCache } from '../../auth/settings-cache.js';
 import { factoryProvider } from '../../common/tokens.js';
-import { ConfigService } from '../../config/config.module.js';
+import { PERSISTENCE } from '../../infra/persistence/persistence.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
 import { SessionController } from './session.controller.js';
 import { SessionRouter, sessionHandlers } from './session.router.js';
@@ -12,8 +14,9 @@ import { SessionRouter, sessionHandlers } from './session.router.js';
   providers: [
     factoryProvider(
       SessionRouter,
-      [ORPC_API, ConfigService],
-      (api, { values }) => new SessionRouter(sessionHandlers({ api, config: values })),
+      [ORPC_API, AccessService, AuthSettingsCache, PERSISTENCE],
+      (api, access, settings, { apiKeys }) =>
+        new SessionRouter(sessionHandlers({ api, access, settings, apiKeys })),
     ),
   ],
   exports: [SessionRouter],

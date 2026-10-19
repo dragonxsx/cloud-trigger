@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-import { createHash } from 'node:crypto';
 import { Server, createServer } from 'node:http';
 
 import { type Contract, contract } from '@cloud-trigger/api-contract';
@@ -16,7 +15,6 @@ import { createTestApp } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
-const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 let container: StartedMongoDBContainer;
 let app: INestApplication;
 let target: Server;
@@ -57,9 +55,15 @@ beforeAll(async () => {
     MONGO_DB: 'e2e',
     WORKER_POLL_MS: '100',
     SCHEDULER_INTERVAL_MS: '200',
-    API_KEYS: `writer:${sha256('w-key')}:write,reader:${sha256('r-key')}:read`,
   });
-  ({ app } = await createTestApp(config));
+  ({ app } = await createTestApp(config, {
+    auth: {
+      apiKeys: [
+        { name: 'writer', key: 'w-key', scopes: ['write'] },
+        { name: 'reader', key: 'r-key', scopes: ['read'] },
+      ],
+    },
+  }));
   app.enableShutdownHooks();
   await app.init();
   const http: unknown = app.getHttpServer();

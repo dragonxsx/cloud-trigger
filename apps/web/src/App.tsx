@@ -25,14 +25,21 @@ import {
   IconCalendarTime,
   IconFolders,
   IconHierarchy2,
+  IconKey,
   IconLayoutDashboard,
   IconMoon,
+  IconSettings,
+  IconShieldLock,
   IconSun,
+  IconUserCircle,
+  IconUsers,
 } from '@tabler/icons-react';
+import { useQuery } from '@tanstack/react-query';
 import { Suspense, useEffect } from 'react';
-import { BrowserRouter, Link, Outlet, Route, Routes } from 'react-router';
+import { BrowserRouter, Link, Navigate, Outlet, Route, Routes } from 'react-router';
 
 import { BrandTitle } from './components/Brand';
+import { client } from './lib/api';
 import { lazyNamed } from './lib/lazy';
 import { accessControlProvider, authProvider } from './providers/auth-provider';
 import { dataProvider } from './providers/data-provider';
@@ -57,6 +64,11 @@ const WorkflowShow = lazyNamed(() => import('./pages/workflows/show'), 'Workflow
 const WorkflowRunShow = lazyNamed(() => import('./pages/workflows/run'), 'WorkflowRunShow');
 const Login = lazyNamed(() => import('./pages/Login'), 'Login');
 const AuthCallback = lazyNamed(() => import('./pages/AuthCallback'), 'AuthCallback');
+const SetupWizard = lazyNamed(() => import('./pages/setup/Wizard'), 'SetupWizard');
+const AuthSettingsPage = lazyNamed(() => import('./pages/settings/auth'), 'AuthSettingsPage');
+const UserList = lazyNamed(() => import('./pages/settings/users'), 'UserList');
+const ApiKeyList = lazyNamed(() => import('./pages/settings/api-keys'), 'ApiKeyList');
+const AccountPage = lazyNamed(() => import('./pages/Account'), 'AccountPage');
 
 const PageLoader = () => (
   <Center h={240}>
@@ -65,6 +77,23 @@ const PageLoader = () => (
 );
 
 const liveProvider = createSharedRunStreamLiveProvider();
+
+function SetupGate() {
+  const status = useQuery({
+    queryKey: ['setup', 'status'],
+    queryFn: () => client.setup.status({}),
+    staleTime: Infinity,
+    retry: false,
+  });
+  if (status.isLoading) {
+    return <PageLoader />;
+  }
+  if (status.data && status.data.stage !== 'done') {
+    return <Navigate to="/setup" replace />;
+  }
+
+  return <Outlet />;
+}
 
 const Sider = () => (
   <ThemedSider
@@ -94,10 +123,16 @@ function HeaderActions() {
         background: 'var(--ct-surface)',
       }}
     >
-      {identity.data?.via === 'anonymous' && (
+      {identity.data?.via === 'anonymous' ? (
         <Button component={Link} to="/login" size="xs" variant="light" mr="xs">
-          Viewing read-only · Sign in
+          Viewing as guest · Sign in
         </Button>
+      ) : (
+        <Tooltip label="Your account">
+          <ActionIcon component={Link} to="/account" variant="subtle" aria-label="Your account">
+            <IconUserCircle size={18} />
+          </ActionIcon>
+        </Tooltip>
       )}
       <Tooltip label="API reference">
         <ActionIcon
@@ -184,6 +219,29 @@ export function App() {
                   show: '/groups/show/:id',
                   meta: { label: 'Groups', icon: <IconFolders size={18} />, canDelete: true },
                 },
+                {
+                  name: 'settings',
+                  meta: { label: 'Settings', icon: <IconSettings size={18} /> },
+                },
+                {
+                  name: 'auth-settings',
+                  list: '/settings/auth',
+                  meta: {
+                    label: 'Sign-in methods',
+                    parent: 'settings',
+                    icon: <IconShieldLock size={18} />,
+                  },
+                },
+                {
+                  name: 'users',
+                  list: '/settings/users',
+                  meta: { label: 'Users', parent: 'settings', icon: <IconUsers size={18} /> },
+                },
+                {
+                  name: 'api-keys',
+                  list: '/settings/api-keys',
+                  meta: { label: 'API keys', parent: 'settings', icon: <IconKey size={18} /> },
+                },
               ]}
               options={{
                 liveMode: 'auto',
@@ -195,58 +253,74 @@ export function App() {
             >
               <Routes>
                 <Route
-                  path="/auth/callback"
+                  path="/setup"
                   element={
                     <Suspense fallback={<PageLoader />}>
-                      <AuthCallback />
+                      <SetupWizard />
                     </Suspense>
                   }
                 />
-                <Route
-                  element={
-                    <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
-                      <ThemedLayout Title={BrandTitle} Sider={Sider} Header={HeaderActions}>
-                        <Suspense fallback={<PageLoader />}>
-                          <Outlet />
-                        </Suspense>
-                      </ThemedLayout>
-                    </Authenticated>
-                  }
-                >
-                  <Route index element={<Dashboard />} />
-                  <Route path="/jobs">
-                    <Route index element={<JobList />} />
-                    <Route path="create" element={<JobCreate />} />
-                    <Route path="edit/:id" element={<JobEdit />} />
-                    <Route path="show/:id" element={<JobShow />} />
+                <Route element={<SetupGate />}>
+                  <Route
+                    path="/auth/callback"
+                    element={
+                      <Suspense fallback={<PageLoader />}>
+                        <AuthCallback />
+                      </Suspense>
+                    }
+                  />
+                  <Route
+                    element={
+                      <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
+                        <ThemedLayout Title={BrandTitle} Sider={Sider} Header={HeaderActions}>
+                          <Suspense fallback={<PageLoader />}>
+                            <Outlet />
+                          </Suspense>
+                        </ThemedLayout>
+                      </Authenticated>
+                    }
+                  >
+                    <Route index element={<Dashboard />} />
+                    <Route path="/jobs">
+                      <Route index element={<JobList />} />
+                      <Route path="create" element={<JobCreate />} />
+                      <Route path="edit/:id" element={<JobEdit />} />
+                      <Route path="show/:id" element={<JobShow />} />
+                    </Route>
+                    <Route path="/runs">
+                      <Route index element={<RunList />} />
+                      <Route path="show/:id" element={<RunShow />} />
+                    </Route>
+                    <Route path="/workflows">
+                      <Route index element={<WorkflowList />} />
+                      <Route path="create" element={<WorkflowCreate />} />
+                      <Route path="edit/:id" element={<WorkflowEdit />} />
+                      <Route path="show/:id" element={<WorkflowShow />} />
+                      <Route path="runs/:id" element={<WorkflowRunShow />} />
+                    </Route>
+                    <Route path="/groups">
+                      <Route index element={<GroupList />} />
+                      <Route path="create" element={<GroupCreate />} />
+                      <Route path="edit/:id" element={<GroupEdit />} />
+                      <Route path="show/:id" element={<GroupShow />} />
+                    </Route>
+                    <Route path="/settings">
+                      <Route path="auth" element={<AuthSettingsPage />} />
+                      <Route path="users" element={<UserList />} />
+                      <Route path="api-keys" element={<ApiKeyList />} />
+                    </Route>
+                    <Route path="/account" element={<AccountPage />} />
+                    <Route path="*" element={<ErrorComponent />} />
                   </Route>
-                  <Route path="/runs">
-                    <Route index element={<RunList />} />
-                    <Route path="show/:id" element={<RunShow />} />
-                  </Route>
-                  <Route path="/workflows">
-                    <Route index element={<WorkflowList />} />
-                    <Route path="create" element={<WorkflowCreate />} />
-                    <Route path="edit/:id" element={<WorkflowEdit />} />
-                    <Route path="show/:id" element={<WorkflowShow />} />
-                    <Route path="runs/:id" element={<WorkflowRunShow />} />
-                  </Route>
-                  <Route path="/groups">
-                    <Route index element={<GroupList />} />
-                    <Route path="create" element={<GroupCreate />} />
-                    <Route path="edit/:id" element={<GroupEdit />} />
-                    <Route path="show/:id" element={<GroupShow />} />
-                  </Route>
-                  <Route path="*" element={<ErrorComponent />} />
+                  <Route
+                    path="/login"
+                    element={
+                      <Suspense fallback={<PageLoader />}>
+                        <Login />
+                      </Suspense>
+                    }
+                  />
                 </Route>
-                <Route
-                  path="/login"
-                  element={
-                    <Suspense fallback={<PageLoader />}>
-                      <Login />
-                    </Suspense>
-                  }
-                />
               </Routes>
               <UnsavedChangesNotifier />
             </Refine>

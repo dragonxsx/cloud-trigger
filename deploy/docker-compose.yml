@@ -22,7 +22,7 @@ services:
     environment:
       MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
       APP_ROLE: all
-      AUTH_DISABLED: "true"
+      SETUP_TOKEN: local-setup-token
     ports: ["8080:8080"]
 
   keycloak:

@@ -22,6 +22,9 @@ const TABLES = [
   'event_sources',
   'workflows',
   'workflow_runs',
+  'auth_settings',
+  'users',
+  'api_keys',
 ];
 
 const dir = mkdtempSync(join(tmpdir(), 'ct-sqlite-'));

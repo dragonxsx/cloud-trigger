@@ -18,6 +18,9 @@ const TABLES = [
   'event_sources',
   'workflows',
   'workflow_runs',
+  'auth_settings',
+  'users',
+  'api_keys',
 ];
 
 let container: StartedPostgreSqlContainer;
