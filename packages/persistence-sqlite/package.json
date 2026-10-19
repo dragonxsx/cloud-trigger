@@ -9,13 +9,18 @@
       "@cloud-trigger/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@cloud-trigger/source": "./src/testing.ts",
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "pnpm --filter @cloud-trigger/persistence-sql build && drizzle-kit generate"
   },
   "files": [
     "dist",

@@ -3,6 +3,7 @@ import {
   type EventBus,
   JobId,
   type JobChangedEvent,
+  LocalEventHub,
   type Unsubscribe,
 } from '@cloud-trigger/core';
 
@@ -14,24 +15,6 @@ export interface ChangeSink {
 export interface ClosableEventBus extends EventBus {
   readonly start: () => void;
   readonly close: () => Promise<void>;
-}
-
-export class LocalEventHub {
-  readonly #handlers = new Set<(event: DomainEvent) => void>();
-
-  emit(event: DomainEvent): void {
-    for (const handler of this.#handlers) {
-      handler(event);
-    }
-  }
-
-  subscribe(handler: (event: DomainEvent) => void): Unsubscribe {
-    this.#handlers.add(handler);
-
-    return () => {
-      this.#handlers.delete(handler);
-    };
-  }
 }
 
 export class InProcessEventBus implements ClosableEventBus, ChangeSink {

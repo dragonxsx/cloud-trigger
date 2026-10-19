@@ -3,8 +3,10 @@ import {
   type EventBus,
   JobId,
   type JobChangedEvent,
+  LocalEventHub,
   Run,
   type Unsubscribe,
+  isLocalOnlyEvent,
 } from '@cloud-trigger/core';
 import type { ChangeStream, Collection, Document } from 'mongodb';
 import { z } from 'zod';
@@ -28,11 +30,6 @@ const JOB_CHANGE_FOR_OPERATION = {
   delete: 'deleted',
 } as const satisfies Record<z.output<typeof JobOperation>, JobChangedEvent['change']>;
 
-const LOCAL_ONLY_JOB_CHANGES: ReadonlySet<JobChangedEvent['change']> = new Set([
-  'paused',
-  'resumed',
-]);
-
 const RUN_CHANGES_EXCEPT_HEARTBEATS: Document[] = [
   {
     $match: {
@@ -45,7 +42,7 @@ const RUN_CHANGES_EXCEPT_HEARTBEATS: Document[] = [
 ];
 
 export class MongoChangeStreamEventBus implements EventBus {
-  readonly #handlers = new Set<(event: DomainEvent) => void>();
+  readonly #hub = new LocalEventHub();
   readonly #streams: ChangeStream[] = [];
   #closed = false;
 
@@ -66,7 +63,7 @@ export class MongoChangeStreamEventBus implements EventBus {
         const { _id, ...rest } = parsed.data.fullDocument;
         const run = Run.safeParse({ ...rest, id: _id });
         if (run.success) {
-          this.#emit({ type: 'run.changed', run: run.data });
+          this.#hub.emit({ type: 'run.changed', run: run.data });
         }
       },
     );
@@ -77,7 +74,7 @@ export class MongoChangeStreamEventBus implements EventBus {
         if (!parsed.success) {
           return;
         }
-        this.#emit({
+        this.#hub.emit({
           type: 'job.changed',
           jobId: parsed.data.documentKey._id,
           change: JOB_CHANGE_FOR_OPERATION[parsed.data.operationType],
@@ -87,26 +84,18 @@ export class MongoChangeStreamEventBus implements EventBus {
   }
 
   async publish(event: DomainEvent): Promise<void> {
-    if (event.type === 'job.changed' && LOCAL_ONLY_JOB_CHANGES.has(event.change)) {
-      this.#emit(event);
+    if (isLocalOnlyEvent(event)) {
+      this.#hub.emit(event);
     }
   }
 
   subscribe(handler: (event: DomainEvent) => void): Unsubscribe {
-    this.#handlers.add(handler);
-
-    return () => this.#handlers.delete(handler);
+    return this.#hub.subscribe(handler);
   }
 
   async close(): Promise<void> {
     this.#closed = true;
     await Promise.all(this.#streams.map((s) => s.close()));
-  }
-
-  #emit(event: DomainEvent): void {
-    for (const handler of this.#handlers) {
-      handler(event);
-    }
   }
 
   #watch(open: () => ChangeStream, onChange: (change: unknown) => void): void {

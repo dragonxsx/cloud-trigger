@@ -10,12 +10,15 @@ import {
   type TimeBucket,
   type TimeseriesPoint,
   type TopError,
+  statusCounts,
+  summarizeRuns,
 } from '@cloud-trigger/core';
 import { type SQL, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { Epoch, flag } from './codec.js';
+import { Epoch } from './codec.js';
 import { and } from './query.js';
+import { insertInto } from './rows.js';
 import type { SqlSession } from './session.js';
 
 const BUCKET_MS: Record<TimeBucket, number> = {
@@ -38,12 +41,20 @@ export class SqlRunAnalytics implements RunAnalytics {
   constructor(private readonly session: SqlSession) {}
 
   async record(metric: RunMetric): Promise<void> {
-    await this.session.run(sql`
-      INSERT INTO run_metrics (id, ts, job_id, target_type, status, duration_ms, status_code,
-        attempts, late, error_code)
-      VALUES (${randomUUID()}, ${metric.ts.getTime()}, ${metric.jobId}, ${metric.targetType},
-        ${metric.status}, ${metric.durationMs}, ${metric.statusCode}, ${metric.attempts},
-        ${flag(metric.late)}, ${metric.errorCode})`);
+    await this.session.run(
+      insertInto(this.session, 'run_metrics', {
+        id: randomUUID(),
+        ts: metric.ts,
+        job_id: metric.jobId,
+        target_type: metric.targetType,
+        status: metric.status,
+        duration_ms: metric.durationMs,
+        status_code: metric.statusCode,
+        attempts: metric.attempts,
+        late: metric.late,
+        error_code: metric.errorCode,
+      }),
+    );
   }
 
   #where(filter: AnalyticsFilter): SQL {
@@ -66,25 +77,21 @@ export class SqlRunAnalytics implements RunAnalytics {
       this.session.dialect.percentiles(this.session.exec, where, [0.5, 0.95]),
     ]);
     const totals = OverallRow.parse(overall[0]);
-    const byStatus = Object.fromEntries(
-      statuses.map((row) => {
-        const parsed = StatusRow.parse(row);
 
-        return [parsed.status, parsed.count];
-      }),
-    );
-    const succeeded = byStatus['succeeded'] ?? 0;
-    const failed = (byStatus['failed'] ?? 0) + (byStatus['timed_out'] ?? 0);
-
-    return {
+    return summarizeRuns({
       total: totals.total,
       late: totals.late ?? 0,
-      byStatus,
-      successRate: succeeded + failed === 0 ? null : succeeded / (succeeded + failed),
-      avgMs: totals.total === 0 ? null : totals.avg,
+      byStatus: statusCounts(
+        statuses.map((row) => {
+          const parsed = StatusRow.parse(row);
+
+          return [parsed.status, parsed.count] as const;
+        }),
+      ),
+      avgMs: totals.avg,
       p50Ms: percentiles[0] ?? null,
       p95Ms: percentiles[1] ?? null,
-    };
+    });
   }
 
   async timeseries(
@@ -99,20 +106,20 @@ export class SqlRunAnalytics implements RunAnalytics {
         FROM run_metrics WHERE ${where} GROUP BY bucket, status ORDER BY bucket`),
       this.session.dialect.bucketP95(this.session.exec, where, size),
     ]);
-    const buckets = new Map<number, Partial<Record<RunStatus, number>>>();
+    const buckets = new Map<number, (readonly [RunStatus, number])[]>();
     for (const row of rows) {
       const parsed = BucketRow.parse(row);
-      buckets.set(parsed.bucket, {
-        ...buckets.get(parsed.bucket),
-        [parsed.status]: parsed.count,
-      });
+      buckets.set(parsed.bucket, [
+        ...(buckets.get(parsed.bucket) ?? []),
+        [parsed.status, parsed.count],
+      ]);
     }
 
     return [...buckets.entries()]
       .toSorted(([a], [b]) => a - b)
-      .map(([bucket, byStatus]) => ({
+      .map(([bucket, counts]) => ({
         bucket: new Date(bucket),
-        byStatus,
+        byStatus: statusCounts(counts),
         p95Ms: p95.get(bucket) ?? null,
       }));
   }

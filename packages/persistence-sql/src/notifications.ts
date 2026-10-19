@@ -1,24 +1,20 @@
-import { NotificationDelivery, type NotificationOutbox, type RunId } from '@cloud-trigger/core';
+import {
+  NotificationDelivery,
+  type NotificationOutbox,
+  type RunId,
+  failedDeliveryFields,
+} from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { DateColumn, Epoch, decodeDoc, encodeDoc, epochOrNull } from './codec.js';
+import { decodeDoc, epochOrNull } from './codec.js';
+import { type RowValues, assignments, insertInto, rowParser } from './rows.js';
 import type { Row, SqlSession } from './session.js';
 
-const DeliveryRow = z.looseObject({
-  doc: z.unknown(),
-  status: z.string(),
-  available_at: DateColumn,
-  lease_worker: z.string().nullable(),
-  lease_until: DateColumn.nullable(),
-  attempts: Epoch,
-  last_error: z.string().nullable(),
-  delivered_at: DateColumn.nullable(),
-  updated_at: DateColumn,
-});
+const parseDeliveryRow = rowParser('notifications_outbox');
 
 const deliveryFromRow = (row: Row): NotificationDelivery => {
-  const parsed = DeliveryRow.parse(row);
+  const parsed = parseDeliveryRow(row);
   const doc = z.record(z.string(), z.unknown()).parse(decodeDoc(parsed.doc));
 
   return NotificationDelivery.parse({
@@ -36,6 +32,23 @@ const deliveryFromRow = (row: Row): NotificationDelivery => {
   });
 };
 
+const deliveryColumns = (entry: NotificationDelivery): RowValues<'notifications_outbox'> => ({
+  id: entry.id,
+  key: entry.key,
+  run_id: entry.runId,
+  status: entry.status,
+  available_at: entry.availableAt,
+  lease_worker: entry.lease?.workerId ?? null,
+  lease_until: entry.lease?.until ?? null,
+  attempts: entry.attempts,
+  last_error: entry.lastError,
+  delivered_at: entry.deliveredAt,
+  rule_index: entry.ruleIndex,
+  created_at: entry.createdAt,
+  updated_at: entry.updatedAt,
+  doc: entry,
+});
+
 const heldBy = (claimed: NotificationDelivery) =>
   sql`id = ${claimed.id} AND status = 'sending' AND lease_worker = ${claimed.lease?.workerId ?? null}
     AND lease_until = ${epochOrNull(claimed.lease?.until)}`;
@@ -46,15 +59,10 @@ export class SqlNotificationOutbox implements NotificationOutbox {
   async enqueue(entries: readonly NotificationDelivery[]): Promise<number> {
     let inserted = 0;
     for (const entry of entries) {
-      inserted += await this.session.run(sql`
-        INSERT INTO notifications_outbox (id, key, run_id, status, available_at, lease_worker,
-          lease_until, attempts, last_error, delivered_at, rule_index, created_at, updated_at, doc)
-        VALUES (${entry.id}, ${entry.key}, ${entry.runId}, ${entry.status},
-          ${entry.availableAt.getTime()}, ${entry.lease?.workerId ?? null},
-          ${epochOrNull(entry.lease?.until)}, ${entry.attempts}, ${entry.lastError},
-          ${epochOrNull(entry.deliveredAt)}, ${entry.ruleIndex}, ${entry.createdAt.getTime()},
-          ${entry.updatedAt.getTime()}, ${this.session.dialect.json(encodeDoc(entry))})
-        ON CONFLICT DO NOTHING`);
+      inserted += await this.session.run(
+        sql`${insertInto(this.session, 'notifications_outbox', deliveryColumns(entry))}
+          ON CONFLICT DO NOTHING`,
+      );
     }
 
     return inserted;
@@ -88,10 +96,16 @@ export class SqlNotificationOutbox implements NotificationOutbox {
     claimed: NotificationDelivery,
     p: { error: string; retryAt: Date | null; now: Date },
   ): Promise<boolean> {
+    const failed = failedDeliveryFields(claimed, p);
     const changed = await this.session.run(sql`
-      UPDATE notifications_outbox SET status = ${p.retryAt ? 'pending' : 'failed'},
-        available_at = ${(p.retryAt ?? claimed.availableAt).getTime()}, lease_worker = NULL,
-        lease_until = NULL, last_error = ${p.error}, updated_at = ${p.now.getTime()}
+      UPDATE notifications_outbox SET ${assignments(this.session, 'notifications_outbox', {
+        status: failed.status,
+        available_at: failed.availableAt,
+        lease_worker: null,
+        lease_until: null,
+        last_error: failed.lastError,
+        updated_at: failed.updatedAt,
+      })}
       WHERE ${heldBy(claimed)}`);
 
     return changed === 1;

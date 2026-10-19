@@ -12,54 +12,34 @@ import {
   type WorkflowRun,
   type WorkflowRunId,
   type WorkflowRunQuery,
+  type WorkflowRunIndex,
   type WorkflowRunRepository,
   Workflow as WorkflowSchema,
   WorkflowRun as WorkflowRunSchema,
+  duplicateWorkflowRun,
   err,
   ok,
+  savedWorkflowRun,
+  staleWorkflowRun,
+  workflowChangeFields,
+  workflowRunIndex,
 } from '@cloud-trigger/core';
 import type { Collection, Filter } from 'mongodb';
 
 import { findNewestFirstPage } from './cursor.js';
-import { isDuplicateKeyError } from './errors.js';
+import { type Stored, documentParser, toDocument } from './documents.js';
+import { casMissed, caseInsensitiveMatch, unlessDuplicateKey } from './errors.js';
 
-export type WorkflowDocument = Omit<Workflow, 'id'> & { _id: string };
+export type WorkflowDocument = Stored<Workflow>;
+export type WorkflowRunDocument = Stored<WorkflowRun> & WorkflowRunIndex;
 
-export type WorkflowRunDocument = Omit<WorkflowRun, 'id'> & {
-  _id: string;
-  hasQueued: boolean;
-  approvalDeadline: Date | null;
-};
+const fromWorkflowDocument = documentParser(WorkflowSchema);
+const fromRunDocument = documentParser(WorkflowRunSchema);
 
-const fromWorkflowDocument = (doc: WorkflowDocument): Workflow => {
-  const { _id, ...rest } = doc;
-
-  return WorkflowSchema.parse({ ...rest, id: _id });
-};
-
-const toRunDocument = (run: WorkflowRun): WorkflowRunDocument => {
-  const { id, ...rest } = run;
-  const states = Object.values(run.nodes);
-  const deadlines = states.flatMap((state) =>
-    state.status === 'waiting_approval' && state.deadline !== null
-      ? [state.deadline.getTime()]
-      : [],
-  );
-
-  return {
-    ...rest,
-    _id: id,
-    hasQueued: run.status === 'running' && states.some((state) => state.status === 'queued'),
-    approvalDeadline:
-      run.status === 'running' && deadlines.length > 0 ? new Date(Math.min(...deadlines)) : null,
-  };
-};
-
-const fromRunDocument = (doc: WorkflowRunDocument): WorkflowRun => {
-  const { _id, hasQueued: _queued, approvalDeadline: _deadline, ...rest } = doc;
-
-  return WorkflowRunSchema.parse({ ...rest, id: _id });
-};
+const toRunDocument = (run: WorkflowRun): WorkflowRunDocument => ({
+  ...toDocument(run),
+  ...workflowRunIndex(run),
+});
 
 export class MongoWorkflowRepository implements WorkflowRepository {
   static readonly collectionName = 'workflows';
@@ -74,8 +54,7 @@ export class MongoWorkflowRepository implements WorkflowRepository {
   }
 
   async insert(workflow: Workflow): Promise<void> {
-    const { id, ...rest } = workflow;
-    await this.workflows.insertOne({ ...rest, _id: id });
+    await this.workflows.insertOne(toDocument(workflow));
   }
 
   async get(id: WorkflowId): Promise<Workflow | undefined> {
@@ -86,7 +65,7 @@ export class MongoWorkflowRepository implements WorkflowRepository {
 
   list(query: WorkflowQuery) {
     const filter: Filter<WorkflowDocument> = query.search
-      ? { name: { $regex: RegExp.escape(query.search), $options: 'i' } }
+      ? { name: caseInsensitiveMatch(query.search) }
       : {};
 
     return findNewestFirstPage(this.workflows, filter, query, fromWorkflowDocument);
@@ -99,25 +78,11 @@ export class MongoWorkflowRepository implements WorkflowRepository {
   ): Promise<Result<Workflow, VersionConflictError | NotFoundError>> {
     const doc = await this.workflows.findOneAndUpdate(
       { _id: id, version: expectedVersion },
-      {
-        $set: {
-          ...change.spec,
-          inlineJobIds: { ...change.inlineJobIds },
-          nextFireAt: change.nextFireAt,
-          updatedAt: change.updatedAt,
-          version: expectedVersion + 1,
-        },
-      },
+      { $set: workflowChangeFields(change, expectedVersion) },
       { returnDocument: 'after' },
     );
-    if (doc) {
-      return ok(fromWorkflowDocument(doc));
-    }
-    const exists = await this.workflows.countDocuments({ _id: id }, { limit: 1 });
 
-    return exists
-      ? err({ code: 'version_conflict', message: `Workflow ${id} was modified concurrently` })
-      : err({ code: 'not_found', message: `Workflow ${id} not found` });
+    return doc ? ok(fromWorkflowDocument(doc)) : casMissed(this.workflows, 'Workflow', id);
   }
 
   async delete(id: WorkflowId): Promise<boolean> {
@@ -176,19 +141,12 @@ export class MongoWorkflowRunRepository implements WorkflowRunRepository {
   }
 
   async insert(run: WorkflowRun): Promise<Result<WorkflowRun, DuplicateWorkflowRunError>> {
-    try {
-      await this.runs.insertOne(toRunDocument(run));
+    const inserted = await unlessDuplicateKey(
+      () => this.runs.insertOne(toRunDocument(run)),
+      () => duplicateWorkflowRun(run),
+    );
 
-      return ok(run);
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err({
-          code: 'duplicate_run',
-          message: `Workflow run ${run.idempotencyKey ?? run.id} exists`,
-        });
-      }
-      throw error;
-    }
+    return inserted.map(() => run);
   }
 
   async get(id: WorkflowRunId): Promise<WorkflowRun | undefined> {
@@ -211,15 +169,13 @@ export class MongoWorkflowRunRepository implements WorkflowRunRepository {
     next: WorkflowRun,
     expectedVersion: number,
   ): Promise<Result<WorkflowRun, StaleWorkflowRunError>> {
-    const saved = { ...next, version: expectedVersion + 1 };
+    const saved = savedWorkflowRun(next, expectedVersion);
     const result = await this.runs.replaceOne(
       { _id: next.id, version: expectedVersion },
       toRunDocument(saved),
     );
 
-    return result.modifiedCount === 1
-      ? ok(saved)
-      : err({ code: 'stale_run', message: `Workflow run ${next.id} changed concurrently` });
+    return result.modifiedCount === 1 ? ok(saved) : err(staleWorkflowRun(next.id));
   }
 
   async findExpiredApprovals({

@@ -9,6 +9,16 @@
       "@cloud-trigger/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./drizzle-pg": {
+      "@cloud-trigger/source": "./src/drizzle-pg.ts",
+      "types": "./dist/drizzle-pg.d.ts",
+      "default": "./dist/drizzle-pg.js"
+    },
+    "./drizzle-sqlite": {
+      "@cloud-trigger/source": "./src/drizzle-sqlite.ts",
+      "types": "./dist/drizzle-sqlite.d.ts",
+      "default": "./dist/drizzle-sqlite.js"
     }
   },
   "scripts": {

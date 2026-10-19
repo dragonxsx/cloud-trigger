@@ -1,4 +1,11 @@
-import { type Persistence, ResultAsync, nonAtomicUnitOfWork, toError } from '@cloud-trigger/core';
+import {
+  DEFAULT_RETENTION,
+  type Persistence,
+  type RetentionPolicy,
+  ResultAsync,
+  nonAtomicUnitOfWork,
+  toError,
+} from '@cloud-trigger/core';
 import { type Db, MongoClient } from 'mongodb';
 
 import { MongoRunAnalytics, type RunMetricDocument } from './analytics.js';
@@ -54,10 +61,8 @@ export interface MongoPersistenceOptions {
   readonly dbName?: string;
   readonly analyticsUri?: string | undefined;
   readonly analyticsDbName?: string | undefined;
-  readonly runRetentionDays?: number;
-  readonly metricsRetentionDays?: number;
-  readonly decisionRetentionDays?: number;
-  readonly onEventBusError?: (error: unknown) => void;
+  readonly retention?: RetentionPolicy | undefined;
+  readonly onEventBusError?: ((error: unknown) => void) | undefined;
   readonly serverSelectionTimeoutMs?: number | undefined;
 }
 
@@ -129,6 +134,7 @@ export async function createMongoPersistence(
     ? await MongoClient.connect(options.analyticsUri, clientOptions)
     : client;
   const db = client.db(options.dbName);
+  const retention = options.retention ?? DEFAULT_RETENTION;
   const analyticsDb = analyticsClient.db(options.analyticsDbName ?? options.dbName);
 
   const jobs = db.collection<JobDocument>('jobs');
@@ -173,15 +179,15 @@ export async function createMongoPersistence(
     events,
     unitOfWork: nonAtomicUnitOfWork,
     async migrate() {
-      await ensureIndexes(db, options.runRetentionDays ?? 30);
+      await ensureIndexes(db, retention.runDays);
       await MongoNotificationOutbox.ensureIndexes(outbox);
       await MongoGroupRepository.ensureIndexes(groups);
       await MongoWorkflowRepository.ensureIndexes(workflows);
       await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
       await MongoUserRepository.ensureIndexes(users);
       await MongoApiKeyRepository.ensureIndexes(apiKeys);
-      await MongoDecisionLog.ensureIndexes(db, options.decisionRetentionDays ?? 14);
-      await MongoRunAnalytics.ensureCollection(analyticsDb, options.metricsRetentionDays ?? 90);
+      await MongoDecisionLog.ensureIndexes(db, retention.decisionDays);
+      await MongoRunAnalytics.ensureCollection(analyticsDb, retention.metricsDays);
     },
     ping: async () => (await ResultAsync.fromPromise(db.command({ ping: 1 }), toError)).isOk(),
     async close() {

@@ -1,4 +1,4 @@
-import type { Persistence } from '@cloud-trigger/core';
+import { DEFAULT_RETENTION, type Persistence, type RetentionPolicy } from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
 
 import { SqlRunAnalytics } from './analytics.js';
@@ -18,6 +18,7 @@ export * from './compile.js';
 export * from './dialects.js';
 export * from './events.js';
 export * from './session.js';
+export * from './tables.js';
 export { loadRunChanged, runFromRow };
 export {
   SqlApiKeyRepository,
@@ -37,10 +38,10 @@ export {
   SqlWorkflowRunRepository,
 };
 
-export interface RetentionOptions {
-  readonly runDays: number;
-  readonly metricsDays: number;
-  readonly decisionDays: number;
+export interface SqlAdapterOptions {
+  readonly retention?: RetentionPolicy | undefined;
+  readonly sweepIntervalMs?: number | undefined;
+  readonly onEventBusError?: ((error: unknown) => void) | undefined;
 }
 
 export interface SqlPersistenceOptions {
@@ -49,7 +50,7 @@ export interface SqlPersistenceOptions {
   readonly changes?: ChangeSink | undefined;
   readonly migrate: () => Promise<void>;
   readonly close: () => Promise<void>;
-  readonly retention: RetentionOptions;
+  readonly retention?: RetentionPolicy | undefined;
   readonly sweepIntervalMs?: number | undefined;
   readonly onSweepError?: ((error: unknown) => void) | undefined;
 }
@@ -64,7 +65,8 @@ export const createSession = (db: RawDatabase, dialect: SqlDialect): SqlSession 
   new SqlSession(db, dialect);
 
 export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersistence {
-  const { session, changes, retention } = options;
+  const { session, changes } = options;
+  const retention = options.retention ?? DEFAULT_RETENTION;
   const sweep = async (now: Date): Promise<void> => {
     const at = now.getTime();
     await session.run(

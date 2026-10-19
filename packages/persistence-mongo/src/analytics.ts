@@ -8,6 +8,9 @@ import {
   type TimeseriesPoint,
   type TopError,
   JobId,
+  statusCounts,
+  statusCountsOf,
+  summarizeRuns,
 } from '@cloud-trigger/core';
 import type { Collection, Db, Document } from 'mongodb';
 import { z } from 'zod';
@@ -42,15 +45,6 @@ const TopErrorRow = z.object({
   _id: z.object({ errorCode: z.string(), jobId: JobId }),
   count: z.number(),
 });
-
-const countByStatus = (row: Record<string, unknown>): Partial<Record<RunStatus, number>> =>
-  Object.fromEntries(
-    STATUSES.flatMap((s) => {
-      const value = row[s];
-
-      return typeof value === 'number' && value > 0 ? [[s, value]] : [];
-    }),
-  );
 
 export class MongoRunAnalytics implements RunAnalytics {
   static readonly collectionName = 'run_metrics';
@@ -105,20 +99,16 @@ export class MongoRunAnalytics implements RunAnalytics {
       ])
       .toArray();
     const result = SummaryResult.parse(raw);
-    const byStatus = Object.fromEntries(result.byStatus.map((r) => [r._id, r.count]));
     const overall = result.overall[0];
-    const ok = byStatus['succeeded'] ?? 0;
-    const bad = (byStatus['failed'] ?? 0) + (byStatus['timed_out'] ?? 0);
 
-    return {
+    return summarizeRuns({
       total: overall?.total ?? 0,
       late: overall?.late ?? 0,
-      byStatus,
-      successRate: ok + bad === 0 ? null : ok / (ok + bad),
+      byStatus: statusCounts(result.byStatus.map((r) => [r._id, r.count] as const)),
       avgMs: overall?.avg ?? null,
       p50Ms: overall?.pct?.[0] ?? null,
       p95Ms: overall?.pct?.[1] ?? null,
-    };
+    });
   }
 
   async timeseries(
@@ -144,7 +134,7 @@ export class MongoRunAnalytics implements RunAnalytics {
     return rows.map((raw) => {
       const row = TimeseriesRow.parse(raw);
 
-      return { bucket: row._id, p95Ms: row.p95?.[0] ?? null, byStatus: countByStatus(row) };
+      return { bucket: row._id, p95Ms: row.p95?.[0] ?? null, byStatus: statusCountsOf(row) };
     });
   }
 

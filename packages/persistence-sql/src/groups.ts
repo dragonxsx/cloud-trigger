@@ -1,6 +1,7 @@
 import {
   type AcquireResult,
   type ConflictError,
+  DEFAULT_CONCURRENCY_RETRY_MS,
   Group,
   type GroupId,
   type GroupQuery,
@@ -11,35 +12,40 @@ import {
   type RateLimiter,
   type Result,
   type VersionConflictError,
+  acquireResult,
+  attemptAcquire,
   err,
+  groupUpdateFields,
+  nameTaken,
+  notFound,
   ok,
+  versionConflict,
 } from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { DateColumn, Epoch, decodeDoc, encodeDoc } from './codec.js';
-import { likePattern, newestFirstPage } from './query.js';
-import type { Row, SqlSession } from './session.js';
+import { Epoch, docParser } from './codec.js';
+import { and, containsInsensitive, newestFirstPage } from './query.js';
+import { assignments, insertInto, rowParser } from './rows.js';
+import type { SqlSession } from './session.js';
 
-const groupFromRow = (row: Row): Group =>
-  Group.parse(decodeDoc(z.looseObject({ doc: z.unknown() }).parse(row).doc));
-
-const nameTaken = (name: string): ConflictError => ({
-  code: 'conflict',
-  message: `A group named "${name}" already exists`,
-});
+const groupFromRow = docParser(Group);
 
 export class SqlGroupRepository implements GroupRepository {
   constructor(private readonly session: SqlSession) {}
 
   async insert(group: Group): Promise<Result<Group, ConflictError>> {
-    const inserted = await this.session.run(sql`
-      INSERT INTO groups (id, name, version, created_at, doc)
-      VALUES (${group.id}, ${group.name}, ${group.version}, ${group.createdAt.getTime()},
-        ${this.session.dialect.json(encodeDoc(group))})
-      ON CONFLICT DO NOTHING`);
+    const inserted = await this.session.run(
+      sql`${insertInto(this.session, 'groups', {
+        id: group.id,
+        name: group.name,
+        version: group.version,
+        created_at: group.createdAt,
+        doc: group,
+      })} ON CONFLICT DO NOTHING`,
+    );
 
-    return inserted === 1 ? ok(group) : err(nameTaken(group.name));
+    return inserted === 1 ? ok(group) : err(nameTaken('group', group.name));
   }
 
   async get(id: GroupId): Promise<Group | undefined> {
@@ -57,9 +63,7 @@ export class SqlGroupRepository implements GroupRepository {
   }
 
   list(query: GroupQuery) {
-    const where = query.search
-      ? sql`name ${this.session.dialect.caseInsensitiveLike} ${likePattern(query.search)} ESCAPE '\\'`
-      : sql`1 = 1`;
+    const where = and([containsInsensitive(this.session.dialect, 'name', query.search)]);
 
     return newestFirstPage(this.session, sql`groups`, where, query, groupFromRow);
   }
@@ -71,30 +75,26 @@ export class SqlGroupRepository implements GroupRepository {
   ): Promise<Result<Group, VersionConflictError | NotFoundError | ConflictError>> {
     const current = await this.get(id);
     if (!current) {
-      return err({ code: 'not_found', message: `Group ${id} not found` });
+      return err(notFound('Group', id));
     }
-    const next: Group = Group.parse({
-      ...current,
-      ...update.spec,
-      updatedAt: update.updatedAt,
-      version: expectedVersion + 1,
-    });
+    const next = Group.parse({ ...current, ...groupUpdateFields(update, expectedVersion) });
     const clash = await this.findByName(next.name);
     if (clash && clash.id !== id) {
-      return err(nameTaken(next.name));
+      return err(nameTaken('group', next.name));
     }
     try {
       const changed = await this.session.run(sql`
-        UPDATE groups SET name = ${next.name}, version = ${next.version},
-          doc = ${this.session.dialect.json(encodeDoc(next))}
+        UPDATE groups SET ${assignments(this.session, 'groups', {
+          name: next.name,
+          version: next.version,
+          doc: next,
+        })}
         WHERE id = ${id} AND version = ${expectedVersion}`);
 
-      return changed === 1
-        ? ok(next)
-        : err({ code: 'version_conflict', message: `Group ${id} was modified concurrently` });
+      return changed === 1 ? ok(next) : err(versionConflict('Group', id));
     } catch (error: unknown) {
       if (this.session.dialect.isUniqueViolation(error)) {
-        return err(nameTaken(next.name));
+        return err(nameTaken('group', next.name));
       }
       throw error;
     }
@@ -105,56 +105,47 @@ export class SqlGroupRepository implements GroupRepository {
   }
 }
 
-const LimitRow = z.object({
-  tokens: z.union([z.number(), z.string()]).transform(Number).nullable(),
-  refilled_at: DateColumn.nullable(),
-  running: Epoch,
-  touched_at: DateColumn.nullable(),
-});
+const parseLimitRow = rowParser('rate_limits');
 
 export class SqlRateLimiter implements RateLimiter {
   constructor(
     private readonly session: SqlSession,
-    private readonly concurrencyRetryMs = 250,
+    private readonly concurrencyRetryMs = DEFAULT_CONCURRENCY_RETRY_MS,
   ) {}
 
   tryAcquire(key: string, limit: RateLimit, now: Date): Promise<AcquireResult> {
     return this.session.transaction(async () => {
       await this.session.run(
-        sql`INSERT INTO rate_limits (key, running) VALUES (${key}, 0) ON CONFLICT DO NOTHING`,
+        sql`${insertInto(this.session, 'rate_limits', {
+          key,
+          tokens: null,
+          refilled_at: null,
+          running: 0,
+          touched_at: null,
+        })} ON CONFLICT DO NOTHING`,
       );
       const [row] = await this.session.all(
         sql`SELECT * FROM rate_limits WHERE key = ${key} ${this.session.dialect.forUpdate}`,
       );
-      const state = LimitRow.parse(row);
-      const rate = limit.perSecond;
-      const capacity = rate === undefined ? undefined : Math.max(1, rate);
-      const elapsedSeconds = (now.getTime() - (state.refilled_at ?? now).getTime()) / 1_000;
-      const tokens =
-        capacity === undefined || rate === undefined
-          ? null
-          : Math.min(capacity, (state.tokens ?? capacity) + elapsedSeconds * rate);
-      const max = limit.maxConcurrent;
-      const granted =
-        (max === undefined || state.running < max) && (tokens === null || tokens >= 1);
-      const running = max !== undefined && granted ? state.running + 1 : state.running;
-      await this.session.run(sql`
-        UPDATE rate_limits SET running = ${running},
-          tokens = ${tokens === null ? null : granted ? tokens - 1 : tokens},
-          refilled_at = ${now.getTime()},
-          touched_at = ${granted ? now.getTime() : (state.touched_at?.getTime() ?? null)}
-        WHERE key = ${key}`);
-      if (granted) {
-        return { ok: true, holdsSlot: max !== undefined };
+      if (!row) {
+        throw new Error(`Rate limit ${key} was not created`);
       }
-      const waits = [
-        max !== undefined && state.running >= max ? this.concurrencyRetryMs : 0,
-        rate !== undefined && (tokens ?? 0) < 1
-          ? Math.ceil(((1 - (tokens ?? 0)) / rate) * 1_000)
-          : 0,
-      ];
+      const state = parseLimitRow(row);
+      const attempt = attemptAcquire(
+        limit,
+        { running: state.running, tokens: state.tokens, refilledAt: state.refilled_at },
+        now,
+      );
+      await this.session.run(sql`
+        UPDATE rate_limits SET ${assignments(this.session, 'rate_limits', {
+          running: attempt.running,
+          tokens: attempt.tokens,
+          refilled_at: now,
+          touched_at: attempt.granted ? now : state.touched_at,
+        })}
+        WHERE key = ${key}`);
 
-      return { ok: false, retryAt: new Date(now.getTime() + Math.max(1, ...waits)) };
+      return acquireResult(limit, attempt, now, this.concurrencyRetryMs);
     });
   }
 

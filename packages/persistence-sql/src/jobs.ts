@@ -1,9 +1,9 @@
 import {
+  AUTO_PAUSE_REASON,
   Job,
   type JobId,
   type JobQuery,
   type JobRepository,
-  JobSpec,
   type JobUpdate,
   type NotFoundError,
   type PendingRun,
@@ -13,35 +13,26 @@ import {
   type StaleClaimError,
   type VersionConflictError,
   err,
+  notFound,
   ok,
+  staleClaim,
+  userEditableJobFields,
+  versionConflict,
 } from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { DateColumn, Epoch, decodeDoc, encodeDoc, epochOrNull, flag } from './codec.js';
+import { decodeDoc, epochOrNull, flag } from './codec.js';
 import type { ChangeSink } from './events.js';
-import { and, likePattern, newestFirstPage, sameAs } from './query.js';
+import { and, containsInsensitive, newestFirstPage, sameAs } from './query.js';
+import { type RowChanges, type RowValues, assignments, insertInto, rowParser } from './rows.js';
 import { insertRun } from './runs.js';
 import type { Row, SqlSession } from './session.js';
 
-const JobRow = z.looseObject({
-  doc: z.unknown(),
-  enabled: z.unknown(),
-  paused_reason: z.string().nullable(),
-  next_fire_at: DateColumn.nullable(),
-  last_fired_at: DateColumn.nullable(),
-  last_success_at: DateColumn.nullable(),
-  fire_count: Epoch,
-  consecutive_failures: Epoch,
-  success_deadline: DateColumn.nullable(),
-  sla_breached_at: DateColumn.nullable(),
-  event_source: z.string().nullable(),
-  version: Epoch,
-  updated_at: DateColumn,
-});
+const parseJobRow = rowParser('jobs');
 
 export const jobFromRow = (row: Row): Job => {
-  const parsed = JobRow.parse(row);
+  const parsed = parseJobRow(row);
   const doc = z.record(z.string(), z.unknown()).parse(decodeDoc(parsed.doc));
 
   return Job.parse({
@@ -62,21 +53,40 @@ export const jobFromRow = (row: Row): Job => {
   });
 };
 
-const SCHEDULE_COLUMNS = new Map<string, string>(
-  Object.entries({
-    nextFireAt: 'next_fire_at',
-    lastFiredAt: 'last_fired_at',
-    lastSuccessAt: 'last_success_at',
-    fireCount: 'fire_count',
-    consecutiveFailures: 'consecutive_failures',
-    successDeadline: 'success_deadline',
-  } satisfies Record<keyof ScheduleState, string>),
-);
+const jobColumns = (job: Job): RowValues<'jobs'> => ({
+  id: job.id,
+  name: job.name,
+  enabled: job.enabled,
+  paused_reason: job.pausedReason,
+  group_id: job.groupId,
+  event_source: job.eventSource,
+  workflow_id: job.workflowId,
+  next_fire_at: job.schedule.nextFireAt,
+  last_fired_at: job.schedule.lastFiredAt,
+  last_success_at: job.schedule.lastSuccessAt,
+  fire_count: job.schedule.fireCount,
+  consecutive_failures: job.schedule.consecutiveFailures,
+  success_deadline: job.schedule.successDeadline,
+  sla_breached_at: job.slaBreachedAt,
+  scheduler_owner: null,
+  scheduler_until: null,
+  version: job.version,
+  created_at: job.createdAt,
+  updated_at: job.updatedAt,
+  doc: job,
+});
 
-const columnValue = (value: Date | number | null): number | null =>
-  value instanceof Date ? value.getTime() : value;
+const scheduleColumns = (schedule: Partial<ScheduleState>): RowChanges<'jobs'> => ({
+  next_fire_at: schedule.nextFireAt,
+  last_fired_at: schedule.lastFiredAt,
+  last_success_at: schedule.lastSuccessAt,
+  fire_count: schedule.fireCount,
+  consecutive_failures: schedule.consecutiveFailures,
+  success_deadline: schedule.successDeadline,
+});
 
-const SPEC_FIELDS = new Set(Object.keys(JobSpec.shape));
+const hasChanges = (changes: object): boolean =>
+  Object.values(changes).some((value) => value !== undefined);
 
 export class SqlJobRepository implements JobRepository {
   constructor(
@@ -84,34 +94,32 @@ export class SqlJobRepository implements JobRepository {
     private readonly changes?: ChangeSink | undefined,
   ) {}
 
+  #set(job: Job, columns: readonly (keyof RowValues<'jobs'>)[]) {
+    const values = jobColumns(job);
+
+    return assignments(
+      this.session,
+      'jobs',
+      Object.fromEntries(columns.map((column) => [column, values[column]])),
+    );
+  }
+
   async #writeEdges(job: Pick<Job, 'id' | 'tags' | 'upstreamJobIds'>): Promise<void> {
     await this.session.run(sql`DELETE FROM job_tags WHERE job_id = ${job.id}`);
     await this.session.run(sql`DELETE FROM job_upstreams WHERE job_id = ${job.id}`);
     for (const tag of new Set(job.tags)) {
-      await this.session.run(sql`INSERT INTO job_tags (job_id, tag) VALUES (${job.id}, ${tag})`);
+      await this.session.run(insertInto(this.session, 'job_tags', { job_id: job.id, tag }));
     }
     for (const upstream of new Set(job.upstreamJobIds)) {
       await this.session.run(
-        sql`INSERT INTO job_upstreams (job_id, upstream_id) VALUES (${job.id}, ${upstream})`,
+        insertInto(this.session, 'job_upstreams', { job_id: job.id, upstream_id: upstream }),
       );
     }
   }
 
   async insert(job: Job): Promise<void> {
-    const { dialect } = this.session;
     await this.session.transaction(async () => {
-      await this.session.run(sql`
-        INSERT INTO jobs (id, name, enabled, paused_reason, group_id, event_source, workflow_id,
-          next_fire_at, last_fired_at, last_success_at, fire_count, consecutive_failures,
-          success_deadline, sla_breached_at, scheduler_owner, scheduler_until, version,
-          created_at, updated_at, doc)
-        VALUES (${job.id}, ${job.name}, ${flag(job.enabled)}, ${job.pausedReason}, ${job.groupId},
-          ${job.eventSource}, ${job.workflowId}, ${epochOrNull(job.schedule.nextFireAt)},
-          ${epochOrNull(job.schedule.lastFiredAt)}, ${epochOrNull(job.schedule.lastSuccessAt)},
-          ${job.schedule.fireCount}, ${job.schedule.consecutiveFailures},
-          ${epochOrNull(job.schedule.successDeadline)}, ${epochOrNull(job.slaBreachedAt)},
-          NULL, NULL, ${job.version}, ${job.createdAt.getTime()}, ${job.updatedAt.getTime()},
-          ${dialect.json(encodeDoc(job))})`);
+      await this.session.run(insertInto(this.session, 'jobs', jobColumns(job)));
       await this.#writeEdges(job);
     });
     this.changes?.jobChanged('created', job.id);
@@ -125,9 +133,7 @@ export class SqlJobRepository implements JobRepository {
 
   list(query: JobQuery) {
     const where = and([
-      query.search
-        ? sql`name ${this.session.dialect.caseInsensitiveLike} ${likePattern(query.search)} ESCAPE '\\'`
-        : undefined,
+      containsInsensitive(this.session.dialect, 'name', query.search),
       query.tag
         ? sql`EXISTS (SELECT 1 FROM job_tags t WHERE t.job_id = jobs.id AND t.tag = ${query.tag})`
         : undefined,
@@ -155,7 +161,7 @@ export class SqlJobRepository implements JobRepository {
           sql`SELECT * FROM jobs WHERE id = ${id} ${dialect.forUpdate}`,
         );
         if (!row) {
-          return err({ code: 'not_found', message: `Job ${id} not found` });
+          return err(notFound('Job', id));
         }
         const current = jobFromRow(row);
         const { reschedule } = update;
@@ -165,14 +171,11 @@ export class SqlJobRepository implements JobRepository {
             (current.schedule.nextFireAt?.getTime() !== reschedule.basedOn.nextFireAt?.getTime() ||
               current.schedule.fireCount !== reschedule.basedOn.fireCount));
         if (stale) {
-          return err({ code: 'version_conflict', message: `Job ${id} was modified concurrently` });
+          return err(versionConflict('Job', id));
         }
-        const spec = Object.fromEntries(
-          Object.entries(update.spec).filter(([key]) => SPEC_FIELDS.has(key)),
-        );
         const next: Job = Job.parse({
           ...current,
-          ...spec,
+          ...userEditableJobFields(update.spec),
           upstreamJobIds: update.upstreamJobIds
             ? [...update.upstreamJobIds]
             : current.upstreamJobIds,
@@ -185,11 +188,18 @@ export class SqlJobRepository implements JobRepository {
           },
         });
         await this.session.run(sql`
-          UPDATE jobs SET name = ${next.name}, enabled = ${flag(next.enabled)},
-            group_id = ${next.groupId}, event_source = ${next.eventSource},
-            next_fire_at = ${epochOrNull(next.schedule.nextFireAt)},
-            scheduler_owner = NULL, scheduler_until = NULL, version = ${next.version},
-            updated_at = ${next.updatedAt.getTime()}, doc = ${dialect.json(encodeDoc(next))}
+          UPDATE jobs SET ${this.#set(next, [
+            'name',
+            'enabled',
+            'group_id',
+            'event_source',
+            'next_fire_at',
+            'scheduler_owner',
+            'scheduler_until',
+            'version',
+            'updated_at',
+            'doc',
+          ])}
           WHERE id = ${id}`);
         await this.#writeEdges(next);
 
@@ -222,21 +232,15 @@ export class SqlJobRepository implements JobRepository {
     patch: Partial<ScheduleState>,
     extra: { pausedReason?: string | null; slaBreachedAt?: Date | null } = {},
   ): Promise<void> {
-    const sets = Object.entries(patch).flatMap(([key, value]) => {
-      const column = SCHEDULE_COLUMNS.get(key);
-
-      return column === undefined || value === undefined
-        ? []
-        : [sql`${sql.raw(column)} = ${columnValue(value)}`];
-    });
-    if (extra.pausedReason !== undefined) {
-      sets.push(sql`paused_reason = ${extra.pausedReason}`);
-    }
-    if (extra.slaBreachedAt !== undefined) {
-      sets.push(sql`sla_breached_at = ${epochOrNull(extra.slaBreachedAt)}`);
-    }
-    if (sets.length > 0) {
-      await this.session.run(sql`UPDATE jobs SET ${sql.join(sets, sql`, `)} WHERE id = ${id}`);
+    const changes: RowChanges<'jobs'> = {
+      ...scheduleColumns(patch),
+      paused_reason: extra.pausedReason,
+      sla_breached_at: extra.slaBreachedAt,
+    };
+    if (hasChanges(changes)) {
+      await this.session.run(
+        sql`UPDATE jobs SET ${assignments(this.session, 'jobs', changes)} WHERE id = ${id}`,
+      );
     }
   }
 
@@ -245,7 +249,7 @@ export class SqlJobRepository implements JobRepository {
       p.pauseAfter === undefined
         ? sql`paused_reason`
         : sql`CASE WHEN paused_reason IS NULL AND consecutive_failures + 1 >= ${p.pauseAfter}
-            THEN 'Auto-paused after ' || CAST(consecutive_failures + 1 AS TEXT) || ' consecutive failures'
+            THEN ${AUTO_PAUSE_REASON.prefix} || CAST(consecutive_failures + 1 AS TEXT) || ${AUTO_PAUSE_REASON.suffix}
             ELSE paused_reason END`;
     await this.session.run(sql`
       UPDATE jobs SET paused_reason = ${pause}, consecutive_failures = consecutive_failures + 1
@@ -289,8 +293,10 @@ export class SqlJobRepository implements JobRepository {
   ): Promise<boolean> {
     const is = sameAs(this.session.dialect);
     const changed = await this.session.run(sql`
-      UPDATE jobs SET sla_breached_at = ${epochOrNull(update.slaBreachedAt)},
-        success_deadline = ${epochOrNull(update.successDeadline)}
+      UPDATE jobs SET ${assignments(this.session, 'jobs', {
+        sla_breached_at: update.slaBreachedAt,
+        success_deadline: update.successDeadline,
+      })}
       WHERE id = ${job.id} AND sla_breached_at ${is} ${epochOrNull(job.slaBreachedAt)}
         AND success_deadline ${is} ${epochOrNull(job.schedule.successDeadline)}`);
 
@@ -338,16 +344,15 @@ export class SqlScheduleStore implements ScheduleStore {
     const result = await this.session.transaction(
       async (): Promise<Result<readonly PendingRun[], StaleClaimError>> => {
         const claimed = await this.session.run(sql`
-          UPDATE jobs SET next_fire_at = ${epochOrNull(p.schedule.nextFireAt)},
-            last_fired_at = ${epochOrNull(p.schedule.lastFiredAt)},
-            fire_count = ${p.schedule.fireCount}, scheduler_owner = NULL, scheduler_until = NULL
+          UPDATE jobs SET ${assignments(this.session, 'jobs', {
+            ...scheduleColumns(p.schedule),
+            scheduler_owner: null,
+            scheduler_until: null,
+          })}
           WHERE id = ${p.jobId} AND version = ${p.jobVersion} AND scheduler_owner = ${p.ownerId}
             AND scheduler_until > ${p.now.getTime()}`);
         if (claimed === 0) {
-          return err({
-            code: 'stale_claim',
-            message: `Lost the scheduler claim on job ${p.jobId}`,
-          });
+          return err(staleClaim(p.jobId));
         }
         const inserted: PendingRun[] = [];
         for (const run of p.runs) {

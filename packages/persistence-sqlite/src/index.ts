@@ -10,6 +10,7 @@ import {
   type RawDatabase,
   type RawExecutor,
   type Row,
+  type SqlAdapterOptions,
   type SqlPersistence,
   createSession,
   createSqlPersistence,
@@ -21,15 +22,10 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import { z } from 'zod';
 
-export interface SqlitePersistenceOptions {
+export interface SqlitePersistenceOptions extends SqlAdapterOptions {
   /** A file path, or `:memory:` for tests. */
   readonly path: string;
-  readonly runRetentionDays?: number;
-  readonly metricsRetentionDays?: number;
-  readonly decisionRetentionDays?: number;
-  readonly sweepIntervalMs?: number;
-  readonly guardLeaseMs?: number;
-  readonly onEventBusError?: (error: unknown) => void;
+  readonly guardLeaseMs?: number | undefined;
 }
 
 export type SqlitePersistence = SqlPersistence;
@@ -54,7 +50,7 @@ const executorFor = (db: Database.Database): RawExecutor => ({
 });
 
 const MIGRATIONS = fileURLToPath(new URL('../drizzle', import.meta.url));
-const GUARD_KEY = 'sqlite:single-node';
+export const SQLITE_GUARD_KEY = 'sqlite:single-node';
 
 export function createSqlitePersistence(options: SqlitePersistenceOptions): SqlitePersistence {
   if (options.path !== ':memory:') {
@@ -95,11 +91,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Sqli
     session,
     events,
     changes: events,
-    retention: {
-      runDays: options.runRetentionDays ?? 30,
-      metricsDays: options.metricsRetentionDays ?? 90,
-      decisionDays: options.decisionRetentionDays ?? 14,
-    },
+    retention: options.retention,
     sweepIntervalMs: options.sweepIntervalMs,
     migrate: async () => {
       await mutex.lock(() => {
@@ -112,14 +104,14 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Sqli
     close: async () => {
       if (guard) {
         clearInterval(guard);
-        await persistence.eventSources.release({ key: GUARD_KEY, ownerId });
+        await persistence.eventSources.release({ key: SQLITE_GUARD_KEY, ownerId });
       }
       sqlite.close();
     },
   });
 
   const claim = () =>
-    persistence.eventSources.claim({ key: GUARD_KEY, ownerId, now: new Date(), leaseMs });
+    persistence.eventSources.claim({ key: SQLITE_GUARD_KEY, ownerId, now: new Date(), leaseMs });
 
   async function claimSingleNode(): Promise<void> {
     if (!(await claim())) {

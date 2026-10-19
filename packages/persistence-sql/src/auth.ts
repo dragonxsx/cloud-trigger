@@ -1,4 +1,5 @@
 import {
+  AUTH_SETTINGS_ID,
   ApiKey,
   type ApiKeyId,
   type ApiKeyRepository,
@@ -13,41 +14,57 @@ import {
   type UserQuery,
   type UserRepository,
   type VersionConflictError,
+  apiKeyExists,
+  authSettingsConflict,
   err,
   isActiveAdmin,
+  nameTaken,
+  normalizeUsername,
+  notFound,
   ok,
+  setupAlreadyCompleted,
+  versionConflict,
 } from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
-import { z } from 'zod';
 
-import { Count, decodeDoc, encodeDoc, flag } from './codec.js';
+import { Count, docParser } from './codec.js';
 import { likePattern, newestFirstPage } from './query.js';
-import type { Row, SqlSession } from './session.js';
+import { type RowValues, assignments, insertInto } from './rows.js';
+import type { SqlSession } from './session.js';
 
-const SETTINGS_ID = 'auth';
-const DocRow = z.looseObject({ doc: z.unknown() });
-const docOf = (row: Row): unknown => decodeDoc(DocRow.parse(row).doc);
+const settingsFromRow = docParser(AuthSettings);
+const userFromRow = docParser(User);
+const apiKeyFromRow = docParser(ApiKey);
+
+const userColumns = (user: User): RowValues<'users'> => ({
+  id: user.id,
+  username_lower: normalizeUsername(user.username),
+  active_admin: isActiveAdmin(user),
+  version: user.version,
+  doc: user,
+});
 
 export class SqlAuthSettingsStore implements AuthSettingsStore {
   constructor(private readonly session: SqlSession) {}
 
   async get(): Promise<AuthSettings | undefined> {
     const [row] = await this.session.all(
-      sql`SELECT doc FROM auth_settings WHERE id = ${SETTINGS_ID}`,
+      sql`SELECT doc FROM auth_settings WHERE id = ${AUTH_SETTINGS_ID}`,
     );
 
-    return row ? AuthSettings.parse(docOf(row)) : undefined;
+    return row ? settingsFromRow(row) : undefined;
   }
 
   async create(settings: AuthSettings): Promise<Result<AuthSettings, ConflictError>> {
-    const inserted = await this.session.run(sql`
-      INSERT INTO auth_settings (id, version, doc)
-      VALUES (${SETTINGS_ID}, ${settings.version}, ${this.session.dialect.json(encodeDoc(settings))})
-      ON CONFLICT DO NOTHING`);
+    const inserted = await this.session.run(
+      sql`${insertInto(this.session, 'auth_settings', {
+        id: AUTH_SETTINGS_ID,
+        version: settings.version,
+        doc: settings,
+      })} ON CONFLICT DO NOTHING`,
+    );
 
-    return inserted === 1
-      ? ok(settings)
-      : err({ code: 'conflict', message: 'Setup has already been completed' });
+    return inserted === 1 ? ok(settings) : err(setupAlreadyCompleted());
   }
 
   async update(
@@ -55,31 +72,25 @@ export class SqlAuthSettingsStore implements AuthSettingsStore {
     expectedVersion: number,
   ): Promise<Result<AuthSettings, VersionConflictError>> {
     const changed = await this.session.run(sql`
-      UPDATE auth_settings SET version = ${next.version},
-        doc = ${this.session.dialect.json(encodeDoc(next))}
-      WHERE id = ${SETTINGS_ID} AND version = ${expectedVersion}`);
+      UPDATE auth_settings SET ${assignments(this.session, 'auth_settings', {
+        version: next.version,
+        doc: next,
+      })}
+      WHERE id = ${AUTH_SETTINGS_ID} AND version = ${expectedVersion}`);
 
-    return changed === 1
-      ? ok(next)
-      : err({ code: 'version_conflict', message: 'Sign-in settings were modified concurrently' });
+    return changed === 1 ? ok(next) : err(authSettingsConflict());
   }
 }
-
-const userFromRow = (row: Row): User => User.parse(docOf(row));
 
 export class SqlUserRepository implements UserRepository {
   constructor(private readonly session: SqlSession) {}
 
   async insert(user: User): Promise<Result<User, ConflictError>> {
-    const inserted = await this.session.run(sql`
-      INSERT INTO users (id, username_lower, active_admin, version, doc)
-      VALUES (${user.id}, ${user.username.toLowerCase()}, ${flag(isActiveAdmin(user))},
-        ${user.version}, ${this.session.dialect.json(encodeDoc(user))})
-      ON CONFLICT DO NOTHING`);
+    const inserted = await this.session.run(
+      sql`${insertInto(this.session, 'users', userColumns(user))} ON CONFLICT DO NOTHING`,
+    );
 
-    return inserted === 1
-      ? ok(user)
-      : err({ code: 'conflict', message: `A user named "${user.username}" already exists` });
+    return inserted === 1 ? ok(user) : err(nameTaken('user', user.username));
   }
 
   async get(id: UserId): Promise<User | undefined> {
@@ -90,7 +101,7 @@ export class SqlUserRepository implements UserRepository {
 
   async findByUsername(username: string): Promise<User | undefined> {
     const [row] = await this.session.all(
-      sql`SELECT doc FROM users WHERE username_lower = ${username.toLowerCase()}`,
+      sql`SELECT doc FROM users WHERE username_lower = ${normalizeUsername(username)}`,
     );
 
     return row ? userFromRow(row) : undefined;
@@ -98,7 +109,7 @@ export class SqlUserRepository implements UserRepository {
 
   list(query: UserQuery): Promise<Page<User>> {
     const where = query.search
-      ? sql`username_lower LIKE ${likePattern(query.search.toLowerCase())} ESCAPE '\\'`
+      ? sql`username_lower LIKE ${likePattern(normalizeUsername(query.search))} ESCAPE '\\'`
       : sql`1 = 1`;
 
     return newestFirstPage(this.session, sql`users`, where, query, userFromRow);
@@ -108,18 +119,17 @@ export class SqlUserRepository implements UserRepository {
     next: User,
     expectedVersion: number,
   ): Promise<Result<User, VersionConflictError | NotFoundError>> {
+    const { id: _id, ...changes } = userColumns(next);
     const changed = await this.session.run(sql`
-      UPDATE users SET username_lower = ${next.username.toLowerCase()},
-        active_admin = ${flag(isActiveAdmin(next))}, version = ${next.version},
-        doc = ${this.session.dialect.json(encodeDoc(next))}
+      UPDATE users SET ${assignments(this.session, 'users', changes)}
       WHERE id = ${next.id} AND version = ${expectedVersion}`);
     if (changed === 1) {
       return ok(next);
     }
 
     return (await this.get(next.id))
-      ? err({ code: 'version_conflict', message: `User ${next.id} was modified concurrently` })
-      : err({ code: 'not_found', message: `User ${next.id} not found` });
+      ? err(versionConflict('User', next.id))
+      : err(notFound('User', next.id));
   }
 
   async delete(id: UserId): Promise<boolean> {
@@ -135,20 +145,19 @@ export class SqlUserRepository implements UserRepository {
   }
 }
 
-const apiKeyFromRow = (row: Row): ApiKey => ApiKey.parse(docOf(row));
-
 export class SqlApiKeyRepository implements ApiKeyRepository {
   constructor(private readonly session: SqlSession) {}
 
   async insert(key: ApiKey): Promise<Result<ApiKey, ConflictError>> {
-    const inserted = await this.session.run(sql`
-      INSERT INTO api_keys (id, hash, doc)
-      VALUES (${key.id}, ${key.hash}, ${this.session.dialect.json(encodeDoc(key))})
-      ON CONFLICT DO NOTHING`);
+    const inserted = await this.session.run(
+      sql`${insertInto(this.session, 'api_keys', {
+        id: key.id,
+        hash: key.hash,
+        doc: key,
+      })} ON CONFLICT DO NOTHING`,
+    );
 
-    return inserted === 1
-      ? ok(key)
-      : err({ code: 'conflict', message: 'That API key already exists' });
+    return inserted === 1 ? ok(key) : err(apiKeyExists());
   }
 
   async findByHash(hash: string): Promise<ApiKey | undefined> {
@@ -183,7 +192,8 @@ export class SqlApiKeyRepository implements ApiKeyRepository {
         return false;
       }
       await this.session.run(sql`
-        UPDATE api_keys SET doc = ${this.session.dialect.json(encodeDoc(next))} WHERE id = ${id}`);
+        UPDATE api_keys SET ${assignments(this.session, 'api_keys', { doc: next })}
+        WHERE id = ${id}`);
 
       return true;
     });

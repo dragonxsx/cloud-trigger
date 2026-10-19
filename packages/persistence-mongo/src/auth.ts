@@ -1,4 +1,5 @@
 import {
+  AUTH_SETTINGS_ID,
   type ApiKey,
   ApiKey as ApiKeySchema,
   type ApiKeyId,
@@ -16,15 +17,19 @@ import {
   type UserRepository,
   User as UserSchema,
   type VersionConflictError,
+  apiKeyExists,
+  authSettingsConflict,
   err,
+  nameTaken,
+  normalizeUsername,
   ok,
+  setupAlreadyCompleted,
 } from '@cloud-trigger/core';
 import type { Collection, Filter } from 'mongodb';
 
 import { findNewestFirstPage } from './cursor.js';
-import { isDuplicateKeyError } from './errors.js';
-
-const SETTINGS_ID = 'auth';
+import { type Stored, documentParser, toDocument } from './documents.js';
+import { casMissed, unlessDuplicateKey } from './errors.js';
 
 export type AuthSettingsDocument = AuthSettings & { _id: string };
 
@@ -34,26 +39,18 @@ export class MongoAuthSettingsStore implements AuthSettingsStore {
   constructor(private readonly settings: Collection<AuthSettingsDocument>) {}
 
   async get(): Promise<AuthSettings | undefined> {
-    const doc = await this.settings.findOne({ _id: SETTINGS_ID });
-    if (!doc) {
-      return undefined;
-    }
-    const { _id, ...rest } = doc;
+    const doc = await this.settings.findOne({ _id: AUTH_SETTINGS_ID });
 
-    return AuthSettingsSchema.parse(rest);
+    return doc ? AuthSettingsSchema.parse(doc) : undefined;
   }
 
   async create(settings: AuthSettings): Promise<Result<AuthSettings, ConflictError>> {
-    try {
-      await this.settings.insertOne({ ...settings, _id: SETTINGS_ID });
+    const inserted = await unlessDuplicateKey(
+      () => this.settings.insertOne({ ...settings, _id: AUTH_SETTINGS_ID }),
+      setupAlreadyCompleted,
+    );
 
-      return ok(settings);
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err({ code: 'conflict', message: 'Setup has already been completed' });
-      }
-      throw error;
-    }
+    return inserted.map(() => settings);
   }
 
   async update(
@@ -61,29 +58,22 @@ export class MongoAuthSettingsStore implements AuthSettingsStore {
     expectedVersion: number,
   ): Promise<Result<AuthSettings, VersionConflictError>> {
     const res = await this.settings.replaceOne(
-      { _id: SETTINGS_ID, version: expectedVersion },
+      { _id: AUTH_SETTINGS_ID, version: expectedVersion },
       next,
     );
 
-    return res.matchedCount === 1
-      ? ok(next)
-      : err({ code: 'version_conflict', message: 'Sign-in settings were modified concurrently' });
+    return res.matchedCount === 1 ? ok(next) : err(authSettingsConflict());
   }
 }
 
-export type UserDocument = Omit<User, 'id'> & { _id: string; usernameLower: string };
+export type UserDocument = Stored<User> & { usernameLower: string };
 
-const userFromDocument = (doc: UserDocument): User => {
-  const { _id, usernameLower: _usernameLower, ...rest } = doc;
+const userFromDocument = documentParser(UserSchema);
 
-  return UserSchema.parse({ ...rest, id: _id });
-};
-
-const userFields = (user: User): Omit<UserDocument, '_id'> => {
-  const { id: _id, ...rest } = user;
-
-  return { ...rest, usernameLower: user.username.toLowerCase() };
-};
+const toUserDocument = (user: User): UserDocument => ({
+  ...toDocument(user),
+  usernameLower: normalizeUsername(user.username),
+});
 
 export class MongoUserRepository implements UserRepository {
   static readonly collectionName = 'users';
@@ -95,16 +85,12 @@ export class MongoUserRepository implements UserRepository {
   }
 
   async insert(user: User): Promise<Result<User, ConflictError>> {
-    try {
-      await this.users.insertOne({ ...userFields(user), _id: user.id });
+    const inserted = await unlessDuplicateKey(
+      () => this.users.insertOne(toUserDocument(user)),
+      () => nameTaken('user', user.username),
+    );
 
-      return ok(user);
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err({ code: 'conflict', message: `A user named "${user.username}" already exists` });
-      }
-      throw error;
-    }
+    return inserted.map(() => user);
   }
 
   async get(id: UserId): Promise<User | undefined> {
@@ -114,14 +100,14 @@ export class MongoUserRepository implements UserRepository {
   }
 
   async findByUsername(username: string): Promise<User | undefined> {
-    const doc = await this.users.findOne({ usernameLower: username.toLowerCase() });
+    const doc = await this.users.findOne({ usernameLower: normalizeUsername(username) });
 
     return doc ? userFromDocument(doc) : undefined;
   }
 
   list(query: UserQuery): Promise<Page<User>> {
     const filter: Filter<UserDocument> = query.search
-      ? { usernameLower: { $regex: RegExp.escape(query.search.toLowerCase()) } }
+      ? { usernameLower: { $regex: RegExp.escape(normalizeUsername(query.search)) } }
       : {};
 
     return findNewestFirstPage(this.users, filter, query, userFromDocument);
@@ -133,16 +119,10 @@ export class MongoUserRepository implements UserRepository {
   ): Promise<Result<User, VersionConflictError | NotFoundError>> {
     const res = await this.users.replaceOne(
       { _id: next.id, version: expectedVersion },
-      userFields(next),
+      toUserDocument(next),
     );
-    if (res.matchedCount === 1) {
-      return ok(next);
-    }
-    const exists = await this.users.countDocuments({ _id: next.id }, { limit: 1 });
 
-    return exists
-      ? err({ code: 'version_conflict', message: `User ${next.id} was modified concurrently` })
-      : err({ code: 'not_found', message: `User ${next.id} not found` });
+    return res.matchedCount === 1 ? ok(next) : casMissed(this.users, 'User', next.id);
   }
 
   async delete(id: UserId): Promise<boolean> {
@@ -154,13 +134,9 @@ export class MongoUserRepository implements UserRepository {
   }
 }
 
-export type ApiKeyDocument = Omit<ApiKey, 'id'> & { _id: string };
+export type ApiKeyDocument = Stored<ApiKey>;
 
-const apiKeyFromDocument = (doc: ApiKeyDocument): ApiKey => {
-  const { _id, ...rest } = doc;
-
-  return ApiKeySchema.parse({ ...rest, id: _id });
-};
+const apiKeyFromDocument = documentParser(ApiKeySchema);
 
 export class MongoApiKeyRepository implements ApiKeyRepository {
   static readonly collectionName = 'api_keys';
@@ -172,17 +148,12 @@ export class MongoApiKeyRepository implements ApiKeyRepository {
   }
 
   async insert(key: ApiKey): Promise<Result<ApiKey, ConflictError>> {
-    const { id, ...rest } = key;
-    try {
-      await this.keys.insertOne({ ...rest, _id: id });
+    const inserted = await unlessDuplicateKey(
+      () => this.keys.insertOne(toDocument(key)),
+      apiKeyExists,
+    );
 
-      return ok(key);
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err({ code: 'conflict', message: 'That API key already exists' });
-      }
-      throw error;
-    }
+    return inserted.map(() => key);
   }
 
   async findByHash(hash: string): Promise<ApiKey | undefined> {

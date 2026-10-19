@@ -1,6 +1,13 @@
 import { hostname } from 'node:os';
 
-import { type ConfigIssue, type Result, assertNever, err, ok } from '@cloud-trigger/core';
+import {
+  type ConfigIssue,
+  DEFAULT_RETENTION,
+  type Result,
+  assertNever,
+  err,
+  ok,
+} from '@cloud-trigger/core';
 import { z } from 'zod';
 
 const splitCsv = (s: string): string[] =>
@@ -36,9 +43,13 @@ const ConfigShape = z.object({
   MONGO_DB: z.string().default('cloud_trigger'),
   ANALYTICS_MONGO_URI: z.string().optional(),
   ANALYTICS_MONGO_DB: z.string().optional(),
-  RUN_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
-  METRICS_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
-  DECISION_RETENTION_DAYS: z.coerce.number().int().positive().default(14),
+  RUN_RETENTION_DAYS: z.coerce.number().int().positive().default(DEFAULT_RETENTION.runDays),
+  METRICS_RETENTION_DAYS: z.coerce.number().int().positive().default(DEFAULT_RETENTION.metricsDays),
+  DECISION_RETENTION_DAYS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_RETENTION.decisionDays),
 
   SCHEDULER_INTERVAL_MS: z.coerce.number().int().positive().default(1_000),
   SCHEDULER_BATCH_SIZE: z.coerce.number().int().positive().default(100),

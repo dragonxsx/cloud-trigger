@@ -64,3 +64,8 @@ export const Count = z.object({ count: Epoch });
 export const flag = (value: boolean): number => (value ? 1 : 0);
 
 export const DocRow = z.looseObject({ doc: z.unknown() });
+
+export const docParser =
+  <S extends z.ZodType>(schema: S) =>
+  (row: Readonly<Record<string, unknown>>): z.output<S> =>
+    schema.parse(decodeDoc(DocRow.parse(row).doc));

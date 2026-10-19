@@ -1,8 +1,8 @@
 import {
   type AcquireResult,
   type ConflictError,
-  type Group,
-  Group as GroupSchema,
+  DEFAULT_CONCURRENCY_RETRY_MS,
+  Group,
   type GroupId,
   type GroupQuery,
   type GroupRepository,
@@ -12,27 +12,29 @@ import {
   type RateLimiter,
   type Result,
   type VersionConflictError,
+  acquireResult,
+  bucketCapacity,
   err,
+  groupUpdateFields,
+  nameTaken,
   ok,
 } from '@cloud-trigger/core';
 import type { Collection, Document, Filter } from 'mongodb';
 import { z } from 'zod';
 
 import { findNewestFirstPage } from './cursor.js';
-import { isDuplicateKeyError } from './errors.js';
+import { type Stored, documentParser, toDocument } from './documents.js';
+import {
+  casMissed,
+  caseInsensitiveMatch,
+  isDuplicateKeyError,
+  unlessDuplicateKey,
+} from './errors.js';
 
-export type GroupDocument = Omit<Group, 'id'> & { _id: string };
+export type GroupDocument = Stored<Group>;
 
-const fromDocument = (doc: GroupDocument): Group => {
-  const { _id, ...rest } = doc;
-
-  return GroupSchema.parse({ ...rest, id: _id });
-};
-
-const nameTaken = (name: string): ConflictError => ({
-  code: 'conflict',
-  message: `A group named "${name}" already exists`,
-});
+const fromDocument = documentParser(Group);
+const CASE_INSENSITIVE = { locale: 'en', strength: 2 };
 
 export class MongoGroupRepository implements GroupRepository {
   static readonly collectionName = 'groups';
@@ -41,22 +43,17 @@ export class MongoGroupRepository implements GroupRepository {
 
   static async ensureIndexes(groups: Collection<GroupDocument>): Promise<void> {
     await groups.createIndexes([
-      { key: { name: 1 }, name: 'name', unique: true, collation: { locale: 'en', strength: 2 } },
+      { key: { name: 1 }, name: 'name', unique: true, collation: CASE_INSENSITIVE },
     ]);
   }
 
   async insert(group: Group): Promise<Result<Group, ConflictError>> {
-    const { id, ...rest } = group;
-    try {
-      await this.groups.insertOne({ ...rest, _id: id });
+    const inserted = await unlessDuplicateKey(
+      () => this.groups.insertOne(toDocument(group)),
+      () => nameTaken('group', group.name),
+    );
 
-      return ok(group);
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err(nameTaken(group.name));
-      }
-      throw error;
-    }
+    return inserted.map(() => group);
   }
 
   async get(id: GroupId): Promise<Group | undefined> {
@@ -66,14 +63,14 @@ export class MongoGroupRepository implements GroupRepository {
   }
 
   async findByName(name: string): Promise<Group | undefined> {
-    const doc = await this.groups.findOne({ name }, { collation: { locale: 'en', strength: 2 } });
+    const doc = await this.groups.findOne({ name }, { collation: CASE_INSENSITIVE });
 
     return doc ? fromDocument(doc) : undefined;
   }
 
   list(query: GroupQuery) {
     const filter: Filter<GroupDocument> = query.search
-      ? { name: { $regex: RegExp.escape(query.search), $options: 'i' } }
+      ? { name: caseInsensitiveMatch(query.search) }
       : {};
 
     return findNewestFirstPage(this.groups, filter, query, fromDocument);
@@ -84,26 +81,20 @@ export class MongoGroupRepository implements GroupRepository {
     update: { spec: GroupSpec; updatedAt: Date },
     expectedVersion: number,
   ): Promise<Result<Group, VersionConflictError | NotFoundError | ConflictError>> {
-    try {
-      const doc = await this.groups.findOneAndUpdate(
-        { _id: id, version: expectedVersion },
-        { $set: { ...update.spec, updatedAt: update.updatedAt, version: expectedVersion + 1 } },
-        { returnDocument: 'after' },
-      );
-      if (doc) {
-        return ok(fromDocument(doc));
-      }
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err(nameTaken(update.spec.name));
-      }
-      throw error;
+    const updated = await unlessDuplicateKey(
+      () =>
+        this.groups.findOneAndUpdate(
+          { _id: id, version: expectedVersion },
+          { $set: groupUpdateFields(update, expectedVersion) },
+          { returnDocument: 'after' },
+        ),
+      () => nameTaken('group', update.spec.name),
+    );
+    if (updated.isErr()) {
+      return err(updated.error);
     }
-    const exists = await this.groups.countDocuments({ _id: id }, { limit: 1 });
 
-    return exists
-      ? err({ code: 'version_conflict', message: `Group ${id} was modified concurrently` })
-      : err({ code: 'not_found', message: `Group ${id} not found` });
+    return updated.value ? ok(fromDocument(updated.value)) : casMissed(this.groups, 'Group', id);
   }
 
   async delete(id: GroupId): Promise<boolean> {
@@ -135,7 +126,7 @@ export class MongoRateLimiter implements RateLimiter {
 
   constructor(
     private readonly limits: Collection<RateLimitDocument>,
-    private readonly concurrencyRetryMs = 250,
+    private readonly concurrencyRetryMs = DEFAULT_CONCURRENCY_RETRY_MS,
   ) {}
 
   async tryAcquire(key: string, limit: RateLimit, now: Date): Promise<AcquireResult> {
@@ -146,19 +137,13 @@ export class MongoRateLimiter implements RateLimiter {
       throw error;
     });
     const state = AcquiredDocument.parse(doc);
-    if (state.granted) {
-      return { ok: true, holdsSlot: limit.maxConcurrent !== undefined };
-    }
-    const waits = [
-      limit.maxConcurrent !== undefined && state.running >= limit.maxConcurrent
-        ? this.concurrencyRetryMs
-        : 0,
-      limit.perSecond !== undefined && (state.tokens ?? 0) < 1
-        ? Math.ceil(((1 - (state.tokens ?? 0)) / limit.perSecond) * 1_000)
-        : 0,
-    ];
 
-    return { ok: false, retryAt: new Date(now.getTime() + Math.max(1, ...waits)) };
+    return acquireResult(
+      limit,
+      { granted: state.granted, running: state.running, tokens: state.tokens ?? null },
+      now,
+      this.concurrencyRetryMs,
+    );
   }
 
   async release(key: string, now: Date): Promise<void> {
@@ -195,7 +180,7 @@ export class MongoRateLimiter implements RateLimiter {
 
   #acquire(key: string, limit: RateLimit, now: Date) {
     const rate = limit.perSecond;
-    const capacity = rate === undefined ? undefined : Math.max(1, rate);
+    const capacity = bucketCapacity(limit);
     const max = limit.maxConcurrent;
     const elapsedSeconds = {
       $divide: [{ $subtract: [now, { $ifNull: ['$refilledAt', now] }] }, 1_000],

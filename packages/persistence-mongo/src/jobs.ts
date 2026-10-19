@@ -1,19 +1,21 @@
 import {
+  AUTO_PAUSE_REASON,
   type Job,
   type JobId,
   type JobQuery,
   type JobRepository,
-  JobSpec,
+  type JobUpdate,
   type NotFoundError,
   type PendingRun,
-  type JobUpdate,
+  type Result,
   type ScheduleState,
   type ScheduleStore,
   type StaleClaimError,
   type VersionConflictError,
   err,
   ok,
-  type Result,
+  staleClaim,
+  userEditableJobFields,
 } from '@cloud-trigger/core';
 import {
   type ClientSession,
@@ -31,12 +33,7 @@ import {
   toJobDocument,
   toRunDocument,
 } from './documents.js';
-
-const SPEC_FIELDS = new Set(Object.keys(JobSpec.shape));
-
-// Copy JobSpec keys only so edits can't overwrite scheduler/pause state.
-const userEditableFields = (spec: JobSpec): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(spec).filter(([key]) => SPEC_FIELDS.has(key)));
+import { casMissed, caseInsensitiveMatch } from './errors.js';
 
 export class MongoJobRepository implements JobRepository {
   constructor(private readonly jobs: Collection<JobDocument>) {}
@@ -54,7 +51,7 @@ export class MongoJobRepository implements JobRepository {
   async list(query: JobQuery) {
     const filter: Filter<JobDocument> = {};
     if (query.search) {
-      filter.name = { $regex: RegExp.escape(query.search), $options: 'i' };
+      filter.name = caseInsensitiveMatch(query.search);
     }
     if (query.tag) {
       filter.tags = query.tag;
@@ -89,7 +86,7 @@ export class MongoJobRepository implements JobRepository {
       },
       {
         $set: {
-          ...userEditableFields(update.spec),
+          ...userEditableJobFields(update.spec),
           updatedAt: update.updatedAt,
           version: expectedVersion + 1,
           schedulerLease: null,
@@ -100,14 +97,8 @@ export class MongoJobRepository implements JobRepository {
       },
       { returnDocument: 'after' },
     );
-    if (doc) {
-      return ok(fromJobDocument(doc));
-    }
-    const exists = await this.jobs.countDocuments({ _id: id }, { limit: 1 });
 
-    return exists
-      ? err({ code: 'version_conflict', message: `Job ${id} was modified concurrently` })
-      : err({ code: 'not_found', message: `Job ${id} not found` });
+    return doc ? ok(fromJobDocument(doc)) : casMissed(this.jobs, 'Job', id);
   }
 
   async delete(id: JobId): Promise<boolean> {
@@ -198,7 +189,13 @@ export class MongoJobRepository implements JobRepository {
           pausedReason: {
             $cond: [
               { $and: [{ $eq: ['$pausedReason', null] }, { $gte: [failures, p.pauseAfter] }] },
-              { $concat: ['Auto-paused after ', { $toString: failures }, ' consecutive failures'] },
+              {
+                $concat: [
+                  AUTO_PAUSE_REASON.prefix,
+                  { $toString: failures },
+                  AUTO_PAUSE_REASON.suffix,
+                ],
+              },
               '$pausedReason',
             ],
           },
@@ -255,7 +252,6 @@ export class MongoScheduleStore implements ScheduleStore {
     runs: readonly PendingRun[];
     schedule: Pick<ScheduleState, 'nextFireAt' | 'lastFiredAt' | 'fireCount'>;
   }): Promise<Result<readonly PendingRun[], StaleClaimError>> {
-    // The transaction fences inserts with the lease and job version.
     return this.client.withSession((session) =>
       session.withTransaction(async () => {
         const claimed = await this.jobs.updateOne(
@@ -278,14 +274,11 @@ export class MongoScheduleStore implements ScheduleStore {
         if (claimed.matchedCount === 0) {
           await session.abortTransaction();
 
-          return err({
-            code: 'stale_claim',
-            message: `Lost the scheduler claim on job ${p.jobId}`,
-          });
+          return err(staleClaim(p.jobId));
         }
         const inserted: PendingRun[] = [];
         for (const run of p.runs) {
-          if (await this.#insertUnlessDuplicate(run, session)) {
+          if (await this.#upsertUnlessKeyTaken(run, session)) {
             inserted.push(run);
           }
         }
@@ -295,8 +288,7 @@ export class MongoScheduleStore implements ScheduleStore {
     );
   }
 
-  // Inside a transaction a duplicate-key error aborts everything, so dedupe with an upsert instead.
-  async #insertUnlessDuplicate(run: PendingRun, session: ClientSession): Promise<boolean> {
+  async #upsertUnlessKeyTaken(run: PendingRun, session: ClientSession): Promise<boolean> {
     const doc = toRunDocument(run);
     if (run.idempotencyKey === null) {
       await this.runs.insertOne(doc, { session });

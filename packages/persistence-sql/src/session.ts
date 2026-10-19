@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { UnitOfWork } from '@cloud-trigger/core';
 import type { SQL } from 'drizzle-orm';
 
+import { encodeDoc } from './codec.js';
 import { type CompiledQuery, compile } from './compile.js';
 
 export type Row = Readonly<Record<string, unknown>>;
@@ -54,6 +55,10 @@ export class SqlSession implements UnitOfWork {
     readonly dialect: SqlDialect,
   ) {
     this.#root = compiling(db, dialect.name);
+  }
+
+  doc(value: unknown): SQL {
+    return this.dialect.json(encodeDoc(value));
   }
 
   get exec(): SqlExecutor {

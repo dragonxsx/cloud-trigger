@@ -9,6 +9,11 @@
       "@cloud-trigger/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@cloud-trigger/source": "./src/testing.ts",
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
     }
   },
   "scripts": {

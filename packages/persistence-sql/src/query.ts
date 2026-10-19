@@ -23,6 +23,15 @@ export const sameAs = (dialect: SqlDialect): SQL =>
 export const likePattern = (search: string): string =>
   `%${search.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
 
+export const containsInsensitive = (
+  dialect: SqlDialect,
+  column: string,
+  search: string | undefined,
+): SQL | undefined =>
+  search
+    ? sql`${sql.raw(column)} ${dialect.caseInsensitiveLike} ${likePattern(search)} ESCAPE '\\'`
+    : undefined;
+
 const NO_LIMIT = 1_000_000_000;
 export const ALL_ROWS = sql.raw(String(NO_LIMIT));
 

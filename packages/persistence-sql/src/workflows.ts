@@ -13,30 +13,48 @@ import {
   type WorkflowRunId,
   type WorkflowRunQuery,
   type WorkflowRunRepository,
+  duplicateWorkflowRun,
   err,
+  notFound,
   ok,
+  savedWorkflowRun,
+  staleWorkflowRun,
+  versionConflict,
+  workflowChangeFields,
+  workflowRunIndex,
 } from '@cloud-trigger/core';
 import { sql } from 'drizzle-orm';
 
-import { DocRow, decodeDoc, encodeDoc, epochOrNull, flag } from './codec.js';
-import { and, inList, likePattern, newestFirstPage } from './query.js';
-import type { Row, SqlSession } from './session.js';
+import { docParser } from './codec.js';
+import { and, containsInsensitive, inList, newestFirstPage } from './query.js';
+import { type RowValues, assignments, insertInto } from './rows.js';
+import type { SqlSession } from './session.js';
 
-const workflowFromRow = (row: Row): Workflow => Workflow.parse(decodeDoc(DocRow.parse(row).doc));
-const runFromRow = (row: Row): WorkflowRun => WorkflowRun.parse(decodeDoc(DocRow.parse(row).doc));
+const workflowFromRow = docParser(Workflow);
+const runFromRow = docParser(WorkflowRun);
 
-const runColumns = (run: WorkflowRun) => {
-  const states = Object.values(run.nodes);
-  const deadlines = states.flatMap((state) =>
-    state.status === 'waiting_approval' && state.deadline !== null
-      ? [state.deadline.getTime()]
-      : [],
-  );
+const workflowColumns = (workflow: Workflow): RowValues<'workflows'> => ({
+  id: workflow.id,
+  name: workflow.name,
+  enabled: workflow.enabled,
+  next_fire_at: workflow.nextFireAt,
+  version: workflow.version,
+  created_at: workflow.createdAt,
+  doc: workflow,
+});
+
+const runColumns = (run: WorkflowRun): RowValues<'workflow_runs'> => {
+  const index = workflowRunIndex(run);
 
   return {
-    hasQueued: flag(run.status === 'running' && states.some((state) => state.status === 'queued')),
-    approvalDeadline:
-      run.status === 'running' && deadlines.length > 0 ? Math.min(...deadlines) : null,
+    id: run.id,
+    workflow_id: run.workflowId,
+    status: run.status,
+    idempotency_key: run.idempotencyKey,
+    has_queued: index.hasQueued,
+    approval_deadline: index.approvalDeadline,
+    version: run.version,
+    doc: run,
   };
 };
 
@@ -44,11 +62,7 @@ export class SqlWorkflowRepository implements WorkflowRepository {
   constructor(private readonly session: SqlSession) {}
 
   async insert(workflow: Workflow): Promise<void> {
-    await this.session.run(sql`
-      INSERT INTO workflows (id, name, enabled, next_fire_at, version, created_at, doc)
-      VALUES (${workflow.id}, ${workflow.name}, ${flag(workflow.enabled)},
-        ${epochOrNull(workflow.nextFireAt)}, ${workflow.version}, ${workflow.createdAt.getTime()},
-        ${this.session.dialect.json(encodeDoc(workflow))})`);
+    await this.session.run(insertInto(this.session, 'workflows', workflowColumns(workflow)));
   }
 
   async get(id: WorkflowId): Promise<Workflow | undefined> {
@@ -58,9 +72,7 @@ export class SqlWorkflowRepository implements WorkflowRepository {
   }
 
   list(query: WorkflowQuery) {
-    const where = query.search
-      ? sql`name ${this.session.dialect.caseInsensitiveLike} ${likePattern(query.search)} ESCAPE '\\'`
-      : sql`1 = 1`;
+    const where = and([containsInsensitive(this.session.dialect, 'name', query.search)]);
 
     return newestFirstPage(this.session, sql`workflows`, where, query, workflowFromRow);
   }
@@ -72,25 +84,15 @@ export class SqlWorkflowRepository implements WorkflowRepository {
   ): Promise<Result<Workflow, VersionConflictError | NotFoundError>> {
     const current = await this.get(id);
     if (!current) {
-      return err({ code: 'not_found', message: `Workflow ${id} not found` });
+      return err(notFound('Workflow', id));
     }
-    const next = Workflow.parse({
-      ...current,
-      ...change.spec,
-      inlineJobIds: { ...change.inlineJobIds },
-      nextFireAt: change.nextFireAt,
-      updatedAt: change.updatedAt,
-      version: expectedVersion + 1,
-    });
+    const next = Workflow.parse({ ...current, ...workflowChangeFields(change, expectedVersion) });
+    const { id: _id, created_at: _createdAt, ...changes } = workflowColumns(next);
     const changed = await this.session.run(sql`
-      UPDATE workflows SET name = ${next.name}, enabled = ${flag(next.enabled)},
-        next_fire_at = ${epochOrNull(next.nextFireAt)}, version = ${next.version},
-        doc = ${this.session.dialect.json(encodeDoc(next))}
+      UPDATE workflows SET ${assignments(this.session, 'workflows', changes)}
       WHERE id = ${id} AND version = ${expectedVersion}`);
 
-    return changed === 1
-      ? ok(next)
-      : err({ code: 'version_conflict', message: `Workflow ${id} was modified concurrently` });
+    return changed === 1 ? ok(next) : err(versionConflict('Workflow', id));
   }
 
   async delete(id: WorkflowId): Promise<boolean> {
@@ -118,8 +120,10 @@ export class SqlWorkflowRepository implements WorkflowRepository {
       }
       const next = { ...workflowFromRow(row), nextFireAt: to };
       const changed = await this.session.run(sql`
-        UPDATE workflows SET next_fire_at = ${epochOrNull(to)},
-          doc = ${this.session.dialect.json(encodeDoc(next))}
+        UPDATE workflows SET ${assignments(this.session, 'workflows', {
+          next_fire_at: to,
+          doc: next,
+        })}
         WHERE id = ${id} AND next_fire_at = ${from.getTime()}`);
 
       return changed === 1;
@@ -131,21 +135,11 @@ export class SqlWorkflowRunRepository implements WorkflowRunRepository {
   constructor(private readonly session: SqlSession) {}
 
   async insert(run: WorkflowRun): Promise<Result<WorkflowRun, DuplicateWorkflowRunError>> {
-    const columns = runColumns(run);
-    const inserted = await this.session.run(sql`
-      INSERT INTO workflow_runs (id, workflow_id, status, idempotency_key, has_queued,
-        approval_deadline, version, doc)
-      VALUES (${run.id}, ${run.workflowId}, ${run.status}, ${run.idempotencyKey},
-        ${columns.hasQueued}, ${columns.approvalDeadline}, ${run.version},
-        ${this.session.dialect.json(encodeDoc(run))})
-      ON CONFLICT DO NOTHING`);
+    const inserted = await this.session.run(
+      sql`${insertInto(this.session, 'workflow_runs', runColumns(run))} ON CONFLICT DO NOTHING`,
+    );
 
-    return inserted === 1
-      ? ok(run)
-      : err({
-          code: 'duplicate_run',
-          message: `Workflow run ${run.idempotencyKey ?? run.id} exists`,
-        });
+    return inserted === 1 ? ok(run) : err(duplicateWorkflowRun(run));
   }
 
   async get(id: WorkflowRunId): Promise<WorkflowRun | undefined> {
@@ -167,17 +161,18 @@ export class SqlWorkflowRunRepository implements WorkflowRunRepository {
     next: WorkflowRun,
     expectedVersion: number,
   ): Promise<Result<WorkflowRun, StaleWorkflowRunError>> {
-    const saved = { ...next, version: expectedVersion + 1 };
-    const columns = runColumns(saved);
+    const saved = savedWorkflowRun(next, expectedVersion);
+    const {
+      id: _id,
+      workflow_id: _workflowId,
+      idempotency_key: _key,
+      ...changes
+    } = runColumns(saved);
     const changed = await this.session.run(sql`
-      UPDATE workflow_runs SET status = ${saved.status}, has_queued = ${columns.hasQueued},
-        approval_deadline = ${columns.approvalDeadline}, version = ${saved.version},
-        doc = ${this.session.dialect.json(encodeDoc(saved))}
+      UPDATE workflow_runs SET ${assignments(this.session, 'workflow_runs', changes)}
       WHERE id = ${next.id} AND version = ${expectedVersion}`);
 
-    return changed === 1
-      ? ok(saved)
-      : err({ code: 'stale_run', message: `Workflow run ${next.id} changed concurrently` });
+    return changed === 1 ? ok(saved) : err(staleWorkflowRun(next.id));
   }
 
   async findExpiredApprovals({

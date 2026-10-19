@@ -3,24 +3,16 @@ import {
   NotificationDelivery as NotificationDeliverySchema,
   type NotificationOutbox,
   type RunId,
+  failedDeliveryFields,
 } from '@cloud-trigger/core';
 import { type Collection, type Filter, MongoBulkWriteError } from 'mongodb';
 
+import { type Stored, documentParser, toDocument } from './documents.js';
 import { isDuplicateKeyError } from './errors.js';
 
-export type NotificationDocument = Omit<NotificationDelivery, 'id'> & { _id: string };
+export type NotificationDocument = Stored<NotificationDelivery>;
 
-const toDocument = (delivery: NotificationDelivery): NotificationDocument => {
-  const { id, ...rest } = delivery;
-
-  return { ...rest, _id: id };
-};
-
-const fromDocument = (doc: NotificationDocument): NotificationDelivery => {
-  const { _id, ...rest } = doc;
-
-  return NotificationDeliverySchema.parse({ ...rest, id: _id });
-};
+const fromDocument = documentParser(NotificationDeliverySchema);
 
 const heldBy = (claimed: NotificationDelivery): Filter<NotificationDocument> => ({
   _id: claimed.id,
@@ -48,7 +40,10 @@ export class MongoNotificationOutbox implements NotificationOutbox {
       return 0;
     }
     try {
-      const res = await this.outbox.insertMany(entries.map(toDocument), { ordered: false });
+      const res = await this.outbox.insertMany(
+        entries.map((entry) => toDocument(entry)),
+        { ordered: false },
+      );
 
       return res.insertedCount;
     } catch (error: unknown) {
@@ -94,13 +89,7 @@ export class MongoNotificationOutbox implements NotificationOutbox {
     p: { error: string; retryAt: Date | null; now: Date },
   ): Promise<boolean> {
     const res = await this.outbox.updateOne(heldBy(claimed), {
-      $set: {
-        status: p.retryAt ? 'pending' : 'failed',
-        availableAt: p.retryAt ?? claimed.availableAt,
-        lease: null,
-        lastError: p.error,
-        updatedAt: p.now,
-      },
+      $set: { ...failedDeliveryFields(claimed, p), lease: null },
     });
 
     return res.matchedCount === 1;

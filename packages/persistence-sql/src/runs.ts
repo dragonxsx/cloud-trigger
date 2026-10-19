@@ -1,5 +1,6 @@
 import {
   type DomainError,
+  FAILURE_LIKE_STATUSES,
   type JobId,
   type PendingRun,
   type Result,
@@ -12,38 +13,27 @@ import {
   type RunningRun,
   type SlaUpdate,
   type StaleRunError,
+  bufferFull,
+  duplicateRun,
   err,
   ok,
+  overlapSlotKey,
+  pruneGroups,
+  staleRun,
 } from '@cloud-trigger/core';
 import { type SQL, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
-import { Count, DateColumn, Flag, decodeDoc, encodeDoc, epochOrNull, flag } from './codec.js';
+import { Count, Flag, decodeDoc, encodeDoc, epochOrNull, flag } from './codec.js';
 import type { ChangeSink } from './events.js';
 import { ALL_ROWS, and, inList, newestFirstPage, sameAs } from './query.js';
+import { type RowValues, assignments, insertInto, rowParser } from './rows.js';
 import type { Row, SqlSession } from './session.js';
 
-const SUCCESS_LIKE: readonly RunStatus[] = ['succeeded', 'cancelled', 'skipped'];
-const FAILURE_LIKE: readonly RunStatus[] = ['failed', 'timed_out'];
-
-const RunRow = z.looseObject({
-  doc: z.unknown(),
-  status: z.string(),
-  available_at: DateColumn.nullable(),
-  started_at: DateColumn.nullable(),
-  lease_worker: z.string().nullable(),
-  lease_until: DateColumn.nullable(),
-  cancel_requested: Flag,
-  late: Flag,
-  late_reasons: z.string(),
-  sla_deadline: DateColumn.nullable(),
-  acknowledged_at: DateColumn.nullable(),
-  rate_limit_key: z.string().nullable(),
-  updated_at: DateColumn,
-});
+const parseRunRow = rowParser('runs');
 
 export const runFromRow = (row: Row): Run => {
-  const parsed = RunRow.parse(row);
+  const parsed = parseRunRow(row);
   const doc = z.record(z.string(), z.unknown()).parse(decodeDoc(parsed.doc));
 
   return Run.parse({
@@ -73,51 +63,29 @@ const runningFromRow = (row: Row): RunningRun => {
   return run;
 };
 
-interface RunColumns {
-  readonly id: string;
-  readonly job_id: string;
-  readonly status: string;
-  readonly reason: string;
-  readonly scheduled_at: number;
-  readonly available_at: number | null;
-  readonly started_at: number | null;
-  readonly lease_worker: string | null;
-  readonly lease_until: number | null;
-  readonly cancel_requested: number;
-  readonly idempotency_key: string | null;
-  readonly finished_at: number | null;
-  readonly late: number;
-  readonly late_reasons: string;
-  readonly sla_deadline: number | null;
-  readonly sla_max_duration_ms: number | null;
-  readonly acknowledged_at: number | null;
-  readonly rate_limit_key: string | null;
-  readonly created_at: number;
-  readonly updated_at: number;
-}
-
-const columnsOf = (run: Run): RunColumns => ({
+const runColumns = (run: Run, overlapSlot: string | null): RowValues<'runs'> => ({
   id: run.id,
   job_id: run.jobId,
   status: run.status,
   reason: run.reason,
-  scheduled_at: run.scheduledAt.getTime(),
-  available_at: run.status === 'pending' ? run.availableAt.getTime() : null,
-  started_at: run.status === 'running' ? run.startedAt.getTime() : null,
+  scheduled_at: run.scheduledAt,
+  available_at: run.status === 'pending' ? run.availableAt : null,
+  started_at: run.status === 'running' ? run.startedAt : null,
   lease_worker: run.status === 'running' ? run.lease.workerId : null,
-  lease_until: run.status === 'running' ? run.lease.until.getTime() : null,
-  cancel_requested: flag(run.status === 'running' && run.cancelRequested),
+  lease_until: run.status === 'running' ? run.lease.until : null,
+  cancel_requested: run.status === 'running' && run.cancelRequested,
   idempotency_key: run.idempotencyKey,
-  finished_at:
-    run.status === 'pending' || run.status === 'running' ? null : run.finishedAt.getTime(),
-  late: flag(run.late),
+  overlap_slot: overlapSlot,
+  finished_at: run.status === 'pending' || run.status === 'running' ? null : run.finishedAt,
+  late: run.late,
   late_reasons: encodeDoc(run.lateReasons),
-  sla_deadline: epochOrNull(run.slaDeadline),
+  sla_deadline: run.slaDeadline,
   sla_max_duration_ms: run.slaMaxDurationMs,
-  acknowledged_at: epochOrNull(run.acknowledgedAt),
+  acknowledged_at: run.acknowledgedAt,
   rate_limit_key: run.rateLimitKey,
-  created_at: run.createdAt.getTime(),
-  updated_at: run.updatedAt.getTime(),
+  created_at: run.createdAt,
+  updated_at: run.updatedAt,
+  doc: run,
 });
 
 export async function insertRun(
@@ -125,18 +93,9 @@ export async function insertRun(
   run: PendingRun,
   overlapSlot: string | null = null,
 ): Promise<boolean> {
-  const c = columnsOf(run);
-  const inserted = await session.run(sql`
-    INSERT INTO runs (id, job_id, status, reason, scheduled_at, available_at, started_at,
-      lease_worker, lease_until, cancel_requested, idempotency_key, overlap_slot, finished_at,
-      late, late_reasons, sla_deadline, sla_max_duration_ms, acknowledged_at, rate_limit_key,
-      created_at, updated_at, doc)
-    VALUES (${c.id}, ${c.job_id}, ${c.status}, ${c.reason}, ${c.scheduled_at}, ${c.available_at},
-      ${c.started_at}, ${c.lease_worker}, ${c.lease_until}, ${c.cancel_requested},
-      ${c.idempotency_key}, ${overlapSlot}, ${c.finished_at}, ${c.late}, ${c.late_reasons},
-      ${c.sla_deadline}, ${c.sla_max_duration_ms}, ${c.acknowledged_at}, ${c.rate_limit_key},
-      ${c.created_at}, ${c.updated_at}, ${session.dialect.json(encodeDoc(run))})
-    ON CONFLICT DO NOTHING`);
+  const inserted = await session.run(
+    sql`${insertInto(session, 'runs', runColumns(run, overlapSlot))} ON CONFLICT DO NOTHING`,
+  );
 
   return inserted === 1;
 }
@@ -147,34 +106,26 @@ const casWhere = (previous: Run): SQL =>
         AND lease_worker = ${previous.lease.workerId} AND lease_until = ${previous.lease.until.getTime()}`
     : sql`id = ${previous.id} AND status = ${previous.status} AND updated_at = ${previous.updatedAt.getTime()}`;
 
-const fullSet = (session: SqlSession, next: Run, keepLateness: boolean): SQL => {
-  const c = columnsOf(next);
+const replacement = (session: SqlSession, next: Run, keepLateness: boolean): SQL => {
+  const {
+    id: _id,
+    job_id: _jobId,
+    idempotency_key: _key,
+    overlap_slot: _slot,
+    created_at: _createdAt,
+    late,
+    late_reasons: lateReasons,
+    sla_deadline: slaDeadline,
+    ...changed
+  } = runColumns(next, null);
+  const lateness = keepLateness
+    ? sql`late = CASE WHEN late = 1 THEN 1 ELSE CAST(${flag(late)} AS INTEGER) END,
+        late_reasons = CASE WHEN late = 1 THEN late_reasons ELSE ${lateReasons} END,
+        sla_deadline = CASE WHEN late = 1 THEN NULL ELSE CAST(${epochOrNull(slaDeadline)} AS BIGINT) END`
+    : assignments(session, 'runs', { late, late_reasons: lateReasons, sla_deadline: slaDeadline });
 
-  return sql`status = ${c.status}, reason = ${c.reason}, scheduled_at = ${c.scheduled_at},
-    available_at = ${c.available_at}, started_at = ${c.started_at},
-    lease_worker = ${c.lease_worker}, lease_until = ${c.lease_until},
-    cancel_requested = ${c.cancel_requested}, finished_at = ${c.finished_at},
-    ${
-      keepLateness
-        ? sql`late = CASE WHEN late = 1 THEN 1 ELSE CAST(${c.late} AS INTEGER) END,
-            late_reasons = CASE WHEN late = 1 THEN late_reasons ELSE ${c.late_reasons} END,
-            sla_deadline = CASE WHEN late = 1 THEN NULL ELSE CAST(${c.sla_deadline} AS BIGINT) END`
-        : sql`late = ${c.late}, late_reasons = ${c.late_reasons}, sla_deadline = ${c.sla_deadline}`
-    },
-    sla_max_duration_ms = ${c.sla_max_duration_ms}, acknowledged_at = ${c.acknowledged_at},
-    rate_limit_key = ${c.rate_limit_key}, updated_at = ${c.updated_at},
-    doc = ${session.dialect.json(encodeDoc(next))}`;
+  return sql`${assignments(session, 'runs', changed)}, ${lateness}`;
 };
-
-const duplicateRun = (run: PendingRun): DomainError<'duplicate_run'> => ({
-  code: 'duplicate_run',
-  message: `Run with key ${run.idempotencyKey ?? run.id} exists`,
-});
-
-const stale = (id: string): StaleRunError => ({
-  code: 'stale_run',
-  message: `Run ${id} changed since it was read`,
-});
 
 export class SqlRunRepository implements RunRepository {
   constructor(
@@ -199,9 +150,13 @@ export class SqlRunRepository implements RunRepository {
       return err(duplicateRun(run));
     }
     if (durableKey !== null) {
-      await this.session.run(sql`
-        INSERT INTO fire_keys (key, job_id, created_at)
-        VALUES (${durableKey}, ${run.jobId}, ${run.createdAt.getTime()}) ON CONFLICT DO NOTHING`);
+      await this.session.run(
+        sql`${insertInto(this.session, 'fire_keys', {
+          key: durableKey,
+          job_id: run.jobId,
+          created_at: run.createdAt,
+        })} ON CONFLICT DO NOTHING`,
+      );
     }
     this.changes?.runChanged(run.id);
 
@@ -234,10 +189,10 @@ export class SqlRunRepository implements RunRepository {
 
   async transition(previous: Run, next: Run): Promise<Result<Run, StaleRunError>> {
     const [row] = await this.session.all(sql`
-      UPDATE runs SET ${fullSet(this.session, next, true)}, overlap_slot = NULL
+      UPDATE runs SET ${replacement(this.session, next, true)}, overlap_slot = NULL
       WHERE ${casWhere(previous)} RETURNING *`);
     if (!row) {
-      return err(stale(previous.id));
+      return err(staleRun(previous.id));
     }
     this.changes?.runChanged(previous.id);
 
@@ -283,7 +238,7 @@ export class SqlRunRepository implements RunRepository {
 
     return this.session.run(sql`
       UPDATE runs SET acknowledged_at = ${at.getTime()}
-      WHERE id IN (${inList(ids)}) AND status IN (${inList(FAILURE_LIKE)})
+      WHERE id IN (${inList(ids)}) AND status IN (${inList(FAILURE_LIKE_STATUSES)})
         AND acknowledged_at IS NULL`);
   }
 
@@ -310,10 +265,7 @@ export class SqlRunRepository implements RunRepository {
 
   async prune(jobId: JobId, keep: { succeeded: number; failed: number }): Promise<number> {
     let deleted = 0;
-    for (const [statuses, count] of [
-      [SUCCESS_LIKE, keep.succeeded],
-      [FAILURE_LIKE, keep.failed],
-    ] as const) {
+    for (const [statuses, count] of pruneGroups(keep)) {
       const stalest = await this.session.all(sql`
         SELECT id FROM runs WHERE job_id = ${jobId} AND status IN (${inList(statuses)})
         ORDER BY id DESC LIMIT ${ALL_ROWS} OFFSET ${count}`);
@@ -390,7 +342,7 @@ export class SqlRunQueue implements RunQueue {
   }
 
   async acquireExecution(run: RunningRun): Promise<boolean> {
-    const slot = `${run.jobId}:exec`;
+    const slot = overlapSlotKey(run.jobId, 'exec');
     try {
       const changed = await this.session.run(sql`
         UPDATE runs SET overlap_slot = ${slot}
@@ -410,30 +362,26 @@ export class SqlRunQueue implements RunQueue {
     previous: RunningRun,
     next: PendingRun,
   ): Promise<Result<PendingRun, StaleRunError | DomainError<'buffer_full'>>> {
-    const slot = `${next.jobId}:buffer`;
-    const bufferFull: DomainError<'buffer_full'> = {
-      code: 'buffer_full',
-      message: `Job ${next.jobId} already has a buffered run`,
-    };
+    const slot = overlapSlotKey(next.jobId, 'buffer');
     try {
       const [taken] = await this.session.all(
         sql`SELECT id FROM runs WHERE overlap_slot = ${slot} AND id <> ${previous.id}`,
       );
       if (taken) {
-        return err(bufferFull);
+        return err(bufferFull(next.jobId));
       }
       const changed = await this.session.run(sql`
-        UPDATE runs SET ${fullSet(this.session, next, false)}, overlap_slot = ${slot}
+        UPDATE runs SET ${replacement(this.session, next, false)}, overlap_slot = ${slot}
         WHERE ${casWhere(previous)}`);
       if (changed === 0) {
-        return err(stale(previous.id));
+        return err(staleRun(previous.id));
       }
       this.changes?.runChanged(next.id);
 
       return ok(next);
     } catch (error: unknown) {
       if (this.session.dialect.isUniqueViolation(error)) {
-        return err(bufferFull);
+        return err(bufferFull(next.jobId));
       }
       throw error;
     }

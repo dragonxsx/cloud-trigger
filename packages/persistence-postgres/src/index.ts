@@ -4,15 +4,17 @@ import {
   type DomainEvent,
   JobId,
   type JobChangedEvent,
+  LocalEventHub,
   type Unsubscribe,
+  isLocalOnlyEvent,
 } from '@cloud-trigger/core';
 import {
   type ClosableEventBus,
   type CompiledQuery,
-  LocalEventHub,
   type RawDatabase,
   type RawExecutor,
   type Row,
+  type SqlAdapterOptions,
   type SqlPersistence,
   createSession,
   createSqlPersistence,
@@ -24,14 +26,9 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { z } from 'zod';
 
-export interface PostgresPersistenceOptions {
+export interface PostgresPersistenceOptions extends SqlAdapterOptions {
   readonly url: string;
-  readonly maxConnections?: number;
-  readonly runRetentionDays?: number;
-  readonly metricsRetentionDays?: number;
-  readonly decisionRetentionDays?: number;
-  readonly sweepIntervalMs?: number;
-  readonly onEventBusError?: (error: unknown) => void;
+  readonly maxConnections?: number | undefined;
 }
 
 export type PostgresPersistence = SqlPersistence;
@@ -101,7 +98,7 @@ class PostgresNotifyEventBus implements ClosableEventBus {
   };
 
   publish(event: DomainEvent): Promise<void> {
-    if (event.type === 'job.changed' && (event.change === 'paused' || event.change === 'resumed')) {
+    if (isLocalOnlyEvent(event)) {
       this.#hub.emit(event);
     }
 
@@ -148,11 +145,7 @@ export function createPostgresPersistence(
   return createSqlPersistence({
     session,
     events,
-    retention: {
-      runDays: options.runRetentionDays ?? 30,
-      metricsDays: options.metricsRetentionDays ?? 90,
-      decisionDays: options.decisionRetentionDays ?? 14,
-    },
+    retention: options.retention,
     sweepIntervalMs: options.sweepIntervalMs,
     migrate: async () => {
       await migrate(drizzle(client), { migrationsFolder: MIGRATIONS });

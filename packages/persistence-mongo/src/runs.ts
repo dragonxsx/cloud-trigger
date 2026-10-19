@@ -1,5 +1,6 @@
 import {
   type DomainError,
+  FAILURE_LIKE_STATUSES,
   type JobId,
   type PendingRun,
   type Run,
@@ -10,10 +11,15 @@ import {
   type RunStatus,
   type RunningRun,
   type SlaUpdate,
+  type Result,
   type StaleRunError,
+  bufferFull,
+  duplicateRun,
   err,
   ok,
-  type Result,
+  overlapSlotKey,
+  pruneGroups,
+  staleRun,
 } from '@cloud-trigger/core';
 import type { Collection, Document, Filter } from 'mongodb';
 
@@ -24,10 +30,7 @@ import {
   fromRunningDocument,
   toRunDocument,
 } from './documents.js';
-import { isDuplicateKeyError } from './errors.js';
-
-const SUCCESS_LIKE: readonly RunStatus[] = ['succeeded', 'cancelled', 'skipped'];
-const FAILURE_LIKE: readonly RunStatus[] = ['failed', 'timed_out'];
+import { unlessDuplicateKey } from './errors.js';
 
 const replaceKeepingLateness = (next: Run): Document[] => {
   const doc = toRunDocument(next);
@@ -67,11 +70,6 @@ export interface FireKeyDocument {
   createdAt: Date;
 }
 
-const duplicateRun = (run: PendingRun): DomainError<'duplicate_run'> => ({
-  code: 'duplicate_run',
-  message: `Run with key ${run.idempotencyKey ?? run.id} exists`,
-});
-
 export class MongoRunRepository implements RunRepository {
   static readonly fireKeysCollectionName = 'fire_keys';
 
@@ -88,13 +86,12 @@ export class MongoRunRepository implements RunRepository {
     if (durableKey !== null && (await this.fireKeys.countDocuments({ _id: durableKey }))) {
       return err(duplicateRun(run));
     }
-    try {
-      await this.runs.insertOne(toRunDocument(run));
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err(duplicateRun(run));
-      }
-      throw error;
+    const inserted = await unlessDuplicateKey(
+      () => this.runs.insertOne(toRunDocument(run)),
+      () => duplicateRun(run),
+    );
+    if (inserted.isErr()) {
+      return err(inserted.error);
     }
     if (durableKey !== null) {
       await this.fireKeys.updateOne(
@@ -144,14 +141,10 @@ export class MongoRunRepository implements RunRepository {
     const doc = await this.runs.findOneAndUpdate(
       casFilter(previous),
       replaceKeepingLateness(next),
-      {
-        returnDocument: 'after',
-      },
+      { returnDocument: 'after' },
     );
 
-    return doc
-      ? ok(fromRunDocument(doc))
-      : err({ code: 'stale_run', message: `Run ${previous.id} changed since it was read` });
+    return doc ? ok(fromRunDocument(doc)) : err(staleRun(previous.id));
   }
 
   countByStatus(jobId: JobId, statuses: readonly RunStatus[]): Promise<number> {
@@ -182,7 +175,7 @@ export class MongoRunRepository implements RunRepository {
 
   async acknowledge(ids: readonly RunId[], at: Date): Promise<number> {
     const res = await this.runs.updateMany(
-      { _id: { $in: [...ids] }, status: { $in: [...FAILURE_LIKE] }, acknowledgedAt: null },
+      { _id: { $in: [...ids] }, status: { $in: [...FAILURE_LIKE_STATUSES] }, acknowledgedAt: null },
       { $set: { acknowledgedAt: at } },
     );
 
@@ -218,10 +211,7 @@ export class MongoRunRepository implements RunRepository {
 
   async prune(jobId: JobId, keep: { succeeded: number; failed: number }): Promise<number> {
     let deleted = 0;
-    for (const [statuses, count] of [
-      [SUCCESS_LIKE, keep.succeeded],
-      [FAILURE_LIKE, keep.failed],
-    ] as const) {
+    for (const [statuses, count] of pruneGroups(keep)) {
       const stale = await this.runs
         .find({ jobId, status: { $in: [...statuses] } }, { projection: { _id: 1 } })
         .sort({ _id: -1 })
@@ -311,44 +301,35 @@ export class MongoRunQueue implements RunQueue {
     return docs.map(fromRunningDocument);
   }
 
-  // Leaves `updatedAt` and the lease untouched, so the caller's snapshot still passes CAS.
   async acquireExecution(run: RunningRun): Promise<boolean> {
-    try {
-      const res = await this.runs.updateOne(
-        { _id: run.id, status: 'running', 'lease.workerId': run.lease.workerId },
-        { $set: { overlapSlot: `${run.jobId}:exec` } },
-      );
+    const claimed = await unlessDuplicateKey(
+      () =>
+        this.runs.updateOne(
+          { _id: run.id, status: 'running', 'lease.workerId': run.lease.workerId },
+          { $set: { overlapSlot: overlapSlotKey(run.jobId, 'exec') } },
+        ),
+      () => false,
+    );
 
-      return res.matchedCount === 1;
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return false;
-      }
-      throw error;
-    }
+    return claimed.isOk() && claimed.value.matchedCount === 1;
   }
 
   async buffer(
     previous: RunningRun,
     next: PendingRun,
   ): Promise<Result<PendingRun, StaleRunError | DomainError<'buffer_full'>>> {
-    try {
-      const res = await this.runs.replaceOne(casFilter(previous), {
-        ...toRunDocument(next),
-        overlapSlot: `${next.jobId}:buffer`,
-      });
-
-      return res.matchedCount === 1
-        ? ok(next)
-        : err({ code: 'stale_run', message: `Run ${previous.id} changed since it was read` });
-    } catch (error: unknown) {
-      if (isDuplicateKeyError(error)) {
-        return err({
-          code: 'buffer_full',
-          message: `Job ${next.jobId} already has a buffered run`,
-        });
-      }
-      throw error;
+    const replaced = await unlessDuplicateKey(
+      () =>
+        this.runs.replaceOne(casFilter(previous), {
+          ...toRunDocument(next),
+          overlapSlot: overlapSlotKey(next.jobId, 'buffer'),
+        }),
+      () => bufferFull(next.jobId),
+    );
+    if (replaced.isErr()) {
+      return err(replaced.error);
     }
+
+    return replaced.value.matchedCount === 1 ? ok(next) : err(staleRun(previous.id));
   }
 }

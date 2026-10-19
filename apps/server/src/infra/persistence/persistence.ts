@@ -1,4 +1,9 @@
-import { type Logger, type Persistence, assertNever } from '@cloud-trigger/core';
+import {
+  type Logger,
+  type Persistence,
+  type RetentionPolicy,
+  assertNever,
+} from '@cloud-trigger/core';
 import { createMongoPersistence } from '@cloud-trigger/persistence-mongo';
 import { createPostgresPersistence } from '@cloud-trigger/persistence-postgres';
 import { createSqlitePersistence } from '@cloud-trigger/persistence-sqlite';
@@ -9,22 +14,16 @@ const SWEEP_INTERVAL_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 10_000;
 
 export interface PersistenceOptions {
-  readonly retention?:
-    | {
-        readonly runRetentionDays: number;
-        readonly metricsRetentionDays: number;
-        readonly decisionRetentionDays: number;
-      }
-    | undefined;
+  readonly retention?: RetentionPolicy | undefined;
   readonly sweepIntervalMs?: number | undefined;
   readonly serverSelectionTimeoutMs?: number | undefined;
   readonly onEventBusError: (error: unknown) => void;
 }
 
-export const retentionOf = (config: AppConfig) => ({
-  runRetentionDays: config.RUN_RETENTION_DAYS,
-  metricsRetentionDays: config.METRICS_RETENTION_DAYS,
-  decisionRetentionDays: config.DECISION_RETENTION_DAYS,
+export const retentionOf = (config: AppConfig): RetentionPolicy => ({
+  runDays: config.RUN_RETENTION_DAYS,
+  metricsDays: config.METRICS_RETENTION_DAYS,
+  decisionDays: config.DECISION_RETENTION_DAYS,
 });
 
 export async function openPersistence(
@@ -40,22 +39,22 @@ export async function openPersistence(
         analyticsUri: database.analyticsUri,
         analyticsDbName: database.analyticsDbName,
         serverSelectionTimeoutMs: options.serverSelectionTimeoutMs,
-        ...retention,
+        retention,
         onEventBusError,
       });
     case 'postgres':
       return createPostgresPersistence({
         url: database.url,
         maxConnections: database.maxConnections,
-        ...(sweepIntervalMs !== undefined && { sweepIntervalMs }),
-        ...retention,
+        sweepIntervalMs,
+        retention,
         onEventBusError,
       });
     case 'sqlite':
       return createSqlitePersistence({
         path: database.path,
-        ...(sweepIntervalMs !== undefined && { sweepIntervalMs }),
-        ...retention,
+        sweepIntervalMs,
+        retention,
         onEventBusError,
       });
     default:
