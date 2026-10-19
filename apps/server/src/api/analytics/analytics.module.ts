@@ -3,12 +3,10 @@ import { Module } from '@nestjs/common';
 import { factoryProvider } from '../../common/tokens.js';
 import { PERSISTENCE } from '../../infra/persistence/persistence.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
-import { AnalyticsController } from './analytics.controller.js';
 import { AnalyticsRouter, analyticsHandlers } from './analytics.router.js';
 
 @Module({
   imports: [ApiSharedModule],
-  controllers: [AnalyticsController],
   providers: [
     factoryProvider(
       AnalyticsRouter,

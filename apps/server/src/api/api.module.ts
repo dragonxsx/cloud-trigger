@@ -7,6 +7,7 @@ import { factory, factoryProvider } from '../common/tokens.js';
 import { LOGGER } from '../infra/logging/logging.module.js';
 import { AccessModule } from './access/access.module.js';
 import { AnalyticsModule } from './analytics/analytics.module.js';
+import { ApiController } from './api.controller.js';
 import { APP_ROUTER_PARTS, ApiRouter, composeAppRouter } from './app-router.js';
 import { CalendarModule } from './calendar/calendar.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
@@ -45,7 +46,7 @@ export const orpcRootModule = () =>
     SetupModule,
     AccessModule,
   ],
-  controllers: [OpenApiController],
+  controllers: [ApiController, OpenApiController],
   providers: [
     factoryProvider(
       ApiRouter,

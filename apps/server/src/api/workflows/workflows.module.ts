@@ -5,12 +5,10 @@ import { factoryProvider } from '../../common/tokens.js';
 import { EngineModule } from '../../engine/engine.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
 import { JobRedactor } from '../shared/redaction.js';
-import { WorkflowsController } from './workflows.controller.js';
 import { WorkflowsRouter, workflowRunsHandlers, workflowsHandlers } from './workflows.router.js';
 
 @Module({
   imports: [ApiSharedModule, EngineModule],
-  controllers: [WorkflowsController],
   providers: [
     factoryProvider(
       WorkflowsRouter,

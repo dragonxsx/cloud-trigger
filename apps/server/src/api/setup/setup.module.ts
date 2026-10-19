@@ -9,14 +9,12 @@ import { ConfigService } from '../../config/config.module.js';
 import { LOGGER } from '../../infra/logging/logging.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
 import { SetupAnnouncer } from './setup-announcer.js';
-import { SetupController } from './setup.controller.js';
 import { type SetupBackend, SetupRouter, setupHandlers } from './setup.router.js';
 
 const SETUP_BACKEND = token<SetupBackend>('SETUP_BACKEND');
 
 @Module({
   imports: [ApiSharedModule],
-  controllers: [SetupController],
   providers: [
     factoryProvider(
       SETUP_BACKEND,

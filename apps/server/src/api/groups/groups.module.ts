@@ -5,12 +5,10 @@ import { factoryProvider } from '../../common/tokens.js';
 import { EngineModule } from '../../engine/engine.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
 import { JobRedactor } from '../shared/redaction.js';
-import { GroupsController } from './groups.controller.js';
 import { GroupsRouter, groupsHandlers } from './groups.router.js';
 
 @Module({
   imports: [ApiSharedModule, EngineModule],
-  controllers: [GroupsController],
   providers: [
     factoryProvider(
       GroupsRouter,

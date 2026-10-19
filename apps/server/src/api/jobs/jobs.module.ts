@@ -6,12 +6,10 @@ import { EngineModule } from '../../engine/engine.module.js';
 import { PERSISTENCE } from '../../infra/persistence/persistence.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
 import { JobRedactor } from '../shared/redaction.js';
-import { JobsController } from './jobs.controller.js';
 import { JobsRouter, jobsHandlers } from './jobs.router.js';
 
 @Module({
   imports: [ApiSharedModule, EngineModule],
-  controllers: [JobsController],
   providers: [
     factoryProvider(
       JobsRouter,

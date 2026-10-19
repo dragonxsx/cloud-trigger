@@ -3,12 +3,10 @@ import { Module } from '@nestjs/common';
 
 import { factoryProvider } from '../../common/tokens.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
-import { CatalogController } from './catalog.controller.js';
 import { CatalogRouter, catalogHandlers } from './catalog.router.js';
 
 @Module({
   imports: [ApiSharedModule],
-  controllers: [CatalogController],
   providers: [
     factoryProvider(
       CatalogRouter,

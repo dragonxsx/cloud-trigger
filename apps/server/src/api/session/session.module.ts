@@ -5,12 +5,10 @@ import { AuthSettingsCache } from '../../auth/settings-cache.js';
 import { factoryProvider } from '../../common/tokens.js';
 import { PERSISTENCE } from '../../infra/persistence/persistence.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
-import { SessionController } from './session.controller.js';
 import { SessionRouter, sessionHandlers } from './session.router.js';
 
 @Module({
   imports: [ApiSharedModule],
-  controllers: [SessionController],
   providers: [
     factoryProvider(
       SessionRouter,

@@ -7,12 +7,10 @@ import { PERSISTENCE } from '../../infra/persistence/persistence.module.js';
 import { ApiSharedModule, ORPC_API } from '../shared/api-shared.module.js';
 import { JobRedactor } from '../shared/redaction.js';
 import { RUN_EVENTS, publishRunChanges } from './run-events.js';
-import { RunsController } from './runs.controller.js';
 import { RunsRouter, runsHandlers } from './runs.router.js';
 
 @Module({
   imports: [ApiSharedModule, EngineModule],
-  controllers: [RunsController],
   providers: [
     factoryProvider(RUN_EVENTS, [PERSISTENCE], publishRunChanges),
     factoryProvider(
