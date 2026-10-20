@@ -47,6 +47,7 @@ config:
   OTEL_EXPORTER_OTLP_ENDPOINT: ""
   DECISION_RETENTION_DAYS: "14"
   BADGES_PUBLIC: "false"
+  OPENAPI_FETCH_ALLOW_PRIVATE: "false"
   PUBLIC_URL: ""
 
 # Sensitive settings. Prefer `existingSecret` in production (e.g. managed by External Secrets).

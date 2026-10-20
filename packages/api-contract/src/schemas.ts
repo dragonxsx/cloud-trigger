@@ -22,6 +22,8 @@ import {
   JobId,
   JobSpec,
   LintIssue,
+  OpenApiAnalysis,
+  OpenApiImportOptions,
   ProviderKind,
   Run,
   RunId,
@@ -184,6 +186,21 @@ export const ConnectionTestInput = z.object({
       "Tests the config with this environment's merge patch applied; *** values come from the saved overlay.",
     ),
 });
+
+export const OpenApiPreviewInput = OpenApiImportOptions.extend({
+  source: z
+    .discriminatedUnion('kind', [
+      z.object({ kind: z.literal('text'), text: z.string().min(1).max(5_000_000) }),
+      z.object({
+        kind: z.literal('url'),
+        url: z
+          .url({ protocol: /^https?$/ })
+          .describe('Fetched by the server from public addresses only.'),
+      }),
+    ])
+    .describe('An OpenAPI 2.0 to 3.2 document as JSON or YAML, pasted or by URL.'),
+});
+export { OpenApiAnalysis };
 
 export const EnvironmentKeyParam = z.object({ key: EnvironmentKey });
 export const EnvironmentPage = page(Environment);

@@ -1,6 +1,8 @@
-import type { ConnectionRef } from '@cloud-trigger/core';
+import { type ConfigError, type ConnectionRef, type Result, ok } from '@cloud-trigger/core';
 import type { ConnectionService } from '@cloud-trigger/engine';
+import { analyzeOpenApi } from '@cloud-trigger/openapi';
 
+import type { SpecFetcher } from '../../infra/http/spec-fetcher.js';
 import { type Api, toApiError } from '../shared/api.js';
 import type { JobRedactor } from '../shared/redaction.js';
 
@@ -8,12 +10,14 @@ export interface ConnectionsRouterDeps {
   readonly api: Api;
   readonly connectionService: ConnectionService;
   readonly redactor: JobRedactor;
+  readonly specFetcher: SpecFetcher;
 }
 
 export const connectionsHandlers = ({
   api,
   connectionService,
   redactor,
+  specFetcher,
 }: ConnectionsRouterDeps) => {
   const connections = api.connections;
   const redact = redactor.redactConnection.bind(redactor);
@@ -41,6 +45,20 @@ export const connectionsHandlers = ({
         ({ message }) => ({ ok: true, message }),
         ({ message }) => ({ ok: false, message }),
       );
+    }),
+
+    openapiPreview: connections.openapiPreview.handler(async ({ input, errors, signal }) => {
+      const { source, ...options } = input;
+      const fetched: Result<{ text: string; finalUrl: string | undefined }, ConfigError> =
+        source.kind === 'text'
+          ? ok({ text: source.text, finalUrl: undefined })
+          : await specFetcher.fetchText(source.url, signal ?? new AbortController().signal);
+      const analysis = fetched.andThen((spec) => analyzeOpenApi(spec.text, options, spec.finalUrl));
+      if (analysis.isErr()) {
+        throw toApiError(errors, analysis.error);
+      }
+
+      return analysis.value;
     }),
 
     list: connections.list.handler(async ({ input }) => {

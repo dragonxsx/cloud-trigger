@@ -1,4 +1,4 @@
-import { type EndpointKind, assertNever, endpointProvider } from '@cloud-trigger/core';
+import { type EndpointKind, assertNever, endpointProvider, isRecord } from '@cloud-trigger/core';
 import {
   Accordion,
   ActionIcon,
@@ -13,11 +13,20 @@ import {
   Textarea,
 } from '@mantine/core';
 import type { UseFormReturnType } from '@mantine/form';
-import { IconAlertCircle, IconCircleCheck, IconPlus, IconTrash } from '@tabler/icons-react';
+import { showNotification } from '@mantine/notifications';
+import {
+  IconAlertCircle,
+  IconCircleCheck,
+  IconFileImport,
+  IconPlus,
+  IconTrash,
+} from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { type ReactNode, useMemo } from 'react';
+import { kebabCase } from 'change-case';
+import { type ReactNode, useMemo, useState } from 'react';
 
 import { forConnection } from '../../components/ConnectedProviderPicker';
+import { OpenApiImportModal, type OpenApiImportResult } from '../../components/OpenApiImportModal';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { type ConnectionSpecDto, client } from '../../lib/api';
 import type { ConfigIssueDto } from '../../lib/errors';
@@ -120,6 +129,13 @@ const movePatches = (overlays: OverlayValues[], from: string, to: string | null)
     ),
   }));
 
+const connectionKeyFrom = (title: string): string =>
+  kebabCase(title)
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[-_]+/, '')
+    .slice(0, 63)
+    .replace(/[-_]+$/, '');
+
 const issuesAt = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
   Object.entries(errors).flatMap(([path, message]) =>
     path.startsWith(prefix) && typeof message === 'string'
@@ -211,6 +227,31 @@ export function ConnectionFormFields({
     return { target: over('target'), trigger: over('trigger'), notifier: over('notifier') };
   }, [providers.data, form.values.type]);
   const { values, errors } = form;
+  const [importing, setImporting] = useState(false);
+  const connectionConfig = isRecord(values.config) ? values.config : {};
+  const baseUrl =
+    typeof connectionConfig['baseUrl'] === 'string' ? connectionConfig['baseUrl'] : undefined;
+  const applyImport = (result: OpenApiImportResult) => {
+    form.setFieldValue('endpoints', [...result.endpoints]);
+    if (result.baseUrl !== undefined || result.auth !== undefined) {
+      form.setFieldValue('config', {
+        ...connectionConfig,
+        ...(result.baseUrl !== undefined && { baseUrl: result.baseUrl }),
+        ...(result.auth !== undefined && { auth: result.auth }),
+      });
+    }
+    if (!editing && values.key === '' && result.title !== '') {
+      form.setFieldValue('key', connectionKeyFrom(result.title));
+    }
+    if (values.name === '' && result.title !== '') {
+      form.setFieldValue('name', result.title);
+    }
+    showNotification({
+      color: 'green',
+      title: 'Endpoints imported into the form',
+      message: `${result.added} added, ${result.updated} updated. Save the connection to keep them.`,
+    });
+  };
   const setEndpoints = (endpoints: EndpointValues[]) => form.setFieldValue('endpoints', endpoints);
   // Patches stay put while another endpoint still has the old key or already has the new one.
   const moveEndpoint = (index: number, to: string | null) => {
@@ -300,6 +341,7 @@ export function ConnectionFormFields({
           <Text size="sm" color="dimmed">
             No endpoints yet. Jobs can still use the connection and configure the request
             themselves.
+            {values.type === 'http' && ' Have an OpenAPI document? Import its operations below.'}
           </Text>
         ) : (
           <Accordion variant="separated" multiple>
@@ -346,6 +388,13 @@ export function ConnectionFormFields({
                           </ActionIcon>
                         </Group>
                       </Group>
+                      <Textarea
+                        label="Description"
+                        autosize
+                        minRows={1}
+                        maxRows={6}
+                        {...form.getInputProps(`${base}.description`)}
+                      />
                       {kinds.length > 1 && (
                         <SegmentedControl
                           value={kind}
@@ -387,7 +436,23 @@ export function ConnectionFormFields({
           >
             Add endpoint
           </Button>
+          {values.type === 'http' && (
+            <Button
+              variant="default"
+              leftIcon={<IconFileImport size={16} />}
+              onClick={() => setImporting(true)}
+            >
+              Import from OpenAPI
+            </Button>
+          )}
         </Group>
+        <OpenApiImportModal
+          opened={importing}
+          onClose={() => setImporting(false)}
+          endpoints={values.endpoints}
+          baseUrl={baseUrl}
+          onApply={applyImport}
+        />
         {typeof errors['endpoints'] === 'string' && (
           <Alert color="red" icon={<IconAlertCircle size={18} />}>
             {errors['endpoints']}

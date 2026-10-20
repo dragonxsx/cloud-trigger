@@ -8,3 +8,5 @@ allowBuilds:
   cpu-features: false
   ssh2: false
   protobufjs: false
+minimumReleaseAgeExclude:
+  - "@scalar/json-magic@0.16.1"

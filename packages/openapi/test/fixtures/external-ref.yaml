@@ -1,0 +1,11 @@
+openapi: 3.1.0
+info: { title: External, version: "1" }
+servers: [{ url: /api }]
+paths:
+  /secrets:
+    $ref: "file:///etc/passwd"
+  /remote:
+    get:
+      operationId: remote
+      parameters:
+        - $ref: "http://169.254.169.254/latest/meta-data#/x"

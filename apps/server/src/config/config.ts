@@ -88,6 +88,10 @@ const ConfigShape = z.object({
     .describe('Presets the first-run setup token; set it when several replicas serve the API.'),
   CORS_ORIGINS: csv,
   BADGES_PUBLIC: z.stringbool().default(false),
+  OPENAPI_FETCH_ALLOW_PRIVATE: z
+    .stringbool()
+    .default(false)
+    .describe('Lets OpenAPI imports fetch specs from private, loopback and link-local addresses.'),
   CALENDAR_TOKEN_SECRET: z
     .string()
     .min(32, 'Use at least 32 characters')

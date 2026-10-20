@@ -1,0 +1,87 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Swagger Petstore", "version": "1.0.0" },
+  "servers": [
+    { "url": "https://{env}.petstore.test/v1", "variables": { "env": { "default": "api" } } }
+  ],
+  "security": [{ "token": [] }],
+  "components": {
+    "securitySchemes": {
+      "cookie": { "type": "apiKey", "in": "cookie", "name": "sid" },
+      "token": { "type": "http", "scheme": "bearer" }
+    },
+    "parameters": {
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": true,
+        "schema": { "type": "integer", "default": 20 }
+      }
+    },
+    "schemas": {
+      "Pet": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "id": { "type": "integer", "readOnly": true },
+          "name": { "type": "string", "example": "Rex" },
+          "parent": { "$ref": "#/components/schemas/Pet" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/pets": {
+      "get": {
+        "operationId": "listPets",
+        "summary": "List all pets",
+        "tags": ["pets"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Limit" },
+          { "name": "tag", "in": "query", "schema": { "type": "string" } },
+          { "name": "X-Request-Id", "in": "header", "required": true, "example": "abc" },
+          { "name": "Accept", "in": "header", "required": true },
+          { "name": "session", "in": "cookie" }
+        ]
+      },
+      "post": {
+        "operationId": "createPet",
+        "summary": "Create a pet",
+        "tags": ["pets"],
+        "requestBody": {
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Pet" } } }
+        }
+      }
+    },
+    "/pets/{petId}": {
+      "parameters": [
+        { "name": "petId", "in": "path", "required": true, "schema": { "type": "string" } }
+      ],
+      "get": {
+        "operationId": "showPetById",
+        "summary": "Info for a specific pet",
+        "tags": ["pets"]
+      },
+      "delete": { "operationId": "deletePet", "deprecated": true },
+      "put": {
+        "operationId": "updatePet",
+        "requestBody": {
+          "content": {
+            "application/json": { "examples": { "rex": { "value": { "name": "Rex II" } } } },
+            "application/xml": {}
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePet",
+        "requestBody": { "content": { "multipart/form-data": {} } }
+      }
+    },
+    "/stores/{storeId}/pets/{petId}": {
+      "get": {
+        "summary": "Pet in store",
+        "parameters": [{ "name": "storeId", "in": "path", "required": true, "example": 7 }]
+      }
+    }
+  }
+}

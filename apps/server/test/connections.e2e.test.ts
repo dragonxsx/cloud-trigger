@@ -151,6 +151,64 @@ describe('connections API', () => {
     expect(await api.connections.get({ key: 'billing' }).catch(errorCode)).toBe('NOT_FOUND');
   });
 
+  it('imports OpenAPI operations as endpoints and runs one with path parameters', async () => {
+    const spec = [
+      'swagger: "2.0"',
+      'info: { title: Pets, version: "1" }',
+      `host: ${new URL(target.url).host}`,
+      'basePath: /v1',
+      'schemes: [http]',
+      'securityDefinitions: { token: { type: apiKey, in: header, name: Authorization } }',
+      'paths:',
+      '  /pets/{petId}:',
+      '    get:',
+      '      operationId: getPetById',
+      '      parameters: [{ name: petId, in: path, required: true, type: string }]',
+    ].join('\n');
+    const analysis = await api.connections.openapiPreview({ source: { kind: 'text', text: spec } });
+    expect(analysis).toMatchObject({
+      info: { title: 'Pets', openapi: '2.0' },
+      servers: [`${target.url}/v1`],
+      auth: { type: 'api_key', in: 'header', name: 'Authorization' },
+      warnings: [],
+    });
+    const [operation] = analysis.operations;
+    expect(operation?.endpoint.key).toBe('get-pet-by-id');
+
+    await api.connections.create({
+      key: 'pets',
+      type: 'http',
+      config: { baseUrl: analysis.servers[0], auth: { type: 'bearer', token: 'live-token' } },
+      endpoints: analysis.operations.map((op) => op.endpoint),
+    });
+    const job = await api.jobs.create({
+      name: 'fetch pet',
+      trigger: { type: 'manual', config: {} },
+      target: {
+        type: 'http',
+        connection: { key: 'pets', endpoint: 'get-pet-by-id' },
+        config: { pathParams: { petId: 'rex 1' } },
+      },
+    });
+    await api.jobs.run({ id: job.id });
+    expect((await waitForRun(job.id)).status).toBe('succeeded');
+    expect(target.requests.at(-1)).toMatchObject({ method: 'GET', url: '/v1/pets/rex%201' });
+
+    await api.jobs.delete({ id: job.id });
+    await api.connections.delete({ key: 'pets' });
+  });
+
+  it('refuses to fetch OpenAPI documents from private addresses by default', async () => {
+    const failure = await api.connections
+      .openapiPreview({ source: { kind: 'url', url: `${target.url}/openapi.json` } })
+      .catch((error: unknown) => error);
+    expect(failure instanceof ORPCError ? failure.data : undefined).toEqual({
+      issues: [
+        { path: 'source.url', message: 'The host resolves to a private or internal address' },
+      ],
+    });
+  });
+
   it('rejects a job that references an unknown connection with a field issue', async () => {
     const failure = await api.jobs
       .create({

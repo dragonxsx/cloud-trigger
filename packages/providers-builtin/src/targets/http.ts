@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { httpConnection, prepareRequest, urlIssues } from '../connections/http.js';
 import { dispatcherFor, errorCode, flattenHeaders, readLimited } from '../shared/http-client.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
+import { fillPathParams } from '../shared/path-params.js';
 import { SigningConfig, signatureHeaders } from '../shared/signing.js';
 import {
   HttpAssertions,
@@ -29,7 +30,13 @@ export const HttpTargetConfig = z.object({
   url: z
     .string()
     .describe(
-      'Absolute http(s) URL, or a path such as /v1/charges?x=1 when the target uses a connection. May contain {{secret:NAME}} placeholders.',
+      'Absolute http(s) URL, or a path such as /v1/charges/{id}?x=1 when the target uses a connection. May contain {name} path parameters and {{secret:NAME}} placeholders.',
+    ),
+  pathParams: z
+    .record(z.string(), z.string())
+    .default({})
+    .describe(
+      'Values for the {name} path parameters in url, URL-encoded. Values may contain {{secret:NAME}}.',
     ),
   headers: z
     .record(z.string(), z.string())
@@ -68,6 +75,7 @@ export const httpTarget = defineConnectedTarget({
     const elapsed = () => performance.now() - started;
     const resolved = await ResultAsync.combine([
       interpolate(ctx.secrets, config.url),
+      interpolateValues(ctx.secrets, config.pathParams),
       interpolateValues(ctx.secrets, config.headers),
       interpolateValues(ctx.secrets, config.secretHeaders),
       config.signing ? interpolate(ctx.secrets, config.signing.secret) : okAsync(undefined),
@@ -75,8 +83,14 @@ export const httpTarget = defineConnectedTarget({
     if (resolved.isErr()) {
       return failedResult('missing_secret', resolved.error.message, false, elapsed());
     }
-    const [rawUrl, headers, secretHeaders, signingSecret] = resolved.value;
-    const prepared = await prepareRequest(rawUrl, config.query, connection, ctx.secrets, {
+    const [templateUrl, pathParams, headers, secretHeaders, signingSecret] = resolved.value;
+    const filled = fillPathParams(templateUrl, pathParams);
+    if (filled.isErr()) {
+      const { code, message, retryable } = filled.error;
+
+      return failedResult(code, message, retryable, elapsed());
+    }
+    const prepared = await prepareRequest(filled.value, config.query, connection, ctx.secrets, {
       now: ctx.now,
       signal,
     });

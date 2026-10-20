@@ -135,6 +135,25 @@ describe('http target', () => {
     );
   });
 
+  it('fills URL-encoded path parameters, secrets included', async () => {
+    const result = await run({
+      method: 'GET',
+      url: `${base}/ok/{id}/{token}?q={{secret:TOKEN}}`,
+      pathParams: { id: 'a b/c', token: '{{secret:TOKEN}}' },
+    });
+    expect(result.outcome).toBe('success');
+    expect(seen.at(-1)?.url).toBe('/ok/a%20b%2Fc/s3cr3t?q=s3cr3t');
+  });
+
+  it('fails without retrying when a path parameter has no value', async () => {
+    const result = await run({ url: `${base}/ok/{id}/{other}`, pathParams: { id: '' } });
+    expect(result).toMatchObject({
+      outcome: 'failure',
+      error: { code: 'missing_path_param', retryable: false },
+    });
+    expect(result.error?.message).toContain('{id}, {other}');
+  });
+
   it('reports timeouts and missing secrets', async () => {
     expect((await run({ url: `${base}/slow` }, 100)).error?.code).toBe('timeout');
     expect((await run({ url: `${base}/ok`, headers: { a: '{{secret:NOPE}}' } })).error?.code).toBe(

@@ -1,0 +1,18 @@
+openapi: 3.2.0
+info: { title: New methods, version: "1" }
+components:
+  securitySchemes:
+    oidc: { type: openIdConnect, openIdConnectUrl: https://id.test/.well-known }
+    m2m:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://id.test/token
+          scopes: { read: Read, write: Write }
+paths:
+  /search:
+    query: { operationId: search }
+    trace: { operationId: trace }
+    additionalOperations:
+      PURGE: { operationId: purge }
+    get: { operationId: Get Search Results! }

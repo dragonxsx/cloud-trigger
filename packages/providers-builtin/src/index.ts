@@ -59,6 +59,8 @@ export {
 } from './connections/http.js';
 export { FANOUT_TYPE, type FanoutConfig, createFanoutTarget } from './targets/fanout.js';
 export { interpolate, interpolateValues } from './shared/interpolate.js';
+export { fillPathParams, pathParamNames } from './shared/path-params.js';
+export { HttpTargetConfig } from './targets/http.js';
 export { LiquidTemplate, renderWithSecrets } from './shared/liquid.js';
 export {
   SigningConfig,

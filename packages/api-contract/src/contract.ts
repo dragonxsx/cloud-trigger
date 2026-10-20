@@ -57,6 +57,8 @@ import {
   ConnectionTestInput,
   ConnectionTestOutcome,
   ConnectionUsages,
+  OpenApiAnalysis,
+  OpenApiPreviewInput,
   UpdateConnectionInput,
   ExplainQuery,
   ExportQuery,
@@ -322,6 +324,15 @@ const connections = {
     })
     .input(ConnectionTestInput)
     .output(ConnectionTestOutcome),
+  openapiPreview: write
+    .route({
+      method: 'POST',
+      path: '/connections/openapi/preview',
+      summary:
+        'Read an OpenAPI document into endpoint drafts for an http connection; saves nothing',
+    })
+    .input(OpenApiPreviewInput)
+    .output(OpenApiAnalysis),
   list: base
     .route({ method: 'GET', path: '/connections', summary: 'List connections by key' })
     .meta(
