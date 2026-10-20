@@ -38,20 +38,37 @@ export const SourceEndpoint = z
   })
   .meta({ title: 'Event source' });
 
-export const Endpoint = z.union([TargetEndpoint, SourceEndpoint]);
+export const NotifierEndpoint = z
+  .strictObject({
+    ...EndpointFields,
+    notifier: ProviderRef.describe('A complete notifier config that sends over the connection.'),
+  })
+  .meta({ title: 'Notifier' });
+
+export const Endpoint = z.union([TargetEndpoint, SourceEndpoint, NotifierEndpoint]);
 export type Endpoint = z.output<typeof Endpoint>;
 
-export type EndpointKind = 'target' | 'trigger';
+export type EndpointKind = 'target' | 'trigger' | 'notifier';
 
 export const endpointProvider = (
   endpoint: Endpoint,
-): { readonly kind: EndpointKind; readonly ref: ProviderRef } =>
-  'target' in endpoint
-    ? { kind: 'target', ref: endpoint.target }
-    : { kind: 'trigger', ref: endpoint.source };
+): { readonly kind: EndpointKind; readonly ref: ProviderRef } => {
+  if ('target' in endpoint) {
+    return { kind: 'target', ref: endpoint.target };
+  }
 
-export const withEndpointProvider = (endpoint: Endpoint, ref: ProviderRef): Endpoint =>
-  'target' in endpoint ? { ...endpoint, target: ref } : { ...endpoint, source: ref };
+  return 'source' in endpoint
+    ? { kind: 'trigger', ref: endpoint.source }
+    : { kind: 'notifier', ref: endpoint.notifier };
+};
+
+export const withEndpointProvider = (endpoint: Endpoint, ref: ProviderRef): Endpoint => {
+  if ('target' in endpoint) {
+    return { ...endpoint, target: ref };
+  }
+
+  return 'source' in endpoint ? { ...endpoint, source: ref } : { ...endpoint, notifier: ref };
+};
 
 export const ConnectionSpec = z.object({
   key: ConnectionKey,
@@ -96,12 +113,18 @@ export const ConnectionRef = z.object({
 });
 export type ConnectionRef = z.output<typeof ConnectionRef>;
 
-export const TargetRef = ProviderRef.extend({
-  connection: ConnectionRef.optional().describe(
-    'Saved connection that supplies the base address, credentials and defaults.',
-  ),
-});
+const connectedRef = (description: string) =>
+  ProviderRef.extend({ connection: ConnectionRef.optional().describe(description) });
+
+export const TargetRef = connectedRef(
+  'Saved connection that supplies the base address, credentials and defaults.',
+);
 export type TargetRef = z.output<typeof TargetRef>;
+
+export const NotifierRef = connectedRef(
+  'Saved connection that supplies the address and credentials; an endpoint supplies a saved notifier config.',
+);
+export type NotifierRef = z.output<typeof NotifierRef>;
 
 export type ConnectionCatalog = ReadonlyMap<string, Connection>;
 

@@ -15,7 +15,6 @@ import { GROUP_SWATCHES } from '../../components/GroupChip';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
 import { type GroupDto, client } from '../../lib/api';
-import type { ConfigIssueDto } from '../../lib/errors';
 
 type GroupSpecDto = Parameters<typeof client.groups.create>[0];
 
@@ -58,13 +57,6 @@ const rateLimitOf = (perSecond: number | undefined, maxConcurrent: number | unde
         ...(perSecond !== undefined && { perSecond }),
         ...(maxConcurrent !== undefined && { maxConcurrent }),
       };
-
-const issuesUnder = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
-  Object.entries(errors).flatMap(([path, message]) =>
-    path.startsWith(`${prefix}.config`) && typeof message === 'string'
-      ? [{ path: path.slice(`${prefix}.config`.length).replace(/^\./, ''), message }]
-      : [],
-  );
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -150,7 +142,8 @@ export function GroupFormFields({ form }: { form: GroupForm }) {
         <NotificationRulesEditor
           rules={values.defaultNotifications}
           providers={notifiers}
-          issuesFor={(i) => issuesUnder(errors, `defaultNotifications.${i}.notifier`)}
+          errors={errors}
+          path="defaultNotifications"
           onChange={(rules) => form.setFieldValue('defaultNotifications', rules)}
         />
       </Section>

@@ -128,9 +128,10 @@ describe('connections API', () => {
     expect(run.status).toBe('succeeded');
     expect(target.requests.at(-1)).toMatchObject({ method: 'POST', url: '/v1/charges' });
 
-    expect(await api.connections.usages({ key: 'billing' })).toEqual([
-      { id: job.id, name: 'charge nightly', enabled: true, endpoints: ['charge'] },
-    ]);
+    expect(await api.connections.usages({ key: 'billing' })).toEqual({
+      jobs: [{ id: job.id, name: 'charge nightly', enabled: true, endpoints: ['charge'] }],
+      groups: [],
+    });
     const deleting = await api.connections.delete({ key: 'billing' }).catch(errorCode);
     expect(deleting).toBe('CONFLICT');
     const breaking = await api.connections
@@ -198,9 +199,10 @@ describe('connections API', () => {
       },
       target: { type: 'kafka', connection: { key: 'events', endpoint: 'publish' }, config: {} },
     });
-    expect(await api.connections.usages({ key: 'events' })).toEqual([
-      { id: job.id, name: 'on order', enabled: false, endpoints: ['orders', 'publish'] },
-    ]);
+    expect(await api.connections.usages({ key: 'events' })).toEqual({
+      jobs: [{ id: job.id, name: 'on order', enabled: false, endpoints: ['orders', 'publish'] }],
+      groups: [],
+    });
 
     const wrongKind = await api.jobs
       .create({
@@ -237,5 +239,83 @@ describe('connections API', () => {
 
     await api.jobs.delete({ id: job.id });
     expect(await api.connections.delete({ key: 'events' })).toEqual({ deleted: true });
+  });
+
+  it('notifies over a slack connection from group defaults and redacts notifier endpoints', async () => {
+    const slack = {
+      key: 'chatops',
+      type: 'slack',
+      config: { url: `${target.url}/slack` },
+      endpoints: [
+        {
+          key: 'alerts',
+          notifier: {
+            type: 'slack',
+            config: { channel: '#alerts', template: '{{ job.name }} {{ event }}' },
+          },
+        },
+      ],
+    };
+    const created = await api.connections.create(slack);
+    expect(created.config).toEqual({ url: '***' });
+
+    const group = await api.groups.create({
+      name: 'ops',
+      defaultNotifications: [
+        {
+          on: ['permanent_failure'],
+          notifier: {
+            type: 'slack',
+            config: { channel: '#oncall' },
+            connection: { key: 'chatops', endpoint: 'alerts' },
+          },
+        },
+      ],
+    });
+    expect(await api.connections.usages({ key: 'chatops' })).toEqual({
+      jobs: [],
+      groups: [{ id: group.id, name: 'ops', endpoints: ['alerts'] }],
+    });
+
+    const restored = await api.connections.update({
+      ...slack,
+      config: created.config,
+      expectedVersion: created.version,
+    });
+    expect(restored.version).toBe(2);
+    expect(
+      await api.connections.test({ key: 'chatops', type: 'slack', config: restored.config }),
+    ).toEqual({
+      ok: true,
+      message: 'Configuration is valid',
+    });
+
+    const missing = await api.groups
+      .create({
+        name: 'broken',
+        defaultNotifications: [
+          {
+            on: ['success'],
+            notifier: {
+              type: 'slack',
+              config: {},
+              connection: { key: 'chatops', endpoint: 'nope' },
+            },
+          },
+        ],
+      })
+      .catch((error: unknown) => error);
+    expect(missing instanceof ORPCError ? missing.data : undefined).toEqual({
+      issues: [
+        {
+          path: 'defaultNotifications.0.notifier.connection.endpoint',
+          message: 'Connection "chatops" has no endpoint "nope"',
+        },
+      ],
+    });
+
+    expect(await api.connections.delete({ key: 'chatops' }).catch(errorCode)).toBe('CONFLICT');
+    await api.groups.delete({ id: group.id });
+    expect(await api.connections.delete({ key: 'chatops' })).toEqual({ deleted: true });
   });
 });

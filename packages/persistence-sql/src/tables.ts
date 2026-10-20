@@ -139,6 +139,17 @@ export const TABLES = {
     columns: { id, name: req('text'), version: req('int'), created_at: req('ms'), doc: req('doc') },
     indexes: [{ name: 'groups_name', on: ['name'], unique: true, lowercase: true }],
   },
+  group_connections: {
+    columns: { group_id: req('text'), connection_key: req('text'), endpoint_key: req('text') },
+    indexes: [
+      {
+        name: 'group_connections_group',
+        on: ['group_id', 'connection_key', 'endpoint_key'],
+        unique: true,
+      },
+      { name: 'group_connections_connection', on: ['connection_key', 'endpoint_key'] },
+    ],
+  },
   rate_limits: {
     columns: {
       key: id,

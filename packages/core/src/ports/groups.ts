@@ -1,5 +1,6 @@
 import type { Result } from 'neverthrow';
 
+import type { ConnectionRef } from '../domain/connection.js';
 import type { Group, GroupSpec, RateLimit } from '../domain/group.js';
 import type { GroupId } from '../domain/ids.js';
 import type { DomainError, NotFoundError, VersionConflictError } from '../shared/errors.js';
@@ -11,6 +12,12 @@ export interface GroupQuery extends PageRequest {
   readonly search?: string | undefined;
 }
 
+export interface GroupUpdate {
+  readonly spec: GroupSpec;
+  readonly connectionRefs?: readonly ConnectionRef[] | undefined;
+  readonly updatedAt: Date;
+}
+
 export interface GroupRepository {
   insert(group: Group): Promise<Result<Group, ConflictError>>;
   get(id: GroupId): Promise<Group | undefined>;
@@ -18,10 +25,11 @@ export interface GroupRepository {
   list(query: GroupQuery): Promise<Page<Group>>;
   update(
     id: GroupId,
-    update: { spec: GroupSpec; updatedAt: Date },
+    update: GroupUpdate,
     expectedVersion: number,
   ): Promise<Result<Group, VersionConflictError | NotFoundError | ConflictError>>;
   delete(id: GroupId): Promise<boolean>;
+  findByConnection(key: string, endpoint?: string): Promise<readonly Group[]>;
 }
 
 export type AcquireResult =

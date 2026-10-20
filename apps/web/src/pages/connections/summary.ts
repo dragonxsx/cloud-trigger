@@ -2,7 +2,15 @@ import { isRecord } from '@cloud-trigger/core';
 
 import type { ConnectionDto } from '../../lib/api';
 
-const ADDRESS_FIELDS = ['baseUrl', 'address', 'brokers', 'servers', 'endpoint', 'region'] as const;
+const ADDRESS_FIELDS = [
+  'baseUrl',
+  'host',
+  'address',
+  'brokers',
+  'servers',
+  'endpoint',
+  'region',
+] as const;
 
 export function connectionAddress(connection: Pick<ConnectionDto, 'config'>): string {
   const config = isRecord(connection.config) ? connection.config : {};
@@ -25,6 +33,8 @@ const LOCATION_FIELDS = [
   'topicArn',
   'topic',
   'topics',
+  'to',
+  'channel',
   'subject',
   'stream',
   'service',

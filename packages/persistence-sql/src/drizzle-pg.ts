@@ -89,6 +89,7 @@ export const connections = pgTableOf('connections');
 export const runs = pgTableOf('runs');
 export const fireKeys = pgTableOf('fire_keys');
 export const groups = pgTableOf('groups');
+export const groupConnections = pgTableOf('group_connections');
 export const rateLimits = pgTableOf('rate_limits');
 export const notificationsOutbox = pgTableOf('notifications_outbox');
 export const scheduleDecisions = pgTableOf('schedule_decisions');

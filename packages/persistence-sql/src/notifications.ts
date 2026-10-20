@@ -117,4 +117,14 @@ export class SqlNotificationOutbox implements NotificationOutbox {
 
     return rows.map(deliveryFromRow);
   }
+
+  async listOpenByConnection(key: string): Promise<readonly NotificationDelivery[]> {
+    const rows = await this.session.all(sql`
+      SELECT * FROM notifications_outbox WHERE status IN ('pending', 'sending')
+      ORDER BY created_at, id`);
+
+    return rows
+      .map(deliveryFromRow)
+      .filter((delivery) => delivery.notifier.connection?.key === key);
+  }
 }

@@ -7,6 +7,8 @@ import type { ConflictError } from './groups.js';
 
 export interface ConnectionInUseError extends DomainError<'connection_in_use'> {
   readonly jobIds: readonly string[];
+  readonly groupIds: readonly string[];
+  readonly deliveryIds: readonly string[];
 }
 
 export interface ConnectionQuery extends PageRequest {

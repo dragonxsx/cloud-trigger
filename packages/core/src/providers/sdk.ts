@@ -326,6 +326,41 @@ export interface InlineConnectedTargetDefinition<
 export interface NotifierDefinition<S extends z.ZodType> extends BaseDefinition<S> {
   notify(config: z.output<S>, event: RunLifecycleEvent, ctx: NotifyContext): Promise<NotifyResult>;
 }
+
+export interface ConnectedNotifyContext<C> extends NotifyContext {
+  readonly connection: Connected<C> | undefined;
+}
+export interface ConnectedNotifierDefinition<
+  S extends z.ZodType,
+  C extends z.ZodType,
+> extends BaseDefinition<S> {
+  readonly connection: ConnectionProvider<C>;
+  readonly connectionRequired?: boolean;
+  notify(
+    config: z.output<S>,
+    event: RunLifecycleEvent,
+    ctx: ConnectedNotifyContext<z.output<C>>,
+  ): Promise<NotifyResult>;
+  check?(
+    config: z.output<S>,
+    connection: Connected<z.output<C>> | undefined,
+  ): readonly ConfigIssue[];
+}
+
+export interface InlineConnectedNotifyContext<C> extends NotifyContext {
+  readonly connection: Connected<C>;
+}
+export interface InlineConnectedNotifierDefinition<
+  S extends z.ZodType,
+  C extends z.ZodObject,
+> extends BaseDefinition<S> {
+  readonly connection: ConnectionProvider<C>;
+  notify(
+    config: z.output<S>,
+    event: RunLifecycleEvent,
+    ctx: InlineConnectedNotifyContext<z.output<C>>,
+  ): Promise<NotifyResult>;
+}
 export interface ConnectionDefinition<S extends z.ZodType> extends BaseDefinition<S> {
   test?(config: z.output<S>, ctx: ConnectionTestContext): Promise<ConnectionTestResult>;
 }
@@ -453,6 +488,39 @@ export function defineTarget<S extends z.ZodType>(def: TargetDefinition<S>): Tar
   };
 }
 
+function bindSeparateConnection<S extends z.ZodType, C extends z.ZodType>(
+  def: {
+    readonly connection: ConnectionProvider<C>;
+    readonly connectionRequired?: boolean;
+    check?(
+      config: z.output<S>,
+      connection: Connected<z.output<C>> | undefined,
+    ): readonly ConfigIssue[];
+  },
+  config: z.output<S>,
+  binding: ConnectionBinding | undefined,
+  subject: string,
+): Result<Connected<z.output<C>> | undefined, ConfigError> {
+  if (!binding && def.connectionRequired === true) {
+    return err(
+      invalid(subject, [
+        { path: '', message: `${subject} needs a "${def.connection.type}" connection` },
+      ]),
+    );
+  }
+  const parsed = binding ? def.connection.configSchema.safeParse(binding.config) : undefined;
+  if (parsed && !parsed.success) {
+    return err(configErrorFromZod(parsed.error, `connection "${binding?.key ?? ''}"`));
+  }
+  const connection: Connected<z.output<C>> | undefined =
+    binding && parsed?.success
+      ? { key: binding.key, version: binding.version, config: parsed.data }
+      : undefined;
+  const issues = def.check?.(config, connection) ?? [];
+
+  return issues.length > 0 ? err(invalid(subject, issues)) : ok(connection);
+}
+
 export const defineConnectedTarget = <S extends z.ZodType, C extends z.ZodType>(
   def: ConnectedTargetDefinition<S, C>,
 ): TargetProvider =>
@@ -460,31 +528,13 @@ export const defineConnectedTarget = <S extends z.ZodType, C extends z.ZodType>(
     'target',
     def,
     (config, env) => {
-      const subject = `target "${def.type}"`;
-      const binding = env.connection;
-      if (!binding && def.connectionRequired === true) {
-        return err(
-          invalid(subject, [
-            { path: '', message: `${subject} needs a "${def.connection.type}" connection` },
-          ]),
-        );
-      }
-      const parsed = binding ? def.connection.configSchema.safeParse(binding.config) : undefined;
-      if (parsed && !parsed.success) {
-        return err(configErrorFromZod(parsed.error, `connection "${binding?.key ?? ''}"`));
-      }
-      const connection: Connected<z.output<C>> | undefined =
-        binding && parsed?.success
-          ? { key: binding.key, version: binding.version, config: parsed.data }
-          : undefined;
-      const issues = def.check?.(config, connection) ?? [];
       const connections = env.connections ?? emptyConnectionCatalog;
 
-      return issues.length > 0
-        ? err(invalid(subject, issues))
-        : ok({
-            execute: (request) => def.execute(config, { ...request, connection, connections }),
-          });
+      return bindSeparateConnection(def, config, env.connection, `target "${def.type}"`).map(
+        (connection) => ({
+          execute: (request) => def.execute(config, { ...request, connection, connections }),
+        }),
+      );
     },
     { type: def.connection.type, required: def.connectionRequired === true },
   );
@@ -578,6 +628,36 @@ export const defineInlineConnectedEventSource = <S extends z.ZodType, C extends 
 export const defineNotifier = <S extends z.ZodType>(def: NotifierDefinition<S>): NotifierProvider =>
   makeProvider('notifier', def, (config) =>
     ok({ notify: (event, ctx) => def.notify(config, event, ctx) }),
+  );
+
+export const defineConnectedNotifier = <S extends z.ZodType, C extends z.ZodType>(
+  def: ConnectedNotifierDefinition<S, C>,
+): NotifierProvider =>
+  makeProvider(
+    'notifier',
+    def,
+    (config, env) =>
+      bindSeparateConnection(def, config, env.connection, `notifier "${def.type}"`).map(
+        (connection) => ({
+          notify: (event, ctx) => def.notify(config, event, { ...ctx, connection }),
+        }),
+      ),
+    { type: def.connection.type, required: def.connectionRequired === true },
+  );
+
+export const defineInlineConnectedNotifier = <S extends z.ZodType, C extends z.ZodObject>(
+  def: InlineConnectedNotifierDefinition<S, C>,
+): NotifierProvider =>
+  makeProvider(
+    'notifier',
+    def,
+    (config, env, rawConfig) =>
+      bindInlineConnection(def.connection, rawConfig, env.connection, `notifier "${def.type}"`).map(
+        (connection): BoundNotifier => ({
+          notify: (event, ctx) => def.notify(config, event, { ...ctx, connection }),
+        }),
+      ),
+    inlineConnection(def.connection),
   );
 
 export const defineConnection = <S extends z.ZodType>(

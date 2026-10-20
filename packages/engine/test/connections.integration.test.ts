@@ -8,6 +8,8 @@ import {
   defineConnection,
   defineInlineConnectedEventSource,
   mapSecretResolver,
+  NotificationRule,
+  newDeliveries,
   silentLogger,
 } from '@cloud-trigger/core';
 import { builtinProviders, createFanoutTarget } from '@cloud-trigger/providers-builtin';
@@ -19,6 +21,7 @@ import {
   ConnectionService,
   ConsumerSupervisor,
   EventIngestor,
+  GroupService,
   JobService,
   Worker,
 } from '../src/index.js';
@@ -77,12 +80,16 @@ beforeEach(async () => {
     'job_tags',
     'job_upstreams',
     'job_connections',
+    'groups',
+    'group_connections',
     'connections',
     'runs',
+    'notifications_outbox',
   ]);
 });
 
 const connections = () => new ConnectionService({ ...db, registry, secrets, clock });
+const groups = () => new GroupService({ ...db, registry, clock });
 const jobs = () => new JobService({ ...db, registry, clock, logger: silentLogger, listeners: [] });
 const worker = () =>
   new Worker(
@@ -225,7 +232,7 @@ describe('connections', () => {
     );
     expect(renamed._unsafeUnwrapErr()).toMatchObject({ issues: [{ path: 'key' }] });
 
-    expect((await connections().usages('billing')).map((j) => j.id)).toEqual([job.id]);
+    expect((await connections().usages('billing')).jobs.map((j) => j.id)).toEqual([job.id]);
     expect((await connections().delete('billing'))._unsafeUnwrapErr()).toMatchObject({
       code: 'connection_in_use',
       jobIds: [job.id],
@@ -358,6 +365,152 @@ describe('connections', () => {
         jobIds: [job.id],
       });
       expect((await jobs().resume(job.id)).isOk()).toBe(true);
+    });
+  });
+});
+
+describe('notifier connections', () => {
+  const alerts = {
+    key: 'alerts',
+    notifier: { type: 'webhook', config: { url: '/alerts' } },
+  };
+  const hooks = (endpoints: unknown[] = [alerts]) => ({
+    key: 'hooks',
+    type: 'http',
+    config: { baseUrl: server.url },
+    endpoints,
+  });
+  const rule = {
+    on: ['permanent_failure'],
+    notifier: { type: 'webhook', config: {}, connection: { key: 'hooks', endpoint: 'alerts' } },
+  };
+
+  it('validates notifier endpoints against the connection', async () => {
+    const created = await connections().create(
+      hooks([{ key: 'bad', notifier: { type: 'webhook', config: { url: 'https://x.test' } } }]),
+    );
+    expect(created._unsafeUnwrapErr()).toMatchObject({
+      issues: [{ path: 'endpoints.0.notifier.config.url' }],
+    });
+    const mismatched = await connections().create(
+      hooks([{ key: 'mail', notifier: { type: 'email', config: { to: ['a@b.c'] } } }]),
+    );
+    expect(mismatched._unsafeUnwrapErr()).toMatchObject({
+      issues: [{ path: 'endpoints.0.notifier.type' }],
+    });
+  });
+
+  it('tracks jobs and groups that notify over a connection', async () => {
+    const created = (await connections().create(hooks()))._unsafeUnwrap();
+    const group = (
+      await groups().create({ name: 'ops', defaultNotifications: [rule] })
+    )._unsafeUnwrap();
+    expect(group.connectionRefs).toEqual([{ key: 'hooks', endpoint: 'alerts' }]);
+    const job = (
+      await jobs().create({
+        name: 'notified',
+        trigger: { type: 'manual', config: {} },
+        target: { type: 'http', config: { url: `${server.url}/x` } },
+        notifications: [rule],
+      })
+    )._unsafeUnwrap();
+    expect(job.connectionRefs).toEqual([{ key: 'hooks', endpoint: 'alerts' }]);
+
+    const usages = await connections().usages('hooks');
+    expect(usages.jobs.map((j) => j.id)).toEqual([job.id]);
+    expect(usages.groups.map((g) => g.id)).toEqual([group.id]);
+
+    const broken = await connections().update('hooks', hooks([]), created.version);
+    expect(broken._unsafeUnwrapErr()).toMatchObject({
+      issues: [
+        {
+          path: 'endpoints',
+          message:
+            'Job "notified" would break: notifications.0.notifier.connection.endpoint: Connection "hooks" has no endpoint "alerts"',
+        },
+        {
+          path: 'endpoints',
+          message:
+            'Group "ops" would break: defaultNotifications.0.notifier.connection.endpoint: Connection "hooks" has no endpoint "alerts"',
+        },
+      ],
+    });
+    expect(await jobs().delete(job.id)).toBeTruthy();
+    expect((await connections().delete('hooks'))._unsafeUnwrapErr()).toMatchObject({
+      code: 'connection_in_use',
+      message: 'Connection hooks is used by 1 group',
+      jobIds: [],
+      groupIds: [group.id],
+    });
+    (
+      await groups().update(group.id, { name: 'ops', defaultNotifications: [] }, group.version)
+    )._unsafeUnwrap();
+    expect((await connections().delete('hooks')).isOk()).toBe(true);
+  });
+
+  it('protects a connection while a queued notification still uses it', async () => {
+    const created = (await connections().create(hooks()))._unsafeUnwrap();
+    const job = (
+      await jobs().create({
+        name: 'quiet',
+        trigger: { type: 'manual', config: {} },
+        target: { type: 'http', config: { url: `${server.url}/x` } },
+      })
+    )._unsafeUnwrap();
+    const [delivery] = newDeliveries({
+      rules: [NotificationRule.parse(rule)],
+      event: {
+        event: 'permanent_failure',
+        jobId: job.id,
+        jobName: job.name,
+        runId: null,
+        status: 'failed',
+        attempt: 1,
+        scheduledAt: null,
+        lateReasons: [],
+        result: null,
+        occurredAt: clock.now(),
+      },
+      subject: 'run-1',
+      now: clock.now(),
+    });
+    if (!delivery) {
+      throw new Error('expected a delivery');
+    }
+    await db.outbox.enqueue([delivery]);
+
+    expect((await connections().delete('hooks'))._unsafeUnwrapErr()).toMatchObject({
+      code: 'connection_in_use',
+      message: 'Connection hooks is used by 1 queued notification',
+      deliveryIds: [delivery.id],
+    });
+    const broken = await connections().update('hooks', hooks([]), created.version);
+    expect(broken._unsafeUnwrapErr()).toMatchObject({
+      issues: [
+        {
+          path: 'endpoints',
+          message: `Queued notification ${delivery.key} would fail: connection.endpoint: Connection "hooks" has no endpoint "alerts"`,
+        },
+      ],
+    });
+
+    const claimed = await db.outbox.claimNext({ workerId: 'd', now: clock.now(), leaseMs: 1_000 });
+    if (!claimed) {
+      throw new Error('expected a claim');
+    }
+    await db.outbox.complete(claimed, clock.now());
+    expect((await connections().delete('hooks')).isOk()).toBe(true);
+  });
+
+  it('refuses a group rule that names a missing connection', async () => {
+    const created = await groups().create({ name: 'ops', defaultNotifications: [rule] });
+    expect(created._unsafeUnwrapErr()).toMatchObject({
+      issues: [
+        {
+          path: 'defaultNotifications.0.notifier.connection.key',
+          message: 'No connection named "hooks"',
+        },
+      ],
     });
   });
 });

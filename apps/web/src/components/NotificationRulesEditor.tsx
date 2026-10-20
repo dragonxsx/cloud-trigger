@@ -1,9 +1,10 @@
 import { ActionIcon, Button, Group, MultiSelect, Stack, Text } from '@mantine/core';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
+import type { ReactNode } from 'react';
 
 import type { JobDto, ProviderDto } from '../lib/api';
-import type { ConfigIssueDto } from '../lib/errors';
-import { ProviderConfigForm } from './ProviderConfigForm';
+import { configIssuesFor, fieldError } from '../lib/errors';
+import { ConnectedProviderPicker } from './ConnectedProviderPicker';
 
 export type NotificationRuleDto = JobDto['notifications'][number];
 type EventDto = NotificationRuleDto['on'][number];
@@ -21,11 +22,12 @@ const toEvents = (values: readonly string[]): EventDto[] =>
 interface Props {
   readonly rules: readonly NotificationRuleDto[];
   readonly providers: readonly ProviderDto[];
-  readonly issuesFor: (index: number) => readonly ConfigIssueDto[];
+  readonly errors: Record<string, ReactNode>;
+  readonly path: string;
   readonly onChange: (rules: NotificationRuleDto[]) => void;
 }
 
-export function NotificationRulesEditor({ rules, providers, issuesFor, onChange }: Props) {
+export function NotificationRulesEditor({ rules, providers, errors, path, onChange }: Props) {
   const replace = (index: number, rule: NotificationRuleDto) =>
     onChange(rules.map((r, i) => (i === index ? rule : r)));
   const firstType = providers[0]?.type ?? 'webhook';
@@ -37,39 +39,41 @@ export function NotificationRulesEditor({ rules, providers, issuesFor, onChange 
           No notifications. Add one to hear about failures, successes or late runs.
         </Text>
       )}
-      {rules.map((rule, index) => (
-        <Stack key={index} spacing="sm" className="ct-subpanel" p="md">
-          <Group position="apart" align="flex-end" noWrap>
-            <MultiSelect
-              label="When"
-              style={{ flex: 1 }}
-              data={[...EVENTS]}
-              value={rule.on}
-              onChange={(values) => replace(index, { ...rule, on: toEvents(values) })}
+      {rules.map((rule, index) => {
+        const notifierPath = `${path}.${index}.notifier`;
+
+        return (
+          <Stack key={index} spacing="sm" className="ct-subpanel" p="md">
+            <Group position="apart" align="flex-end" noWrap>
+              <MultiSelect
+                label="When"
+                style={{ flex: 1 }}
+                data={[...EVENTS]}
+                value={rule.on}
+                onChange={(values) => replace(index, { ...rule, on: toEvents(values) })}
+              />
+              <ActionIcon
+                aria-label="Remove notification"
+                color="red"
+                variant="subtle"
+                size="lg"
+                onClick={() => onChange(rules.filter((_, i) => i !== index))}
+              >
+                <IconTrash size={18} />
+              </ActionIcon>
+            </Group>
+            <ConnectedProviderPicker
+              kind="notifier"
+              providers={providers}
+              value={rule.notifier}
+              configIssues={configIssuesFor(errors, notifierPath)}
+              connectionError={fieldError(errors, `${notifierPath}.connection.key`)}
+              endpointError={fieldError(errors, `${notifierPath}.connection.endpoint`)}
+              onChange={(notifier) => replace(index, { ...rule, notifier })}
             />
-            <ActionIcon
-              aria-label="Remove notification"
-              color="red"
-              variant="subtle"
-              size="lg"
-              onClick={() => onChange(rules.filter((_, i) => i !== index))}
-            >
-              <IconTrash size={18} />
-            </ActionIcon>
-          </Group>
-          <ProviderConfigForm
-            label="Send to"
-            providers={providers}
-            type={rule.notifier.type}
-            config={rule.notifier.config}
-            configIssues={issuesFor(index)}
-            onTypeChange={(type) => replace(index, { ...rule, notifier: { type, config: {} } })}
-            onConfigChange={(config) =>
-              replace(index, { ...rule, notifier: { ...rule.notifier, config } })
-            }
-          />
-        </Stack>
-      ))}
+          </Stack>
+        );
+      })}
       <Group>
         <Button
           variant="light"

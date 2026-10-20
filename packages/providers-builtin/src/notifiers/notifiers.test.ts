@@ -6,7 +6,12 @@ import { createTransport } from 'nodemailer';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createEmailNotifier, type SmtpSettings } from './email.js';
+import {
+  type MailTransport,
+  type SmtpSettings,
+  createSmtpConnection,
+} from '../connections/smtp.js';
+import { createEmailNotifier } from './email.js';
 import { slackNotifier } from './slack.js';
 import { webhookNotifier } from './webhook.js';
 
@@ -149,24 +154,39 @@ describe('slack notifier', () => {
   });
 });
 
+const recordingTransport = () => {
+  const settings: SmtpSettings[] = [];
+  const messages: string[] = [];
+  const factory = (s: SmtpSettings): MailTransport => {
+    settings.push(s);
+    const transport = createTransport({ jsonTransport: true });
+
+    return {
+      close: () => undefined,
+      verify: () => Promise.resolve(true),
+      sendMail: async (mail) => {
+        const info = await transport.sendMail(mail);
+        messages.push(info.message);
+
+        return info;
+      },
+    };
+  };
+
+  return { settings, messages, factory };
+};
+
+const Mail = z.object({
+  from: z.object({ address: z.string() }),
+  subject: z.string(),
+  text: z.string(),
+  to: z.array(z.object({ address: z.string() })),
+});
+
 describe('email notifier', () => {
   it('renders subject and body and resolves SMTP secrets', async () => {
-    const settings: SmtpSettings[] = [];
-    const messages: string[] = [];
-    const notifier = createEmailNotifier((s) => {
-      settings.push(s);
-      const transport = createTransport({ jsonTransport: true });
-
-      return {
-        close: () => undefined,
-        sendMail: async (mail) => {
-          const info = await transport.sendMail(mail);
-          messages.push(info.message);
-
-          return info;
-        },
-      };
-    })
+    const { settings, messages, factory } = recordingTransport();
+    const notifier = createEmailNotifier(factory)
       .bind({
         host: 'smtp.example.com',
         user: 'ops',
@@ -178,15 +198,137 @@ describe('email notifier', () => {
       ._unsafeUnwrap();
     expect((await notifier.notify(event, ctx())).isOk()).toBe(true);
     expect(settings[0]?.auth).toEqual({ user: 'ops', pass: 'pw' });
-    const mail = z
-      .object({
-        subject: z.string(),
-        text: z.string(),
-        to: z.array(z.object({ address: z.string() })),
-      })
-      .parse(JSON.parse(messages[0] ?? '{}'));
+    const mail = Mail.parse(JSON.parse(messages[0] ?? '{}'));
     expect(mail.subject).toBe('Nightly export permanent_failure');
     expect(mail.text).toContain('attempt 3');
     expect(mail.to[0]?.address).toBe('oncall@example.com');
+  });
+});
+
+const connected = (key: string, config: unknown) => ({ key, version: 2, config });
+
+describe('notifiers over connections', () => {
+  it('sends a webhook to a path under the connection with its credentials', async () => {
+    const notifier = webhookNotifier
+      .bind(
+        { url: '/alerts?team=ops', headers: { 'x-extra': '1' } },
+        {
+          connection: connected('ops', {
+            baseUrl: `${base}/api`,
+            auth: { type: 'bearer', token: '{{secret:HOOK}}' },
+            signing: { secret: '{{secret:HOOK}}' },
+          }),
+        },
+      )
+      ._unsafeUnwrap();
+    expect((await notifier.notify(event, ctx())).isOk()).toBe(true);
+    const received = lastSeen();
+    expect(received.url).toBe('/api/alerts?team=ops');
+    expect(received.headers.authorization).toBe('Bearer hook-secret');
+    expect(received.headers['x-extra']).toBe('1');
+    expect(received.headers['idempotency-key']).toBe(event.idempotencyKey);
+    expect(received.headers['x-signature']).toMatch(/^sha256=/);
+  });
+
+  it('requires a relative webhook url with a connection and an absolute one without', () => {
+    const connection = connected('ops', { baseUrl: base });
+    expect(
+      webhookNotifier.bind({ url: `${base}/x` }, { connection })._unsafeUnwrapErr().issues,
+    ).toEqual([
+      { path: 'url', message: 'Must be a path relative to the "ops" connection\'s base URL' },
+    ]);
+    expect(webhookNotifier.bind({ url: '/x' })._unsafeUnwrapErr().issues[0]?.path).toBe('url');
+  });
+
+  it('posts to the slack connection url and refuses an inline one alongside it', async () => {
+    const connection = connected('slack', { url: `${base}/slack-conn` });
+    const notifier = slackNotifier
+      .bind({ template: '{{ job.name }}' }, { connection })
+      ._unsafeUnwrap();
+    expect((await notifier.notify(event, ctx())).isOk()).toBe(true);
+    expect(lastSeen().url).toBe('/slack-conn');
+    expect(
+      slackNotifier.bind({ url: `${base}/x` }, { connection })._unsafeUnwrapErr().issues,
+    ).toEqual([{ path: 'url', message: 'Set on the "slack" connection instead' }]);
+  });
+
+  it('sends email through the smtp connection with its sender', async () => {
+    const { settings, messages, factory } = recordingTransport();
+    const notifier = createEmailNotifier(factory)
+      .bind(
+        { to: ['oncall@example.com'] },
+        {
+          connection: connected('mail', {
+            host: 'smtp.example.com',
+            port: 465,
+            secure: true,
+            user: 'ops',
+            password: '{{secret:SMTP_PASS}}',
+            from: 'ct@example.com',
+          }),
+        },
+      )
+      ._unsafeUnwrap();
+    expect((await notifier.notify(event, ctx())).isOk()).toBe(true);
+    expect(settings[0]).toEqual({
+      host: 'smtp.example.com',
+      port: 465,
+      secure: true,
+      auth: { user: 'ops', pass: 'pw' },
+    });
+    expect(Mail.parse(JSON.parse(messages[0] ?? '{}')).from.address).toBe('ct@example.com');
+  });
+
+  it('tests an smtp connection by verifying the transport', async () => {
+    const failing = createSmtpConnection(() => ({
+      close: () => undefined,
+      verify: () => Promise.reject(new Error('Invalid login')),
+      sendMail: () => Promise.resolve(undefined),
+    }));
+    const outcome = await failing
+      .bind({ host: 'smtp.example.com', from: 'ct@example.com' })
+      ._unsafeUnwrap()
+      .test(ctx());
+    expect(outcome._unsafeUnwrapErr().message).toBe('Invalid login');
+    const passing = createSmtpConnection(recordingTransport().factory);
+    expect(
+      (
+        await passing
+          .bind({ host: 'smtp.example.com', from: 'ct@example.com' })
+          ._unsafeUnwrap()
+          .test(ctx())
+      )._unsafeUnwrap().message,
+    ).toBe('smtp.example.com:587 accepted the connection');
+  });
+
+  it('stops verifying an smtp connection when its signal aborts', async () => {
+    let closed = 0;
+    let verified = 0;
+    const started = Promise.withResolvers<void>();
+    const hanging = createSmtpConnection(() => ({
+      close: () => {
+        closed++;
+      },
+      verify: () => {
+        verified++;
+        started.resolve();
+
+        return new Promise(() => undefined);
+      },
+      sendMail: () => Promise.resolve(undefined),
+    }))
+      .bind({ host: 'smtp.example.com', from: 'ct@example.com' })
+      ._unsafeUnwrap();
+
+    const controller = new AbortController();
+    const pending = hanging.test({ ...ctx(), signal: controller.signal });
+    await started.promise;
+    controller.abort(new Error('timed out'));
+    expect((await pending)._unsafeUnwrapErr().message).toBe('timed out');
+    expect([verified, closed]).toEqual([1, 1]);
+
+    const early = await hanging.test({ ...ctx(), signal: AbortSignal.abort(new Error('gone')) });
+    expect(early._unsafeUnwrapErr().message).toBe('gone');
+    expect([verified, closed]).toEqual([1, 2]);
   });
 });

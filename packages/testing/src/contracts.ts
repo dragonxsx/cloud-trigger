@@ -19,6 +19,7 @@ import {
   type RateLimiter,
   createGroup,
   newGroupId,
+  type NotificationDelivery,
   type NotificationOutbox,
   type RunAnalytics,
   type RunQueue,
@@ -656,6 +657,37 @@ export function describePersistenceContract(
         expect(await groups.delete(ops.id)).toBe(true);
         expect(await groups.get(ops.id)).toBeUndefined();
       });
+
+      it('finds groups by the connections their notifications use', async () => {
+        const { groups } = setup.ports();
+        const ops = {
+          ...makeGroup('ops'),
+          connectionRefs: [{ key: 'hooks', endpoint: 'alerts' }, { key: 'mail' }],
+        };
+        await groups.insert(ops);
+        await groups.insert(makeGroup('billing'));
+        const ids = async (key: string, endpoint?: string) =>
+          (await groups.findByConnection(key, endpoint)).map((g) => g.id);
+        expect(await ids('hooks')).toEqual([ops.id]);
+        expect(await ids('hooks', 'alerts')).toEqual([ops.id]);
+        expect(await ids('hooks', 'other')).toEqual([]);
+        expect(await ids('mail')).toEqual([ops.id]);
+
+        const moved = await groups.update(
+          ops.id,
+          {
+            spec: GroupSpec.parse({ name: 'ops' }),
+            connectionRefs: [{ key: 'mail' }],
+            updatedAt: at(1),
+          },
+          1,
+        );
+        expect(moved._unsafeUnwrap().connectionRefs).toEqual([{ key: 'mail' }]);
+        expect(await ids('hooks')).toEqual([]);
+        expect(await ids('mail')).toEqual([ops.id]);
+        expect(await groups.delete(ops.id)).toBe(true);
+        expect(await ids('mail')).toEqual([]);
+      });
     });
 
     describe('ConnectionRepository', () => {
@@ -1066,6 +1098,44 @@ export function describePersistenceContract(
         const listed = await outbox.listByRun(run.id);
         expect(listed).toHaveLength(1);
         expect(listed[0]).toMatchObject({ status: 'delivered', deliveredAt: at(3), lease: null });
+      });
+
+      it('lists open deliveries that notify over a connection', async () => {
+        const { outbox } = setup.ports();
+        const job = makeJob();
+        const over = (key: string): NotificationDelivery => {
+          const delivery = makeDelivery(job);
+
+          return { ...delivery, notifier: { ...delivery.notifier, connection: { key } } };
+        };
+        const sending = over('hooks');
+        const done = over('hooks');
+        const later = { availableAt: at(5_000) };
+        const pending = { ...over('hooks'), ...later };
+        await outbox.enqueue([
+          sending,
+          done,
+          pending,
+          { ...over('other'), ...later },
+          { ...makeDelivery(job), ...later },
+        ]);
+        const first = await outbox.claimNext({ workerId: 'd', now: at(1), leaseMs: 1_000 });
+        const second = await outbox.claimNext({ workerId: 'd', now: at(1), leaseMs: 1_000 });
+        const completed = [first, second].find((claimed) => claimed?.id === done.id);
+        if (!completed) {
+          throw new Error('expected a claim');
+        }
+        await outbox.complete(completed, at(2));
+
+        const open = await outbox.listOpenByConnection('hooks');
+        expect(open.map((delivery) => [delivery.id, delivery.status])).toEqual(
+          expect.arrayContaining([
+            [sending.id, 'sending'],
+            [pending.id, 'pending'],
+          ]),
+        );
+        expect(open).toHaveLength(2);
+        expect(await outbox.listOpenByConnection('missing')).toEqual([]);
       });
     });
 

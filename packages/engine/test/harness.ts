@@ -142,7 +142,14 @@ export function useHarness(dbName: string): Harness {
   ];
   const dispatcherFor = (opts: Partial<NotificationDispatcherOptions> = {}) =>
     new NotificationDispatcher(
-      { outbox: persistence().outbox, registry, secrets, clock, logger: silentLogger },
+      {
+        outbox: persistence().outbox,
+        connections: persistence().connections,
+        registry,
+        secrets,
+        clock,
+        logger: silentLogger,
+      },
       {
         workerId: 'd1',
         pollIntervalMs: 20,

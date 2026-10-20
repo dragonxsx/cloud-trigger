@@ -14,4 +14,6 @@ export interface NotificationOutbox {
     p: { error: string; retryAt: Date | null; now: Date },
   ): Promise<boolean>;
   listByRun(runId: RunId): Promise<readonly NotificationDelivery[]>;
+  /** Pending and sending deliveries whose notifier goes over the connection. */
+  listOpenByConnection(key: string): Promise<readonly NotificationDelivery[]>;
 }

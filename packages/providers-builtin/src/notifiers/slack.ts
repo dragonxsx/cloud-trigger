@@ -1,22 +1,20 @@
 import {
   type NotifyResult,
   ResultAsync,
-  defineNotifier,
+  defineInlineConnectedNotifier,
   err,
   ok,
-  secret,
 } from '@cloud-trigger/core';
 import { IncomingWebhook, IncomingWebhookHTTPError } from '@slack/webhook';
 import { z } from 'zod';
 
+import { SlackConnectionConfig, slackConnection } from '../connections/slack.js';
 import { interpolate } from '../shared/interpolate.js';
 import { LiquidTemplate, renderWithSecrets } from '../shared/liquid.js';
 import { DEFAULT_SUMMARY, eventScope, failure, isRetryableStatus } from './event-scope.js';
 
 export const SlackNotifierConfig = z.object({
-  url: secret(z.string().min(1)).describe(
-    'Slack incoming-webhook URL. Shown as *** and kept on edit. May be {{secret:NAME}}.',
-  ),
+  ...SlackConnectionConfig.partial().shape,
   template: LiquidTemplate.default(DEFAULT_SUMMARY).describe(
     'Liquid template for the message text. Variables: event, job.*, run.*, result, lateReasons.',
   ),
@@ -29,13 +27,14 @@ const toFailure = (error: unknown) =>
     ? failure(`Slack responded ${error.statusCode}`, isRetryableStatus(error.statusCode))
     : failure(error instanceof Error ? error.message : String(error), true);
 
-export const slackNotifier = defineNotifier({
+export const slackNotifier = defineInlineConnectedNotifier({
   type: 'slack',
   displayName: 'Slack',
   description: 'Posts a message to a Slack incoming webhook.',
   configSchema: SlackNotifierConfig,
+  connection: slackConnection,
   async notify(config, event, ctx): Promise<NotifyResult> {
-    const url = await interpolate(ctx.secrets, config.url);
+    const url = await interpolate(ctx.secrets, ctx.connection.config.url);
     if (url.isErr()) {
       return err(failure(url.error.message, false));
     }

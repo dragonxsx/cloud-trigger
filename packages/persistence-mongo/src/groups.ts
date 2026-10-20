@@ -6,7 +6,7 @@ import {
   type GroupId,
   type GroupQuery,
   type GroupRepository,
-  type GroupSpec,
+  type GroupUpdate,
   type NotFoundError,
   type RateLimit,
   type RateLimiter,
@@ -44,6 +44,7 @@ export class MongoGroupRepository implements GroupRepository {
   static async ensureIndexes(groups: Collection<GroupDocument>): Promise<void> {
     await groups.createIndexes([
       { key: { name: 1 }, name: 'name', unique: true, collation: CASE_INSENSITIVE },
+      { key: { 'connectionRefs.key': 1, 'connectionRefs.endpoint': 1 }, name: 'connections' },
     ]);
   }
 
@@ -78,7 +79,7 @@ export class MongoGroupRepository implements GroupRepository {
 
   async update(
     id: GroupId,
-    update: { spec: GroupSpec; updatedAt: Date },
+    update: GroupUpdate,
     expectedVersion: number,
   ): Promise<Result<Group, VersionConflictError | NotFoundError | ConflictError>> {
     const updated = await unlessDuplicateKey(
@@ -101,6 +102,17 @@ export class MongoGroupRepository implements GroupRepository {
     const res = await this.groups.deleteOne({ _id: id });
 
     return res.deletedCount === 1;
+  }
+
+  async findByConnection(key: string, endpoint?: string): Promise<readonly Group[]> {
+    const docs = await this.groups
+      .find({
+        connectionRefs: { $elemMatch: { key, ...(endpoint !== undefined && { endpoint }) } },
+      })
+      .sort({ _id: 1 })
+      .toArray();
+
+    return docs.map(fromDocument);
   }
 }
 

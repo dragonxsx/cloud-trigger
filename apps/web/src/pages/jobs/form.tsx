@@ -22,7 +22,7 @@ import { NotificationRulesEditor } from '../../components/NotificationRulesEdito
 import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { type JobCreateInput, type JobDto, type ProviderDto, client } from '../../lib/api';
-import { type ConfigIssueDto, configIssues, errorMessage } from '../../lib/errors';
+import { configIssues, configIssuesFor, errorMessage, fieldError } from '../../lib/errors';
 import { dateTime } from '../../lib/format';
 
 export type JobFormValues = Pick<
@@ -74,22 +74,6 @@ export const toSpec = ({
   policy: v.policy,
   ...(version !== undefined && { expectedVersion: version }),
 });
-
-export const configIssuesFor = (
-  errors: Record<string, ReactNode>,
-  prefix: string,
-): ConfigIssueDto[] =>
-  Object.entries(errors).flatMap(([path, message]) =>
-    path.startsWith(`${prefix}.config`) && typeof message === 'string'
-      ? [{ path: path.slice(`${prefix}.config`.length).replace(/^\./, ''), message }]
-      : [],
-  );
-
-export const fieldError = (errors: Record<string, ReactNode>, path: string): string | undefined => {
-  const message = errors[path];
-
-  return typeof message === 'string' ? message : undefined;
-};
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -300,7 +284,8 @@ export function JobFormFields({ form }: { form: JobForm }) {
         <NotificationRulesEditor
           rules={values.notifications}
           providers={byKind.notifier}
-          issuesFor={(i) => configIssuesFor(errors, `notifications.${i}.notifier`)}
+          errors={errors}
+          path="notifications"
           onChange={(rules) => form.setFieldValue('notifications', rules)}
         />
       </Section>

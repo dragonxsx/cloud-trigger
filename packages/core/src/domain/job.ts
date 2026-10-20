@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { ConnectionRef, TargetRef } from './connection.js';
+import { ConnectionRef, NotifierRef, TargetRef } from './connection.js';
 import { GroupId, JobId, WorkflowId } from './ids.js';
 import { JobPolicyPatch } from './policy.js';
 import { ProviderRef } from './provider-ref.js';
@@ -10,7 +10,7 @@ export type NotificationEvent = z.output<typeof NotificationEvent>;
 
 export const NotificationRule = z.object({
   on: z.array(NotificationEvent).min(1),
-  notifier: ProviderRef,
+  notifier: NotifierRef,
 });
 export type NotificationRule = z.output<typeof NotificationRule>;
 
@@ -71,7 +71,7 @@ export const Job = JobSpec.extend({
     .array(ConnectionRef)
     .default([])
     .describe(
-      'Connections and endpoints the trigger and target use, derived from the spec on save.',
+      'Connections and endpoints the trigger, target and notifiers use, derived from the spec on save.',
     ),
   slaBreachedAt: z
     .date()

@@ -6,7 +6,7 @@ import {
   type GroupId,
   type GroupQuery,
   type GroupRepository,
-  type GroupSpec,
+  type GroupUpdate,
   type NotFoundError,
   type RateLimit,
   type RateLimiter,
@@ -34,18 +34,44 @@ const groupFromRow = docParser(Group);
 export class SqlGroupRepository implements GroupRepository {
   constructor(private readonly session: SqlSession) {}
 
-  async insert(group: Group): Promise<Result<Group, ConflictError>> {
-    const inserted = await this.session.run(
-      sql`${insertInto(this.session, 'groups', {
-        id: group.id,
-        name: group.name,
-        version: group.version,
-        created_at: group.createdAt,
-        doc: group,
-      })} ON CONFLICT DO NOTHING`,
-    );
+  async #writeEdges(group: Pick<Group, 'id' | 'connectionRefs'>): Promise<void> {
+    await this.session.run(sql`DELETE FROM group_connections WHERE group_id = ${group.id}`);
+    const edges = new Map(
+      group.connectionRefs.map((ref) => {
+        const endpoint = ref.endpoint ?? '';
 
-    return inserted === 1 ? ok(group) : err(nameTaken('group', group.name));
+        return [`${ref.key}/${endpoint}`, { key: ref.key, endpoint }];
+      }),
+    );
+    for (const edge of edges.values()) {
+      await this.session.run(
+        insertInto(this.session, 'group_connections', {
+          group_id: group.id,
+          connection_key: edge.key,
+          endpoint_key: edge.endpoint,
+        }),
+      );
+    }
+  }
+
+  insert(group: Group): Promise<Result<Group, ConflictError>> {
+    return this.session.transaction(async () => {
+      const inserted = await this.session.run(
+        sql`${insertInto(this.session, 'groups', {
+          id: group.id,
+          name: group.name,
+          version: group.version,
+          created_at: group.createdAt,
+          doc: group,
+        })} ON CONFLICT DO NOTHING`,
+      );
+      if (inserted !== 1) {
+        return err(nameTaken('group', group.name));
+      }
+      await this.#writeEdges(group);
+
+      return ok(group);
+    });
   }
 
   async get(id: GroupId): Promise<Group | undefined> {
@@ -70,7 +96,7 @@ export class SqlGroupRepository implements GroupRepository {
 
   async update(
     id: GroupId,
-    update: { spec: GroupSpec; updatedAt: Date },
+    update: GroupUpdate,
     expectedVersion: number,
   ): Promise<Result<Group, VersionConflictError | NotFoundError | ConflictError>> {
     const current = await this.get(id);
@@ -83,15 +109,21 @@ export class SqlGroupRepository implements GroupRepository {
       return err(nameTaken('group', next.name));
     }
     try {
-      const changed = await this.session.run(sql`
-        UPDATE groups SET ${assignments(this.session, 'groups', {
-          name: next.name,
-          version: next.version,
-          doc: next,
-        })}
-        WHERE id = ${id} AND version = ${expectedVersion}`);
+      return await this.session.transaction(async () => {
+        const changed = await this.session.run(sql`
+          UPDATE groups SET ${assignments(this.session, 'groups', {
+            name: next.name,
+            version: next.version,
+            doc: next,
+          })}
+          WHERE id = ${id} AND version = ${expectedVersion}`);
+        if (changed !== 1) {
+          return err(versionConflict('Group', id));
+        }
+        await this.#writeEdges(next);
 
-      return changed === 1 ? ok(next) : err(versionConflict('Group', id));
+        return ok(next);
+      });
     } catch (error: unknown) {
       if (this.session.dialect.isUniqueViolation(error)) {
         return err(nameTaken('group', next.name));
@@ -100,8 +132,23 @@ export class SqlGroupRepository implements GroupRepository {
     }
   }
 
-  async delete(id: GroupId): Promise<boolean> {
-    return (await this.session.run(sql`DELETE FROM groups WHERE id = ${id}`)) === 1;
+  delete(id: GroupId): Promise<boolean> {
+    return this.session.transaction(async () => {
+      await this.session.run(sql`DELETE FROM group_connections WHERE group_id = ${id}`);
+
+      return (await this.session.run(sql`DELETE FROM groups WHERE id = ${id}`)) === 1;
+    });
+  }
+
+  async findByConnection(key: string, endpoint?: string): Promise<readonly Group[]> {
+    const rows = await this.session.all(sql`
+      SELECT doc FROM groups WHERE EXISTS (
+        SELECT 1 FROM group_connections c
+        WHERE c.group_id = groups.id AND c.connection_key = ${key}
+        ${endpoint === undefined ? sql`` : sql`AND c.endpoint_key = ${endpoint}`}
+      ) ORDER BY id`);
+
+    return rows.map(groupFromRow);
   }
 }
 

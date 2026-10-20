@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
 import { assertNever } from '../shared/assert-never.js';
+import { NotifierRef } from './connection.js';
 import { JobId, NotificationId, RunId, newNotificationId } from './ids.js';
 import { NotificationEvent, type NotificationRule } from './job.js';
-import { ProviderRef } from './provider-ref.js';
 import { type FinishedRun, Lease, type PendingRun, type SkippedRun } from './run.js';
 import { TargetResult } from './target-result.js';
 
@@ -34,7 +34,7 @@ export const NotificationDelivery = z.object({
   runId: RunId.nullable(),
   event: NotificationEvent,
   ruleIndex: z.int().min(0),
-  notifier: ProviderRef,
+  notifier: NotifierRef,
   payload: RunLifecycleEvent,
   status: DeliveryStatus,
   attempts: z.int().min(0),

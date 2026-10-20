@@ -183,6 +183,17 @@ export const ConnectionUsage = z.object({
     .array(EndpointKey)
     .describe('Endpoints the job uses; empty for the base connection.'),
 });
+export const GroupConnectionUsage = z.object({
+  id: GroupId,
+  name: z.string(),
+  endpoints: z
+    .array(EndpointKey)
+    .describe('Endpoints the default notifications use; empty for the base connection.'),
+});
+export const ConnectionUsages = z.object({
+  jobs: z.array(ConnectionUsage),
+  groups: z.array(GroupConnectionUsage),
+});
 
 export const AnalyticsRange = z.object({
   from: QueryDate,

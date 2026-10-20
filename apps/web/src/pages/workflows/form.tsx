@@ -22,7 +22,7 @@ import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicke
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
 import { type ProviderDto, type WorkflowSpecDto, client } from '../../lib/api';
-import { configIssuesFor, fieldError } from '../jobs/form';
+import { configIssuesFor, fieldError } from '../../lib/errors';
 
 type FormNode = WorkflowSpecDto['nodes'][number];
 type FormEdge = { from: string; to: string; on: 'succeeded' | 'failed' | 'any' };

@@ -5,9 +5,36 @@ import { Show } from '@refinedev/mantine';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 
-import { type ConnectionDto, client } from '../../lib/api';
+import { type ConnectionDto, type ConnectionUsagesDto, client } from '../../lib/api';
 import { ConnectionTestButton } from './form';
 import { connectionAddress, endpointSummary } from './summary';
+
+const KIND_LABEL = { target: 'Target', trigger: 'Event source', notifier: 'Notifier' } as const;
+
+interface UsageRow {
+  readonly id: string;
+  readonly kind: 'Job' | 'Group';
+  readonly name: string;
+  readonly to: string;
+  readonly endpoints: readonly string[];
+}
+
+const usageRows = (usages: ConnectionUsagesDto | undefined): UsageRow[] => [
+  ...(usages?.jobs ?? []).map((job) => ({
+    id: job.id,
+    kind: 'Job' as const,
+    name: job.name,
+    to: `/jobs/show/${job.id}`,
+    endpoints: job.endpoints,
+  })),
+  ...(usages?.groups ?? []).map((group) => ({
+    id: group.id,
+    kind: 'Group' as const,
+    name: group.name,
+    to: `/groups/show/${group.id}`,
+    endpoints: group.endpoints,
+  })),
+];
 
 export function ConnectionShow() {
   const { query } = useShow<ConnectionDto>({ resource: 'connections' });
@@ -66,7 +93,7 @@ export function ConnectionShow() {
             <Text weight={600}>Endpoints</Text>
             {connection.endpoints.length === 0 ? (
               <Text size="sm" color="dimmed">
-                No endpoints. Jobs configure the request or source themselves.
+                No endpoints. Jobs and notification rules configure the details themselves.
               </Text>
             ) : (
               <Table className="ct-table" verticalSpacing="xs" fontSize="sm">
@@ -74,7 +101,7 @@ export function ConnectionShow() {
                   <tr>
                     <th>Endpoint</th>
                     <th>Kind</th>
-                    <th>Request or source</th>
+                    <th>Configuration</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -91,7 +118,7 @@ export function ConnectionShow() {
                             {connection.key}/{endpoint.key}
                           </Text>
                         </td>
-                        <td>{kind === 'target' ? 'Target' : 'Event source'}</td>
+                        <td>{KIND_LABEL[kind]}</td>
                         <td>
                           <Code>{endpointSummary(ref)}</Code>
                         </td>
@@ -105,29 +132,32 @@ export function ConnectionShow() {
 
           <Stack className="ct-panel" p="lg" spacing="sm">
             <Text weight={600}>Used by</Text>
-            {(usages.data ?? []).length === 0 ? (
+            {usageRows(usages.data).length === 0 ? (
               <Text size="sm" color="dimmed">
-                No jobs use this connection yet. Pick it in a job&apos;s &ldquo;Where it goes&rdquo;
-                section, or in &ldquo;When it runs&rdquo; for a queue or topic consumer.
+                Nothing uses this connection yet. Pick it in a job&apos;s &ldquo;Where it
+                goes&rdquo;, &ldquo;When it runs&rdquo; or &ldquo;Notifications&rdquo; section, or
+                in a group&apos;s default notifications.
               </Text>
             ) : (
               <Table className="ct-table" verticalSpacing="xs" fontSize="sm">
                 <thead>
                   <tr>
-                    <th>Job</th>
+                    <th>Name</th>
+                    <th>Kind</th>
                     <th>Endpoints</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(usages.data ?? []).map((job) => (
-                    <tr key={job.id}>
+                  {usageRows(usages.data).map((row) => (
+                    <tr key={row.id}>
                       <td>
-                        <Anchor component={Link} to={`/jobs/show/${job.id}`} size="sm">
-                          {job.name}
+                        <Anchor component={Link} to={row.to} size="sm">
+                          {row.name}
                         </Anchor>
                       </td>
+                      <td>{row.kind}</td>
                       <td>
-                        {job.endpoints.length > 0 ? job.endpoints.join(', ') : 'Base connection'}
+                        {row.endpoints.length > 0 ? row.endpoints.join(', ') : 'Base connection'}
                       </td>
                     </tr>
                   ))}

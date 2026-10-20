@@ -24,11 +24,32 @@ export const nameTaken = (
   message: `A ${entity} named "${name}" already exists`,
 });
 
-export const connectionInUse = (key: string, jobIds: readonly string[]): ConnectionInUseError => ({
-  code: 'connection_in_use',
-  message: `Connection ${key} is used by ${jobIds.length} job${jobIds.length === 1 ? '' : 's'}`,
-  jobIds,
-});
+const counted = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`;
+
+export const connectionInUse = (
+  key: string,
+  users: {
+    readonly jobIds: readonly string[];
+    readonly groupIds?: readonly string[];
+    readonly deliveryIds?: readonly string[];
+  },
+): ConnectionInUseError => {
+  const groupIds = users.groupIds ?? [];
+  const deliveryIds = users.deliveryIds ?? [];
+  const parts = [
+    ...(users.jobIds.length > 0 ? [counted(users.jobIds.length, 'job')] : []),
+    ...(groupIds.length > 0 ? [counted(groupIds.length, 'group')] : []),
+    ...(deliveryIds.length > 0 ? [counted(deliveryIds.length, 'queued notification')] : []),
+  ];
+
+  return {
+    code: 'connection_in_use',
+    message: `Connection ${key} is used by ${parts.join(' and ')}`,
+    jobIds: users.jobIds,
+    groupIds,
+    deliveryIds,
+  };
+};
 
 export const setupAlreadyCompleted = (): ConflictError => ({
   code: 'conflict',

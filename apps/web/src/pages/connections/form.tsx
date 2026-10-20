@@ -1,4 +1,4 @@
-import { type EndpointKind, endpointProvider } from '@cloud-trigger/core';
+import { type EndpointKind, assertNever, endpointProvider } from '@cloud-trigger/core';
 import {
   Accordion,
   ActionIcon,
@@ -36,18 +36,39 @@ interface EndpointFields {
 
 type EndpointValues =
   | (EndpointFields & { target: ProviderRefValues })
-  | (EndpointFields & { source: ProviderRefValues });
+  | (EndpointFields & { source: ProviderRefValues })
+  | (EndpointFields & { notifier: ProviderRefValues });
 
-const KIND_FIELD: Record<EndpointKind, 'target' | 'source'> = {
-  target: 'target',
-  trigger: 'source',
+const ENDPOINT_KINDS = ['target', 'trigger', 'notifier'] as const satisfies readonly EndpointKind[];
+
+const KIND: Record<
+  EndpointKind,
+  { field: 'target' | 'source' | 'notifier'; label: string; form: string; suffix: string }
+> = {
+  target: { field: 'target', label: 'Target', form: 'Request', suffix: '' },
+  trigger: { field: 'source', label: 'Event source', form: 'Event source', suffix: ' source' },
+  notifier: { field: 'notifier', label: 'Notifier', form: 'Message', suffix: ' notifier' },
 };
 
 const endpointOf = (
   fields: EndpointFields,
   kind: EndpointKind,
   ref: ProviderRefValues,
-): EndpointValues => (kind === 'target' ? { ...fields, target: ref } : { ...fields, source: ref });
+): EndpointValues => {
+  switch (kind) {
+    case 'target':
+      return { ...fields, target: ref };
+    case 'trigger':
+      return { ...fields, source: ref };
+    case 'notifier':
+      return { ...fields, notifier: ref };
+    default:
+      return assertNever(kind);
+  }
+};
+
+const isEndpointKind = (value: string): value is EndpointKind =>
+  ENDPOINT_KINDS.some((kind) => kind === value);
 
 export interface ConnectionFormValues {
   key: string;
@@ -167,11 +188,11 @@ export function ConnectionFormFields({
         .filter((p) => p.kind === kind && p.connectionType === form.values.type)
         .map(forConnection);
 
-    return { target: over('target'), trigger: over('trigger') };
+    return { target: over('target'), trigger: over('trigger'), notifier: over('notifier') };
   }, [providers.data, form.values.type]);
   const { values, errors } = form;
   const setEndpoints = (endpoints: EndpointValues[]) => form.setFieldValue('endpoints', endpoints);
-  const kinds = (['target', 'trigger'] as const).filter((kind) => choices[kind].length > 0);
+  const kinds = ENDPOINT_KINDS.filter((kind) => choices[kind].length > 0);
   const blankEndpoint = (fields: EndpointFields, kind: EndpointKind): EndpointValues =>
     endpointOf(fields, kind, { type: choices[kind][0]?.type ?? '', config: {} });
   const setKind = (index: number, kind: EndpointKind) =>
@@ -228,7 +249,7 @@ export function ConnectionFormFields({
 
       <Section
         title="Endpoints"
-        hint="Saved requests and event sources that jobs pick by name. A job can still override any field."
+        hint="Saved requests, event sources and notification messages that jobs and groups pick by name. Any field can still be overridden where it is used."
       >
         {values.endpoints.length === 0 ? (
           <Text size="sm" color="dimmed">
@@ -239,7 +260,7 @@ export function ConnectionFormFields({
           <Accordion variant="separated" multiple>
             {values.endpoints.map((endpoint, index) => {
               const { kind, ref } = endpointProvider(endpoint);
-              const path = `endpoints.${index}.${KIND_FIELD[kind]}`;
+              const path = `endpoints.${index}.${KIND[kind].field}`;
               const base = `endpoints.${index}`;
 
               return (
@@ -248,7 +269,8 @@ export function ConnectionFormFields({
                     <Text size="sm" weight={600}>
                       {endpoint.name || endpoint.key || 'New endpoint'}
                       <Text span color="dimmed" weight={400} ml="xs">
-                        {kind === 'target' ? ref.type : `${ref.type} source`}
+                        {ref.type}
+                        {KIND[kind].suffix}
                       </Text>
                     </Text>
                   </Accordion.Control>
@@ -273,17 +295,16 @@ export function ConnectionFormFields({
                       {kinds.length > 1 && (
                         <SegmentedControl
                           value={kind}
-                          onChange={(next) =>
-                            setKind(index, next === 'trigger' ? 'trigger' : 'target')
-                          }
-                          data={[
-                            { value: 'target', label: 'Target' },
-                            { value: 'trigger', label: 'Event source' },
-                          ]}
+                          onChange={(next) => {
+                            if (isEndpointKind(next)) {
+                              setKind(index, next);
+                            }
+                          }}
+                          data={kinds.map((k) => ({ value: k, label: KIND[k].label }))}
                         />
                       )}
                       <ProviderConfigForm
-                        label={kind === 'target' ? 'Request' : 'Event source'}
+                        label={KIND[kind].form}
                         providers={choices[kind]}
                         type={ref.type}
                         config={ref.config}

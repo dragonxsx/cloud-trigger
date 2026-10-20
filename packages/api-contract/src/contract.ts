@@ -50,7 +50,7 @@ import {
   ConnectionPage,
   ConnectionTestInput,
   ConnectionTestOutcome,
-  ConnectionUsage,
+  ConnectionUsages,
   UpdateConnectionInput,
   ExplainQuery,
   ExportQuery,
@@ -338,11 +338,11 @@ const connections = {
   usages: base
     .route({
       method: 'GET',
-      path: '/connections/{key}/jobs',
-      summary: 'Jobs that use a connection',
+      path: '/connections/{key}/usages',
+      summary: 'Jobs and groups that use a connection',
     })
     .input(ConnectionKeyParam)
-    .output(z.array(ConnectionUsage)),
+    .output(ConnectionUsages),
   update: write
     .route({
       method: 'PUT',

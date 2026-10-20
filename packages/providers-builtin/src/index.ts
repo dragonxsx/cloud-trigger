@@ -1,6 +1,8 @@
 import type { ProviderPlugin } from '@cloud-trigger/core';
 
 import { httpConnection } from './connections/http.js';
+import { slackConnection } from './connections/slack.js';
+import { smtpConnection } from './connections/smtp.js';
 import { eventInput } from './inputs/event.js';
 import { staticInput } from './inputs/static.js';
 import { templateInput } from './inputs/template.js';
@@ -20,6 +22,8 @@ import { webhookTrigger } from './triggers/webhook.js';
 export {
   afterJobTrigger,
   httpConnection,
+  slackConnection,
+  smtpConnection,
   eventInput,
   webhookTrigger,
   cronTrigger,
@@ -35,12 +39,15 @@ export {
   templateInput,
   webhookNotifier,
 };
+export { createEmailNotifier } from './notifiers/email.js';
 export {
-  createEmailNotifier,
+  SmtpConnectionConfig,
+  createSmtpConnection,
   type MailTransport,
   type SmtpSettings,
   type TransportFactory,
-} from './notifiers/email.js';
+} from './connections/smtp.js';
+export { SlackConnectionConfig } from './connections/slack.js';
 export { expandHashTokens } from './triggers/hash-expression.js';
 export { templateScope } from './inputs/template.js';
 export {
@@ -73,6 +80,8 @@ export const builtinProviders: ProviderPlugin = {
   register: (registry) => {
     registry.register(
       httpConnection,
+      slackConnection,
+      smtpConnection,
       cronTrigger,
       intervalTrigger,
       onceTrigger,

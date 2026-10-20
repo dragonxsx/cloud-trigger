@@ -7,6 +7,7 @@ import {
   type ConnectionCatalog,
   type ConnectionRepository,
   type JobSpec,
+  type NotificationRule,
   type ProviderKind,
   type ProviderRef,
   type ProviderRegistry,
@@ -18,6 +19,7 @@ import {
   emptyConnectionCatalog,
   err,
   ok,
+  resolveNotifier,
   resolveTarget,
   resolveTrigger,
 } from '@cloud-trigger/core';
@@ -74,6 +76,24 @@ export const bindTrigger = (
 ): Result<BoundTrigger, ConfigError> =>
   resolveJobTrigger(registry, spec, connections).map(({ trigger }) => trigger);
 
+export function bindNotifications(
+  registry: ProviderRegistry,
+  rules: readonly Pick<NotificationRule, 'notifier'>[],
+  connections: ConnectionCatalog,
+  path: string,
+): Result<BoundNotifier[], ConfigError> {
+  const results = rules.map((rule, i) =>
+    resolveNotifier(registry, rule.notifier, connections).mapErr((e) =>
+      prefixed(`${path}.${i}.notifier`, e.issues),
+    ),
+  );
+  const issues = results.flatMap((result) => (result.isErr() ? result.error : []));
+
+  return issues.length > 0
+    ? err(invalidJob(issues))
+    : ok(results.flatMap((result) => (result.isOk() ? [result.value.notifier] : [])));
+}
+
 export function bindJob(
   registry: ProviderRegistry,
   spec: Pick<JobSpec, 'trigger' | 'input' | 'target' | 'notifications'>,
@@ -96,17 +116,17 @@ export function bindJob(
       invalidJob(prefixed('target', e.issues)),
     ),
   );
-  const notifiers = spec.notifications.map((n, i) =>
-    collect(bindRef(registry, 'notifier', n.notifier, `notifications.${i}.notifier`)),
+  const notifiers = collect(
+    bindNotifications(registry, spec.notifications, connections, 'notifications'),
   );
 
-  if (trigger && input && target && issues.length === 0) {
+  if (trigger && input && target && notifiers && issues.length === 0) {
     return ok({
       trigger: trigger.trigger,
       input,
       target: target.target,
       connection: target.connection,
-      notifiers: notifiers.filter((n) => n !== undefined),
+      notifiers,
     });
   }
 

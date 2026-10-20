@@ -100,4 +100,13 @@ export class MongoNotificationOutbox implements NotificationOutbox {
 
     return docs.map(fromDocument);
   }
+
+  async listOpenByConnection(key: string): Promise<readonly NotificationDelivery[]> {
+    const docs = await this.outbox
+      .find({ status: { $in: ['pending', 'sending'] }, 'notifier.connection.key': key })
+      .sort({ createdAt: 1, _id: 1 })
+      .toArray();
+
+    return docs.map(fromDocument);
+  }
 }

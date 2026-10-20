@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { ConnectionRef } from './connection.js';
 import { GroupId } from './ids.js';
 import { type Job, NotificationRule } from './job.js';
 import { type JobPolicy, JobPolicyPatch, effectivePolicy } from './policy.js';
@@ -45,15 +46,25 @@ export type GroupSpecInput = z.input<typeof GroupSpec>;
 
 export const Group = GroupSpec.extend({
   id: GroupId,
+  connectionRefs: z
+    .array(ConnectionRef)
+    .default([])
+    .describe('Connections and endpoints the default notifications use, derived on save.'),
   version: z.int().min(1),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
 export type Group = z.output<typeof Group>;
 
-export const createGroup = (p: { id: GroupId; spec: GroupSpec; now: Date }): Group => ({
+export const createGroup = (p: {
+  id: GroupId;
+  spec: GroupSpec;
+  connectionRefs?: readonly ConnectionRef[];
+  now: Date;
+}): Group => ({
   ...p.spec,
   id: p.id,
+  connectionRefs: [...(p.connectionRefs ?? [])],
   version: 1,
   createdAt: p.now,
   updatedAt: p.now,

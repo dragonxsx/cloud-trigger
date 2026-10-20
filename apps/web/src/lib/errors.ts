@@ -1,6 +1,7 @@
 import { ConfigIssue } from '@cloud-trigger/api-contract';
 import { showNotification } from '@mantine/notifications';
 import { ORPCError } from '@orpc/client';
+import type { ReactNode } from 'react';
 import { z } from 'zod';
 
 export type ConfigIssueDto = z.output<typeof ConfigIssue>;
@@ -23,4 +24,20 @@ export const errorMessage = (error: unknown): string =>
 
 export const notifyError = (title: string, error: unknown): void => {
   showNotification({ color: 'red', title, message: errorMessage(error) });
+};
+
+export const configIssuesFor = (
+  errors: Record<string, ReactNode>,
+  prefix: string,
+): ConfigIssueDto[] =>
+  Object.entries(errors).flatMap(([path, message]) =>
+    path.startsWith(`${prefix}.config`) && typeof message === 'string'
+      ? [{ path: path.slice(`${prefix}.config`.length).replace(/^\./, ''), message }]
+      : [],
+  );
+
+export const fieldError = (errors: Record<string, ReactNode>, path: string): string | undefined => {
+  const message = errors[path];
+
+  return typeof message === 'string' ? message : undefined;
 };

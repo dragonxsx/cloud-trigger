@@ -4,20 +4,27 @@ import {
   type ConfigIssue,
   type ConflictError,
   type Connection,
+  type ConnectionCatalog,
   type ConnectionInUseError,
   type ConnectionQuery,
   type ConnectionRepository,
   ConnectionSpec,
   type ConnectionTestResult,
+  type EndpointKind,
+  type Group,
+  type GroupRepository,
   type Job,
   type JobRepository,
   type NotFoundError,
+  type NotificationOutbox,
   type Page,
   type ProviderRegistry,
   type Result,
   type SecretResolver,
+  type TargetRef,
   type VersionConflictError,
   configErrorFromZod,
+  assertNever,
   connectionCatalog,
   connectionInUse,
   createConnection,
@@ -26,16 +33,20 @@ import {
   notFound,
   ok,
   endpointProvider,
+  notificationConnectionRefs,
+  resolveNotifier,
   resolveTarget,
   resolveTrigger,
   toError,
 } from '@cloud-trigger/core';
 
-import { bindJob, loadConnections } from './config-validation.js';
+import { bindJob, bindNotifications, loadConnections } from './config-validation.js';
 
 export interface ConnectionServiceDeps {
   readonly connections: ConnectionRepository;
   readonly jobs: JobRepository;
+  readonly groups: GroupRepository;
+  readonly outbox: NotificationOutbox;
   readonly registry: ProviderRegistry;
   readonly secrets: SecretResolver;
   readonly clock: Clock;
@@ -59,6 +70,17 @@ const prefixed = (prefix: string, issues: readonly ConfigIssue[]): ConfigIssue[]
 
 const DEFAULT_TEST_TIMEOUT_MS = 10_000;
 
+const ENDPOINT_FIELD: Record<EndpointKind, string> = {
+  target: 'target',
+  trigger: 'source',
+  notifier: 'notifier',
+};
+
+export interface ConnectionUsers {
+  readonly jobs: readonly Job[];
+  readonly groups: readonly Group[];
+}
+
 export class ConnectionService {
   constructor(private readonly deps: ConnectionServiceDeps) {}
 
@@ -72,8 +94,13 @@ export class ConnectionService {
     return connection ? ok(connection) : err(notFound('Connection', key));
   }
 
-  usages(key: string): Promise<readonly Job[]> {
-    return this.deps.jobs.findByConnection(key);
+  async usages(key: string): Promise<ConnectionUsers> {
+    const [jobs, groups] = await Promise.all([
+      this.deps.jobs.findByConnection(key),
+      this.deps.groups.findByConnection(key),
+    ]);
+
+    return { jobs, groups };
   }
 
   validate(raw: unknown): Result<ConnectionSpec, ConfigError> {
@@ -98,17 +125,12 @@ export class ConnectionService {
     const catalog = connectionCatalog([draft]);
     const issues = spec.endpoints.flatMap((endpoint, index) => {
       const { kind, ref } = endpointProvider(endpoint);
-      const field = kind === 'target' ? 'target' : 'source';
-      const connection = { key: spec.key };
-      const resolved =
-        kind === 'target'
-          ? resolveTarget(this.deps.registry, { ...ref, connection }, catalog).map(() => [])
-          : resolveTrigger(this.deps.registry, { ...ref, connection }, catalog).map(
-              ({ trigger }) =>
-                trigger.source
-                  ? []
-                  : [{ path: 'type', message: `Trigger "${ref.type}" is not an event source` }],
-            );
+      const field = ENDPOINT_FIELD[kind];
+      const resolved = this.#resolveEndpoint(
+        kind,
+        { ...ref, connection: { key: spec.key } },
+        catalog,
+      );
       const found = resolved.isOk() ? resolved.value : resolved.error.issues;
 
       return found.map((issue) => ({
@@ -120,6 +142,27 @@ export class ConnectionService {
     });
 
     return issues.length === 0 ? ok(spec) : err(invalid(issues));
+  }
+
+  #resolveEndpoint(
+    kind: EndpointKind,
+    ref: TargetRef,
+    catalog: ConnectionCatalog,
+  ): Result<readonly ConfigIssue[], ConfigError> {
+    switch (kind) {
+      case 'target':
+        return resolveTarget(this.deps.registry, ref, catalog).map(() => []);
+      case 'trigger':
+        return resolveTrigger(this.deps.registry, ref, catalog).map(({ trigger }) =>
+          trigger.source
+            ? []
+            : [{ path: 'type', message: `Trigger "${ref.type}" is not an event source` }],
+        );
+      case 'notifier':
+        return resolveNotifier(this.deps.registry, ref, catalog).map(() => []);
+      default:
+        return assertNever(kind);
+    }
   }
 
   async create(raw: unknown): Promise<Result<Connection, ConfigError | ConflictError>> {
@@ -155,7 +198,11 @@ export class ConnectionService {
       version: current.version + 1,
       updatedAt: this.deps.clock.now(),
     };
-    const broken = await this.#brokenJobs(next);
+    const broken = [
+      ...(await this.#brokenJobs(next)),
+      ...(await this.#brokenGroups(next)),
+      ...(await this.#brokenDeliveries(next)),
+    ];
     if (broken.length > 0) {
       return err(invalid(broken));
     }
@@ -168,13 +215,17 @@ export class ConnectionService {
   }
 
   async delete(key: string): Promise<Result<void, NotFoundError | ConnectionInUseError>> {
-    const users = await this.deps.jobs.findByConnection(key);
-    if (users.length > 0) {
+    const [{ jobs, groups }, deliveries] = await Promise.all([
+      this.usages(key),
+      this.deps.outbox.listOpenByConnection(key),
+    ]);
+    if (jobs.length > 0 || groups.length > 0 || deliveries.length > 0) {
       return err(
-        connectionInUse(
-          key,
-          users.map((job) => job.id),
-        ),
+        connectionInUse(key, {
+          jobIds: jobs.map((job) => job.id),
+          groupIds: groups.map((group) => group.id),
+          deliveryIds: deliveries.map((delivery) => delivery.id),
+        }),
       );
     }
 
@@ -216,7 +267,7 @@ export class ConnectionService {
       if (resolved.isErr()) {
         issues.push(
           ...resolved.error.issues
-            .filter((issue) => issue.path.startsWith('trigger') || issue.path.startsWith('target'))
+            .filter((issue) => /^(trigger|target|notifications)\b/.test(issue.path))
             .map((issue) => ({
               path: 'endpoints',
               message: `Job "${job.name}" would break: ${issue.path}: ${issue.message}`,
@@ -226,5 +277,46 @@ export class ConnectionService {
     }
 
     return issues;
+  }
+
+  async #brokenGroups(next: Connection): Promise<ConfigIssue[]> {
+    const groups = await this.deps.groups.findByConnection(next.key);
+    const issues: ConfigIssue[] = [];
+    for (const group of groups) {
+      const rules = group.defaultNotifications;
+      const loaded = await loadConnections(
+        this.deps.connections,
+        notificationConnectionRefs(rules),
+      );
+      const catalog = new Map(loaded).set(next.key, next);
+      const bound = bindNotifications(this.deps.registry, rules, catalog, 'defaultNotifications');
+      if (bound.isErr()) {
+        issues.push(
+          ...bound.error.issues.map((issue) => ({
+            path: 'endpoints',
+            message: `Group "${group.name}" would break: ${issue.path}: ${issue.message}`,
+          })),
+        );
+      }
+    }
+
+    return issues;
+  }
+
+  // A queued delivery resolves its notifier on every attempt, so it outlives the rule that queued it.
+  async #brokenDeliveries(next: Connection): Promise<ConfigIssue[]> {
+    const deliveries = await this.deps.outbox.listOpenByConnection(next.key);
+    const catalog = new Map([[next.key, next]]);
+
+    return deliveries.flatMap((delivery) =>
+      resolveNotifier(this.deps.registry, delivery.notifier, catalog).match(
+        () => [],
+        (error) =>
+          error.issues.map((issue) => ({
+            path: 'endpoints',
+            message: `Queued notification ${delivery.key} would fail: ${issue.path}: ${issue.message}`,
+          })),
+      ),
+    );
   }
 }

@@ -34,6 +34,7 @@ const COPY: Record<
     endpoint: string;
     endpointNone: string;
     saved: string;
+    scope: string;
   }
 > = {
   target: {
@@ -43,6 +44,7 @@ const COPY: Record<
     endpoint: 'A request saved on the connection.',
     endpointNone: 'None: configure the request below',
     saved: 'Runs',
+    scope: 'this job',
   },
   trigger: {
     label: 'Trigger',
@@ -51,6 +53,16 @@ const COPY: Record<
     endpoint: 'A source (queue, topic or stream) saved on the connection.',
     endpointNone: 'None: configure the source below',
     saved: 'Consumes',
+    scope: 'this job',
+  },
+  notifier: {
+    label: 'Send to',
+    connection: 'A saved webhook, Slack or mail server with its address and credentials.',
+    none: 'None: enter the address below',
+    endpoint: 'A message (recipients, channel or template) saved on the connection.',
+    endpointNone: 'None: configure the message below',
+    saved: 'Sends',
+    scope: 'this rule',
   },
 };
 
@@ -227,8 +239,8 @@ export function ConnectedProviderPicker({
       )}
       {endpoint && (
         <Text size="sm" color="dimmed">
-          {copy.saved} {connection?.key}/{endpoint.key} as saved. Fields set below override it for
-          this job only.
+          {copy.saved} {connection?.key}/{endpoint.key} as saved. Fields set below override it for{' '}
+          {copy.scope} only.
         </Text>
       )}
       <ProviderConfigForm

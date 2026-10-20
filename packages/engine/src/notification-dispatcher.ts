@@ -1,5 +1,6 @@
 import {
   type Clock,
+  type ConnectionRepository,
   type Logger,
   type NotificationDelivery,
   type NotificationOutbox,
@@ -10,9 +11,11 @@ import {
   ResultAsync,
   computeRetryDelay,
   err,
+  resolveNotifier,
   toError,
 } from '@cloud-trigger/core';
 
+import { loadConnections } from './config-validation.js';
 import { PollingLoop } from './loop.js';
 
 export interface NotificationDispatcherOptions {
@@ -25,6 +28,7 @@ export interface NotificationDispatcherOptions {
 
 export interface NotificationDispatcherDeps {
   readonly outbox: NotificationOutbox;
+  readonly connections: ConnectionRepository;
   readonly registry: ProviderRegistry;
   readonly secrets: SecretResolver;
   readonly clock: Clock;
@@ -93,14 +97,22 @@ export class NotificationDispatcher {
   }
 
   async #send(claimed: NotificationDelivery): Promise<NotifyResult> {
-    const bound = this.deps.registry
-      .get('notifier', claimed.notifier.type)
-      .andThen((provider) => provider.bind(claimed.notifier.config));
+    const { notifier } = claimed;
+    const catalog = await loadConnections(
+      this.deps.connections,
+      notifier.connection ? [notifier.connection] : [],
+    );
+    const bound = resolveNotifier(this.deps.registry, notifier, catalog);
     if (bound.isErr()) {
-      return err({ message: bound.error.message, retryable: false });
+      const [issue] = bound.error.issues;
+
+      return err({
+        message: issue ? `${issue.path}: ${issue.message}` : bound.error.message,
+        retryable: false,
+      });
     }
     const sent = await ResultAsync.fromPromise(
-      bound.value.notify(claimed.payload, {
+      bound.value.notifier.notify(claimed.payload, {
         secrets: this.deps.secrets,
         signal: AbortSignal.timeout(this.options.timeoutMs),
         now: this.deps.clock.now(),

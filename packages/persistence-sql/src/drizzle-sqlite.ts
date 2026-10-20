@@ -86,6 +86,7 @@ export const connections = sqliteTableOf('connections');
 export const runs = sqliteTableOf('runs');
 export const fireKeys = sqliteTableOf('fire_keys');
 export const groups = sqliteTableOf('groups');
+export const groupConnections = sqliteTableOf('group_connections');
 export const rateLimits = sqliteTableOf('rate_limits');
 export const notificationsOutbox = sqliteTableOf('notifications_outbox');
 export const scheduleDecisions = sqliteTableOf('schedule_decisions');

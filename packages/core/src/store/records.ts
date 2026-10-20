@@ -1,9 +1,9 @@
 import type { ConnectionSpec } from '../domain/connection.js';
-import type { GroupSpec } from '../domain/group.js';
 import { JobSpec } from '../domain/job.js';
 import type { NotificationDelivery } from '../domain/notification.js';
 import type { RunStatus } from '../domain/run.js';
 import type { WorkflowRun } from '../domain/workflow-run.js';
+import type { GroupUpdate } from '../ports/groups.js';
 import type { WorkflowChange } from '../ports/workflows.js';
 
 export const SUCCESS_LIKE_STATUSES: readonly RunStatus[] = ['succeeded', 'cancelled', 'skipped'];
@@ -32,10 +32,12 @@ export const userEditableJobFields = (
 ): Record<string, unknown> =>
   Object.fromEntries(Object.entries(spec).filter(([key]) => SPEC_FIELDS.has(key)));
 
-export const groupUpdateFields = (
-  update: { readonly spec: GroupSpec; readonly updatedAt: Date },
-  expectedVersion: number,
-) => ({ ...update.spec, updatedAt: update.updatedAt, version: expectedVersion + 1 });
+export const groupUpdateFields = (update: GroupUpdate, expectedVersion: number) => ({
+  ...update.spec,
+  ...(update.connectionRefs && { connectionRefs: [...update.connectionRefs] }),
+  updatedAt: update.updatedAt,
+  version: expectedVersion + 1,
+});
 
 export const connectionUpdateFields = (
   update: { readonly spec: ConnectionSpec; readonly updatedAt: Date },

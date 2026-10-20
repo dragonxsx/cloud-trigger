@@ -4,15 +4,16 @@ import {
   type ConnectionCatalog,
   type ConnectionRef,
   type EndpointKind,
+  type NotifierRef,
   type TargetRef,
   endpointProvider,
   findEndpoint,
 } from '../domain/connection.js';
-import type { TriggerRef } from '../domain/job.js';
+import type { NotificationRule, TriggerRef } from '../domain/job.js';
 import type { ConfigError, ConfigIssue } from '../shared/errors.js';
 import { mergePatch } from '../shared/merge-patch.js';
 import type { ProviderRegistry } from './registry.js';
-import type { BoundByKind, BoundTarget, BoundTrigger } from './sdk.js';
+import type { BoundByKind, BoundNotifier, BoundTarget, BoundTrigger } from './sdk.js';
 
 export interface UsedConnection {
   readonly key: string;
@@ -30,6 +31,11 @@ export interface ResolvedTrigger {
   readonly connection: UsedConnection | undefined;
 }
 
+export interface ResolvedNotifier {
+  readonly notifier: BoundNotifier;
+  readonly connection: UsedConnection | undefined;
+}
+
 interface ConnectedRef {
   readonly type: string;
   readonly config?: unknown;
@@ -42,7 +48,19 @@ const nested = (prefix: string, issues: readonly ConfigIssue[]): ConfigIssue[] =
     message: issue.message,
   }));
 
-const ENDPOINT_NOUN: Record<EndpointKind, string> = { target: 'target', trigger: 'event source' };
+const ENDPOINT_NOUN: Record<EndpointKind, string> = {
+  target: 'target',
+  trigger: 'event source',
+  notifier: 'notifier',
+};
+
+const withArticle = (noun: string) => `${/^[aeiou]/.test(noun) ? 'an' : 'a'} ${noun}`;
+
+const SUBJECT: Record<EndpointKind, string> = {
+  target: 'Target',
+  trigger: 'Trigger',
+  notifier: 'Notifier',
+};
 
 function resolveConnected<K extends EndpointKind>(
   registry: ProviderRegistry,
@@ -50,7 +68,7 @@ function resolveConnected<K extends EndpointKind>(
   ref: ConnectedRef,
   connections: ConnectionCatalog,
 ): Result<{ bound: BoundByKind[K]; connection: UsedConnection | undefined }, ConfigError> {
-  const subject = kind === 'target' ? 'Target' : 'Trigger';
+  const subject = SUBJECT[kind];
   const invalid = (issues: readonly ConfigIssue[]): ConfigError => ({
     code: 'invalid_config',
     message: `Invalid ${kind} configuration`,
@@ -114,7 +132,7 @@ function resolveConnected<K extends EndpointKind>(
     if (saved.kind !== kind) {
       return fail(
         'connection.endpoint',
-        `Endpoint "${use.key}/${use.endpoint}" is ${saved.kind === 'target' ? 'a' : 'an'} ${ENDPOINT_NOUN[saved.kind]} endpoint`,
+        `Endpoint "${use.key}/${use.endpoint}" is ${withArticle(ENDPOINT_NOUN[saved.kind])} endpoint`,
       );
     }
     if (saved.ref.type !== ref.type) {
@@ -158,6 +176,16 @@ export const resolveTrigger = (
     connection,
   }));
 
+export const resolveNotifier = (
+  registry: ProviderRegistry,
+  ref: NotifierRef,
+  connections: ConnectionCatalog,
+): Result<ResolvedNotifier, ConfigError> =>
+  resolveConnected(registry, 'notifier', ref, connections).map(({ bound, connection }) => ({
+    notifier: bound,
+    connection,
+  }));
+
 const refId = (ref: ConnectionRef) => `${ref.key}/${ref.endpoint ?? ''}`;
 
 const unique = (refs: readonly ConnectionRef[]): ConnectionRef[] => [
@@ -174,11 +202,21 @@ export function targetConnectionRefs(registry: ProviderRegistry, ref: TargetRef)
   return unique([...own, ...children]);
 }
 
+export const notificationConnectionRefs = (
+  rules: readonly Pick<NotificationRule, 'notifier'>[],
+): ConnectionRef[] =>
+  unique(rules.flatMap(({ notifier }) => (notifier.connection ? [notifier.connection] : [])));
+
 export const jobConnectionRefs = (
   registry: ProviderRegistry,
-  spec: { readonly trigger: Pick<TriggerRef, 'connection'>; readonly target: TargetRef },
+  spec: {
+    readonly trigger: Pick<TriggerRef, 'connection'>;
+    readonly target: TargetRef;
+    readonly notifications?: readonly Pick<NotificationRule, 'notifier'>[] | undefined;
+  },
 ): ConnectionRef[] =>
   unique([
     ...(spec.trigger.connection ? [spec.trigger.connection] : []),
     ...targetConnectionRefs(registry, spec.target),
+    ...notificationConnectionRefs(spec.notifications ?? []),
   ]);

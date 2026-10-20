@@ -1,3 +1,4 @@
+import type { ConnectionRef } from '@cloud-trigger/core';
 import type { ConnectionService } from '@cloud-trigger/engine';
 
 import { type Api, toApiError } from '../shared/api.js';
@@ -63,16 +64,25 @@ export const connectionsHandlers = ({
     }),
 
     usages: connections.usages.handler(async ({ input }) => {
-      const jobs = await connectionService.usages(input.key);
-
-      return jobs.map((job) => ({
-        id: job.id,
-        name: job.name,
-        enabled: job.enabled,
-        endpoints: job.connectionRefs.flatMap((ref) =>
+      const { jobs, groups } = await connectionService.usages(input.key);
+      const endpoints = (refs: readonly ConnectionRef[]) =>
+        refs.flatMap((ref) =>
           ref.key === input.key && ref.endpoint !== undefined ? [ref.endpoint] : [],
-        ),
-      }));
+        );
+
+      return {
+        jobs: jobs.map((job) => ({
+          id: job.id,
+          name: job.name,
+          enabled: job.enabled,
+          endpoints: endpoints(job.connectionRefs),
+        })),
+        groups: groups.map((group) => ({
+          id: group.id,
+          name: group.name,
+          endpoints: endpoints(group.connectionRefs),
+        })),
+      };
     }),
 
     update: connections.update.handler(async ({ input, errors }) => {

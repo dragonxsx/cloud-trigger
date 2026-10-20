@@ -2,6 +2,7 @@ import {
   type Clock,
   type ConfigError,
   type ConflictError,
+  type ConnectionRepository,
   type Group,
   type GroupId,
   type GroupQuery,
@@ -18,15 +19,18 @@ import {
   createGroup,
   err,
   newGroupId,
+  notificationConnectionRefs,
   ok,
   resolvePolicy,
 } from '@cloud-trigger/core';
 
+import { bindNotifications, loadConnections } from './config-validation.js';
 import { rearmSuccessDeadline } from './policies.js';
 
 export interface GroupServiceDeps {
   readonly groups: GroupRepository;
   readonly jobs: JobRepository;
+  readonly connections: ConnectionRepository;
   readonly registry: ProviderRegistry;
   readonly clock: Clock;
 }
@@ -37,41 +41,37 @@ const sinceSuccessLimit = (job: Job, group: Group) =>
 export class GroupService {
   constructor(private readonly deps: GroupServiceDeps) {}
 
-  validate(raw: unknown): Result<GroupSpec, ConfigError> {
+  async validate(raw: unknown): Promise<Result<GroupSpec, ConfigError>> {
     const parsed = GroupSpec.safeParse(raw);
     if (!parsed.success) {
       return err(configErrorFromZod(parsed.error));
     }
-    const issues = parsed.data.defaultNotifications.flatMap((rule, i) => {
-      const path = `defaultNotifications.${i}.notifier`;
-      const bound = this.deps.registry
-        .get('notifier', rule.notifier.type)
-        .andThen((provider) => provider.bind(rule.notifier.config));
-      if (bound.isOk()) {
-        return [];
-      }
+    const rules = parsed.data.defaultNotifications;
+    const catalog = await loadConnections(this.deps.connections, notificationConnectionRefs(rules));
+    const bound = bindNotifications(this.deps.registry, rules, catalog, 'defaultNotifications');
 
-      return bound.error.code === 'unknown_provider'
-        ? [{ path: `${path}.type`, message: bound.error.message }]
-        : bound.error.issues.map((issue) => ({
-            path: `${path}.config${issue.path ? `.${issue.path}` : ''}`,
-            message: issue.message,
-          }));
-    });
-
-    return issues.length === 0
+    return bound.isOk()
       ? ok(parsed.data)
-      : err({ code: 'invalid_config', message: 'Invalid group configuration', issues });
+      : err({
+          code: 'invalid_config',
+          message: 'Invalid group configuration',
+          issues: bound.error.issues,
+        });
   }
 
   async create(raw: unknown): Promise<Result<Group, ConfigError | ConflictError>> {
-    const spec = this.validate(raw);
+    const spec = await this.validate(raw);
     if (spec.isErr()) {
       return err(spec.error);
     }
 
     return this.deps.groups.insert(
-      createGroup({ id: newGroupId(), spec: spec.value, now: this.deps.clock.now() }),
+      createGroup({
+        id: newGroupId(),
+        spec: spec.value,
+        connectionRefs: notificationConnectionRefs(spec.value.defaultNotifications),
+        now: this.deps.clock.now(),
+      }),
     );
   }
 
@@ -80,7 +80,7 @@ export class GroupService {
     raw: unknown,
     expectedVersion: number,
   ): Promise<Result<Group, ConfigError | ConflictError | NotFoundError | VersionConflictError>> {
-    const spec = this.validate(raw);
+    const spec = await this.validate(raw);
     if (spec.isErr()) {
       return err(spec.error);
     }
@@ -88,7 +88,11 @@ export class GroupService {
     const before = await this.deps.groups.get(id);
     const updated = await this.deps.groups.update(
       id,
-      { spec: spec.value, updatedAt: this.deps.clock.now() },
+      {
+        spec: spec.value,
+        connectionRefs: notificationConnectionRefs(spec.value.defaultNotifications),
+        updatedAt: this.deps.clock.now(),
+      },
       expectedVersion,
     );
     if (updated.isOk() && before) {
