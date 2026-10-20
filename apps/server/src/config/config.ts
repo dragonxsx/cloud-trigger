@@ -17,6 +17,12 @@ const splitCsv = (s: string): string[] =>
     .filter(Boolean);
 const csv = z.string().default('').transform(splitCsv);
 
+const KEY_HINT = 'Use 32 random bytes, base64-encoded (openssl rand -base64 32)';
+const EncryptionKey = z
+  .base64({ error: KEY_HINT })
+  .transform((s) => Buffer.from(s, 'base64'))
+  .refine((key) => key.length === 32, KEY_HINT);
+
 const Role = z.enum(['api', 'scheduler', 'worker', 'consumer']);
 export type Role = z.output<typeof Role>;
 
@@ -89,6 +95,12 @@ const ConfigShape = z.object({
     .describe('Signs calendar subscription tokens; rotate it to revoke every token.'),
   PUBLIC_URL: z.url().optional().describe('Base URL used in calendar links and subscribe URLs.'),
 
+  DATA_ENCRYPTION_KEY: EncryptionKey.describe(
+    'Encrypts secret provider fields and the session secret at rest; back it up.',
+  ),
+  DATA_ENCRYPTION_PREVIOUS_KEYS: csv
+    .pipe(z.array(EncryptionKey))
+    .describe('Retired keys that still decrypt stored values until `reseal-secrets` has run.'),
   SECRETS_DIR: z.string().optional(),
   SECRET_ENV_PREFIX: z.string().default('CT_SECRET_'),
   WEB_DIST: z.string().optional(),

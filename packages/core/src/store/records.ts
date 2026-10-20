@@ -53,7 +53,7 @@ export const environmentUpdateFields = (
 export const workflowChangeFields = (change: WorkflowChange, expectedVersion: number) => ({
   ...change.spec,
   inlineJobIds: { ...change.inlineJobIds },
-  nextFireAt: change.nextFireAt,
+  ...(change.nextFireAt !== undefined && { nextFireAt: change.nextFireAt }),
   updatedAt: change.updatedAt,
   version: expectedVersion + 1,
 });

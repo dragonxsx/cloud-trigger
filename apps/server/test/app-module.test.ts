@@ -7,6 +7,7 @@ import { ApiRouter } from '../src/api/app-router.js';
 import { AppModule } from '../src/app.module.js';
 import { loadConfig } from '../src/config/config.js';
 import { EngineRuntime } from '../src/engine/engine-runtime.js';
+import { TEST_ENCRYPTION_KEY } from './support/app.js';
 
 let container: StartedMongoDBContainer;
 const closers: (() => Promise<void>)[] = [];
@@ -21,6 +22,7 @@ afterAll(async () => {
 
 const boot = async (role: string) => {
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     APP_ROLE: role,
     MONGO_URI: `${container.getConnectionString()}?directConnection=true`,
     MONGO_DB: 'app_module',

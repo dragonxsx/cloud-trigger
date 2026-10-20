@@ -15,7 +15,7 @@ import { z } from 'zod';
 
 import { loadConfig } from '../src/config/config.js';
 import { TransportBridge } from '../src/mcp/transport-bridge.js';
-import { type SeedAuth, type TestApp, createTestApp } from './support/app.js';
+import { type SeedAuth, type TestApp, createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -73,6 +73,7 @@ beforeAll(async () => {
   targetUrl = await listen(target);
 
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     MONGO_URI: `${container.getConnectionString()}?directConnection=true`,
     MONGO_DB: 'phase3',
     WORKER_POLL_MS: '100',

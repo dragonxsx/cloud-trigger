@@ -30,16 +30,20 @@ const propertySchema = (schema: JsonSchema, key: string): JsonSchema | boolean |
 const describesMembers = (schema: JsonSchema): boolean =>
   schema.properties !== undefined || typeof schema.additionalProperties === 'object';
 
-export function redactBySchema(schema: JsonSchema | boolean | undefined, value: unknown): unknown {
+export function mapSecrets(
+  schema: JsonSchema | boolean | undefined,
+  value: unknown,
+  leaf: (secret: unknown) => unknown,
+): unknown {
   if (schema === undefined || typeof schema === 'boolean') {
     return value;
   }
   if (schema['secret'] === true) {
-    return value === undefined || value === null ? value : REDACTED;
+    return leaf(value);
   }
 
   const result = schemaBranches(schema, value).reduce<unknown>(
-    (current, branch) => redactBySchema(branch, current),
+    (current, branch) => mapSecrets(branch, current, leaf),
     value,
   );
 
@@ -47,18 +51,24 @@ export function redactBySchema(schema: JsonSchema | boolean | undefined, value: 
     return Object.fromEntries(
       Object.entries(result).map(([key, v]) => [
         key,
-        redactBySchema(propertySchema(schema, key), v),
+        mapSecrets(propertySchema(schema, key), v, leaf),
       ]),
     );
   }
   if (Array.isArray(result) && schema.items !== undefined && !Array.isArray(schema.items)) {
     const items = schema.items;
 
-    return result.map((item: unknown) => redactBySchema(items, item));
+    return result.map((item: unknown) => mapSecrets(items, item, leaf));
   }
 
   return result;
 }
+
+export const redactSecret = (value: unknown): unknown =>
+  value === undefined || value === null ? value : REDACTED;
+
+export const redactBySchema = (schema: JsonSchema | boolean | undefined, value: unknown): unknown =>
+  mapSecrets(schema, value, redactSecret);
 
 export function restoreRedacted(
   schema: JsonSchema | boolean | undefined,

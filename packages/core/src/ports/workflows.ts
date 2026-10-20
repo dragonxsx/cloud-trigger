@@ -13,7 +13,7 @@ export interface WorkflowQuery extends PageRequest {
 export interface WorkflowChange {
   readonly spec: WorkflowSpec;
   readonly inlineJobIds: Readonly<Record<string, JobId>>;
-  readonly nextFireAt: Date | null;
+  readonly nextFireAt?: Date | null | undefined;
   readonly updatedAt: Date;
 }
 

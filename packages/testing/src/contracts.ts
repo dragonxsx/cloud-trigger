@@ -232,6 +232,21 @@ export function describePersistenceContract(
         expect((await workflows.get(due.id))?.nextFireAt).toEqual(at(30_000));
         expect(await workflows.findDue({ now: at(1), limit: 10 })).toEqual([]);
       });
+
+      it('keeps an advanced schedule when an update omits nextFireAt', async () => {
+        const { workflows } = setup.ports();
+        const due = makeWorkflow({ name: 'due' }, at(0));
+        await workflows.insert(due);
+        expect(await workflows.advanceSchedule(due.id, { from: at(0), to: at(30_000) })).toBe(true);
+        const { nextFireAt: _stale, ...spec } = due;
+        const updated = await workflows.update(
+          due.id,
+          { spec: { ...spec, name: 'renamed' }, inlineJobIds: {}, updatedAt: at(1) },
+          due.version,
+        );
+        expect(updated._unsafeUnwrap()).toMatchObject({ name: 'renamed', nextFireAt: at(30_000) });
+        expect((await workflows.get(due.id))?.nextFireAt).toEqual(at(30_000));
+      });
     });
 
     describe('Workflow runs', () => {

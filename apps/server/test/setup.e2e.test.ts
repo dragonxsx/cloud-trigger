@@ -18,7 +18,7 @@ import { z } from 'zod';
 
 import { loadConfig } from '../src/config/config.js';
 import { SetupAppModule } from '../src/setup-app.module.js';
-import { createTestApp } from './support/app.js';
+import { createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -87,6 +87,7 @@ beforeAll(async () => {
       .sign(privateKey);
 
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     DB_DRIVER: 'sqlite',
     SQLITE_PATH: join(dir, 'setup.db'),
     SETUP_TOKEN: TOKEN,
@@ -318,7 +319,11 @@ describe('access administration', () => {
 
 describe('database stage', () => {
   it('serves only the setup routes while no database is configured', async () => {
-    const config = loadConfig({ SETUP_TOKEN: TOKEN, PORT: '0' });
+    const config = loadConfig({
+      DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+      SETUP_TOKEN: TOKEN,
+      PORT: '0',
+    });
     const setupApp = await NestFactory.create(
       SetupAppModule.forRoot({
         config,

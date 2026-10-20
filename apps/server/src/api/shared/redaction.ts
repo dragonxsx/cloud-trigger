@@ -5,39 +5,31 @@ import {
   type JobSpec,
   type Group,
   type GroupSpec,
-  type InlineJobSpec,
   type Workflow,
-  type WorkflowNode,
   type WorkflowRun,
   type WorkflowSpec,
   endpointProvider,
   findOverlay,
+  SecretFields,
   withEndpointProvider,
   type JsonSchema,
   type NotificationDelivery,
   type ProviderKind,
   type ProviderRef,
   type ProviderRegistry,
-  redactBySchema,
+  redactSecret,
   restoreRedacted,
 } from '@cloud-trigger/core';
 
 export class JobRedactor {
-  readonly #schemas = new Map<string, JsonSchema | undefined>();
+  readonly #fields: SecretFields;
 
-  constructor(private readonly registry: ProviderRegistry) {}
+  constructor(registry: ProviderRegistry) {
+    this.#fields = new SecretFields(registry);
+  }
 
   redact(job: Job): Job {
-    return {
-      ...job,
-      trigger: { ...job.trigger, config: this.#redactRef('trigger', job.trigger) },
-      input: { ...job.input, config: this.#redactRef('input', job.input) },
-      target: { ...job.target, config: this.#redactRef('target', job.target) },
-      notifications: job.notifications.map((n) => ({
-        ...n,
-        notifier: { ...n.notifier, config: this.#redactRef('notifier', n.notifier) },
-      })),
-    };
+    return this.#fields.job(job, redactSecret);
   }
 
   restore(next: JobSpec, previous: Job): JobSpec {
@@ -62,13 +54,7 @@ export class JobRedactor {
   }
 
   redactGroup(group: Group): Group {
-    return {
-      ...group,
-      defaultNotifications: group.defaultNotifications.map((n) => ({
-        ...n,
-        notifier: { ...n.notifier, config: this.#redactRef('notifier', n.notifier) },
-      })),
-    };
+    return this.#fields.group(group, redactSecret);
   }
 
   restoreGroup(next: GroupSpec, previous: Group): GroupSpec {
@@ -95,39 +81,12 @@ export class JobRedactor {
     };
   }
 
-  #redactInline(job: InlineJobSpec): InlineJobSpec {
-    return {
-      ...job,
-      input: { ...job.input, config: this.#redactRef('input', job.input) },
-      target: { ...job.target, config: this.#redactRef('target', job.target) },
-      notifications: job.notifications.map((n) => ({
-        ...n,
-        notifier: { ...n.notifier, config: this.#redactRef('notifier', n.notifier) },
-      })),
-    };
-  }
-
-  #redactNodes(nodes: readonly WorkflowNode[]): WorkflowNode[] {
-    return nodes.map((node) =>
-      node.kind === 'inline' ? { ...node, job: this.#redactInline(node.job) } : node,
-    );
-  }
-
   redactWorkflow(workflow: Workflow): Workflow {
-    return {
-      ...workflow,
-      nodes: this.#redactNodes(workflow.nodes),
-      ...(workflow.schedule && {
-        schedule: {
-          ...workflow.schedule,
-          config: this.#redactRef('trigger', workflow.schedule),
-        },
-      }),
-    };
+    return this.#fields.workflow(workflow, redactSecret);
   }
 
   redactWorkflowRun(run: WorkflowRun): WorkflowRun {
-    return { ...run, graph: { ...run.graph, nodes: this.#redactNodes(run.graph.nodes) } };
+    return this.#fields.workflowRun(run, redactSecret);
   }
 
   restoreWorkflow(next: WorkflowSpec, previous: Workflow): WorkflowSpec {
@@ -174,25 +133,7 @@ export class JobRedactor {
   }
 
   redactConnection(connection: Connection): Connection {
-    return {
-      ...connection,
-      config: this.#redactRef('connection', connection),
-      endpoints: connection.endpoints.map((endpoint) => {
-        const { kind, ref } = endpointProvider(endpoint);
-
-        return withEndpointProvider(endpoint, { ...ref, config: this.#redactRef(kind, ref) });
-      }),
-      overlays: connection.overlays.map((overlay) => ({
-        ...overlay,
-        ...(overlay.config !== undefined && {
-          config: redactBySchema(this.#schema('connection', connection.type), overlay.config),
-        }),
-        endpoints: overlay.endpoints.map((patch) => ({
-          ...patch,
-          config: redactBySchema(this.#endpointSchema(connection, patch.key), patch.config),
-        })),
-      })),
-    };
+    return this.#fields.connection(connection, redactSecret);
   }
 
   restoreConnection(next: ConnectionSpec, previous: Connection): ConnectionSpec {
@@ -249,19 +190,6 @@ export class JobRedactor {
       : overlay.config;
   }
 
-  #endpointSchema(
-    connection: Pick<ConnectionSpec, 'endpoints'>,
-    key: string,
-  ): JsonSchema | undefined {
-    const endpoint = connection.endpoints.find((candidate) => candidate.key === key);
-    if (!endpoint) {
-      return undefined;
-    }
-    const { kind, ref } = endpointProvider(endpoint);
-
-    return this.#schema(kind, ref.type);
-  }
-
   restoreConnectionConfig(
     next: Pick<ConnectionSpec, 'type' | 'config'>,
     previous: Pick<Connection, 'type' | 'config'>,
@@ -272,23 +200,17 @@ export class JobRedactor {
   }
 
   redactDelivery(delivery: NotificationDelivery): NotificationDelivery {
-    return {
-      ...delivery,
-      notifier: { ...delivery.notifier, config: this.#redactRef('notifier', delivery.notifier) },
-    };
-  }
-
-  #redactRef(kind: ProviderKind, ref: ProviderRef): unknown {
-    return redactBySchema(this.#schema(kind, ref.type), ref.config);
+    return this.#fields.delivery(delivery, redactSecret);
   }
 
   #schema(kind: ProviderKind, type: string): JsonSchema | undefined {
-    const key = `${kind}:${type}`;
-    if (!this.#schemas.has(key)) {
-      const provider = this.registry.get(kind, type);
-      this.#schemas.set(key, provider.isOk() ? provider.value.jsonSchema() : undefined);
-    }
+    return this.#fields.schema(kind, type);
+  }
 
-    return this.#schemas.get(key);
+  #endpointSchema(
+    connection: Pick<ConnectionSpec, 'endpoints'>,
+    key: string,
+  ): JsonSchema | undefined {
+    return this.#fields.endpointSchema(connection, key);
   }
 }

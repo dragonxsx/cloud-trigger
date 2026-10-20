@@ -11,7 +11,7 @@ import { MongoDBContainer, type StartedMongoDBContainer } from '@testcontainers/
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadConfig } from '../src/config/config.js';
-import { createTestApp } from './support/app.js';
+import { createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -51,6 +51,7 @@ beforeAll(async () => {
   targetUrl = await listen(target);
 
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     MONGO_URI: `${container.getConnectionString()}?directConnection=true`,
     MONGO_DB: 'e2e',
     WORKER_POLL_MS: '100',

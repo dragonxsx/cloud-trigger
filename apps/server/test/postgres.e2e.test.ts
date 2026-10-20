@@ -11,7 +11,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadConfig } from '../src/config/config.js';
-import { createTestApp } from './support/app.js';
+import { createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -41,6 +41,7 @@ beforeAll(async () => {
   target = createServer((_req, res) => res.end('{"ok":true}'));
   targetUrl = await listen(target);
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     DB_DRIVER: 'postgres',
     POSTGRES_URL: container.getConnectionUri(),
     WORKER_POLL_MS: '100',

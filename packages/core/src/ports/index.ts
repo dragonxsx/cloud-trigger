@@ -16,3 +16,4 @@ export * from './event-sources.js';
 export * from './workflows.js';
 export * from './unit-of-work.js';
 export * from './auth.js';
+export * from './secret-cipher.js';

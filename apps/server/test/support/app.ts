@@ -25,6 +25,8 @@ export interface SeedAuth {
   readonly anonymousScopes?: Scope[];
 }
 
+export const TEST_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
+
 const OPEN_ACCESS: SeedAuth = { anonymousScopes: ['admin'] };
 
 export async function seedAuth(persistence: Persistence, seed: SeedAuth): Promise<void> {
@@ -61,7 +63,7 @@ export async function createTestApp(
 ): Promise<TestApp> {
   const app = await NestFactory.create(
     AppModule.forRoot({ config, pino: pino({ level: 'silent' }), tracer: options.tracer }),
-    { bodyParser: false, logger: false },
+    { bodyParser: false, logger: false, abortOnError: false },
   );
   const persistence = resolveToken(app, PERSISTENCE);
   if (options.auth !== false && (await persistence.authSettings.get()) === undefined) {

@@ -83,17 +83,30 @@ export class SqlWorkflowRepository implements WorkflowRepository {
     change: WorkflowChange,
     expectedVersion: number,
   ): Promise<Result<Workflow, VersionConflictError | NotFoundError>> {
-    const current = await this.get(id);
-    if (!current) {
-      return err(notFound('Workflow', id));
-    }
-    const next = Workflow.parse({ ...current, ...workflowChangeFields(change, expectedVersion) });
-    const { id: _id, created_at: _createdAt, ...changes } = workflowColumns(next);
-    const changed = await this.session.run(sql`
-      UPDATE workflows SET ${assignments(this.session, 'workflows', changes)}
-      WHERE id = ${id} AND version = ${expectedVersion}`);
+    return this.session.transaction(
+      async (): Promise<Result<Workflow, VersionConflictError | NotFoundError>> => {
+        const [row] = await this.session.all(
+          sql`SELECT doc FROM workflows WHERE id = ${id} ${this.session.dialect.forUpdate}`,
+        );
+        if (!row) {
+          return err(notFound('Workflow', id));
+        }
+        const current = workflowFromRow(row);
+        if (current.version !== expectedVersion) {
+          return err(versionConflict('Workflow', id));
+        }
+        const next = Workflow.parse({
+          ...current,
+          ...workflowChangeFields(change, expectedVersion),
+        });
+        const { id: _id, created_at: _createdAt, ...changes } = workflowColumns(next);
+        await this.session.run(sql`
+          UPDATE workflows SET ${assignments(this.session, 'workflows', changes)}
+          WHERE id = ${id}`);
 
-    return changed === 1 ? ok(next) : err(versionConflict('Workflow', id));
+        return ok(next);
+      },
+    );
   }
 
   async delete(id: WorkflowId): Promise<boolean> {

@@ -10,7 +10,8 @@
     "start": "node --env-file-if-exists=.env dist/main.js",
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput & node --watch --env-file-if-exists=.env dist/main.js",
     "test": "vitest run",
-    "reset-admin": "node --env-file-if-exists=.env dist/cli.js reset-admin"
+    "reset-admin": "node --env-file-if-exists=.env dist/cli.js reset-admin",
+    "reseal-secrets": "node --env-file-if-exists=.env dist/cli.js reseal-secrets"
   },
   "dependencies": {
     "@cloud-trigger/api-contract": "workspace:*",
@@ -29,6 +30,7 @@
     "@nestjs/core": "12.1.3",
     "@nestjs/platform-express": "12.1.3",
     "@nestjs/serve-static": "12.0.0",
+    "@noble/ciphers": "2.4.0",
     "@node-rs/argon2": "2.2.2",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/core": "2.12.0",
@@ -42,6 +44,7 @@
     "@prometheus-io/client": "0.16.1",
     "@scalar/nestjs-api-reference": "1.2.29",
     "badge-maker": "6.0.0",
+    "commander": "15.0.0",
     "express": "5.3.0",
     "ical-generator": "11.1.2",
     "jose": "6.2.12",

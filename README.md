@@ -56,6 +56,7 @@ The storage layer sits behind ports in `packages/core`. Pick it with `DB_DRIVER`
 pnpm install
 docker compose -f deploy/docker-compose.yml --profile demo up -d   # MongoDB replica set + echo server
 cp .env.example apps/server/.env
+echo "DATA_ENCRYPTION_KEY=$(openssl rand -base64 32)" >> apps/server/.env
 pnpm build
 pnpm --filter @cloud-trigger/server start   # http://localhost:8080 (API, /docs)
 pnpm --filter @cloud-trigger/web dev        # http://localhost:5173 (UI, proxies to :8080)
@@ -83,12 +84,20 @@ Kubernetes:
 ```bash
 helm install ct deploy/helm/cloud-trigger \
   --set secrets.values.MONGO_URI='mongodb://…/?replicaSet=rs0' \
-  --set secrets.values.SETUP_TOKEN="$(openssl rand -hex 16)"
+  --set secrets.values.SETUP_TOKEN="$(openssl rand -hex 16)" \
+  --set secrets.values.DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
 The chart deploys `api`, `scheduler` and `worker` as separate Deployments, with an HPA on workers. Set `combined.enabled=true` to run a single Deployment instead.
 
 API keys are created in Settings → API keys. The key is shown once, and only its SHA-256 hash is stored.
+
+### Secrets at rest
+
+Fields that providers mark secret (tokens, passwords, secret headers) and the session secret are encrypted with AES-256-GCM before they reach the database. The API still shows them as `***`. `DATA_ENCRYPTION_KEY` is required and must be the same on every replica. **Back it up:** without it, stored secrets cannot be recovered, and once the session secret is encrypted the server refuses to start with a key that doesn't match it.
+
+- **Upgrading:** existing plaintext values keep working and are encrypted the next time they are saved. Run `pnpm --filter @cloud-trigger/server reseal-secrets` (or `node dist/cli.js reseal-secrets` in the image) to encrypt them all at once.
+- **Rotating:** set the new key as `DATA_ENCRYPTION_KEY`, move the old one to `DATA_ENCRYPTION_PREVIOUS_KEYS`, restart, then run `reseal-secrets`. Keep the old key until notification outbox retention has passed, because queued deliveries keep their original encryption.
 
 ## Development
 

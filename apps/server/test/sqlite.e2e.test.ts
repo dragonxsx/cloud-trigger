@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { Server, createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import { OpenAPILink } from '@orpc/openapi-client/fetch';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { loadConfig } from '../src/config/config.js';
-import { createTestApp } from './support/app.js';
+import { createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -42,6 +42,7 @@ beforeAll(async () => {
   target = createServer((_req, res) => res.end('{"ok":true}'));
   targetUrl = await listen(target);
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     DB_DRIVER: 'sqlite',
     SQLITE_PATH: join(dir, 'app.db'),
     WORKER_POLL_MS: '100',
@@ -65,7 +66,13 @@ afterAll(async () => {
 
 describe('DB_DRIVER=sqlite', () => {
   it('refuses split roles at startup', () => {
-    expect(() => loadConfig({ DB_DRIVER: 'sqlite', APP_ROLE: 'api' })).toThrow(/APP_ROLE=all/);
+    expect(() =>
+      loadConfig({
+        DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
+        DB_DRIVER: 'sqlite',
+        APP_ROLE: 'api',
+      }),
+    ).toThrow(/APP_ROLE=all/);
   });
 
   it('runs a job end to end and streams its changes in-process', async () => {
@@ -90,5 +97,22 @@ describe('DB_DRIVER=sqlite', () => {
     await Promise.race([watching, new Promise((resolve) => setTimeout(resolve, 10_000))]);
     controller.abort();
     expect(statuses).toContain('succeeded');
+  });
+
+  it('encrypts the session secret and refuses to start with another key', async () => {
+    const env = { DB_DRIVER: 'sqlite', SQLITE_PATH: join(dir, 'keyed.db'), APP_ROLE: 'all' };
+    const first = await createTestApp(
+      loadConfig({ ...env, DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY }),
+    );
+    expect((await first.persistence.authSettings.get())?.sessionSecret).toBe(
+      'test-session-secret-test-session-secret',
+    );
+    await first.app.close();
+    expect(readFileSync(join(dir, 'keyed.db')).includes('test-session-secret')).toBe(false);
+
+    const otherKey = Buffer.alloc(32, 9).toString('base64');
+    await expect(
+      createTestApp(loadConfig({ ...env, DATA_ENCRYPTION_KEY: otherKey }), { auth: false }),
+    ).rejects.toThrow(/not in DATA_ENCRYPTION_KEY/);
   });
 });

@@ -56,6 +56,10 @@ secrets:
     MONGO_URI: ""
     POSTGRES_URL: ""
     CALENDAR_TOKEN_SECRET: ""
+    # Required: `openssl rand -base64 32`. Encrypts stored secrets; back it up.
+    DATA_ENCRYPTION_KEY: ""
+    # Retired keys during rotation, comma-separated.
+    DATA_ENCRYPTION_PREVIOUS_KEYS: ""
     # First-run /setup token; set it when running more than one API replica.
     SETUP_TOKEN: ""
 

@@ -23,6 +23,7 @@ services:
       MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0
       APP_ROLE: all
       SETUP_TOKEN: local-setup-token
+      DATA_ENCRYPTION_KEY: ZGVtby1vbmx5LWRlbW8tb25seS1kZW1vLW9ubHktMzI=
     ports: ["8080:8080"]
 
   keycloak:

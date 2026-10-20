@@ -15,7 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { loadConfig } from '../src/config/config.js';
-import { createTestApp } from './support/app.js';
+import { createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
 
 type Client = JsonifiedClient<ContractRouterClient<Contract>>;
 
@@ -29,6 +29,7 @@ beforeAll(async () => {
     res.writeHead(req.headers.authorization === 'Bearer live-token' ? 200 : 401).end('{}');
   });
   const config = loadConfig({
+    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
     DB_DRIVER: 'sqlite',
     SQLITE_PATH: join(dir, 'app.db'),
     WORKER_POLL_MS: '100',
