@@ -19,6 +19,7 @@ import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
 import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicker';
+import { EnvironmentSelect } from '../../components/EnvironmentSelect';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
 import { type ProviderDto, type WorkflowSpecDto, client } from '../../lib/api';
@@ -32,6 +33,7 @@ export interface WorkflowFormValues {
   name: string;
   description: string;
   enabled: boolean;
+  environment: string | null;
   nodes: FormNode[];
   edges: FormEdge[];
   schedule: Schedule | null;
@@ -58,6 +60,7 @@ export const blankWorkflow: WorkflowFormValues = {
   name: '',
   description: '',
   enabled: true,
+  environment: null,
   nodes: [blankInline('first')],
   edges: [],
   schedule: null,
@@ -70,6 +73,7 @@ export const toWorkflowSpec = ({
   name: values.name,
   description: values.description,
   enabled: values.enabled,
+  environment: values.environment,
   nodes: values.nodes,
   edges: values.edges,
   schedule: values.schedule,
@@ -242,6 +246,13 @@ export function WorkflowFormFields({ form }: { form: WorkflowForm }) {
       <Section title="Basics">
         <TextInput label="Name" required {...form.getInputProps('name')} />
         <Textarea label="Description" autosize minRows={2} {...form.getInputProps('description')} />
+        <EnvironmentSelect
+          description="Inline steps that set no environment run with this environment's connection overlays."
+          placeholder="Base connection configs"
+          value={values.environment}
+          onChange={(environment) => form.setFieldValue('environment', environment)}
+          error={fieldError(form.errors, 'environment')}
+        />
         <Switch label="Enabled" {...form.getInputProps('enabled', { type: 'checkbox' })} />
       </Section>
 

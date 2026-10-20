@@ -35,7 +35,7 @@ export function redactBySchema(schema: JsonSchema | boolean | undefined, value: 
     return value;
   }
   if (schema['secret'] === true) {
-    return value === undefined ? value : REDACTED;
+    return value === undefined || value === null ? value : REDACTED;
   }
 
   const result = schemaBranches(schema, value).reduce<unknown>(

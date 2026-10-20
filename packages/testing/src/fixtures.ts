@@ -65,6 +65,7 @@ export const makeDelivery = (
     rules: [
       { on: ['success'], notifier: { type: 'webhook', config: { url: 'http://localhost' } } },
     ],
+    environment: null,
     event: {
       event: 'success',
       jobId: job.id,

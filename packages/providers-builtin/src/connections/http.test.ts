@@ -86,6 +86,7 @@ const connection = (config: Record<string, unknown>, version = 1): Connection =>
       target: { type: 'http', config: { method: 'POST', url: '/charges?mode=live' } },
     },
   ],
+  overlays: [],
   version,
   createdAt: new Date(0),
   updatedAt: new Date(0),
@@ -191,6 +192,24 @@ describe('http connection', () => {
 
     const rejected = await run({ auth: { ...auth, clientSecret: 'wrong' } }, {}, t0);
     expect(rejected.error).toMatchObject({ code: 'auth_failed', retryable: false });
+  });
+
+  it('caches OAuth tokens per audience and scope under the same connection version', async () => {
+    const auth = {
+      type: 'oauth2_client_credentials',
+      tokenUrl: `${server.url}/oauth/token`,
+      clientId: 'app',
+      clientSecret: 'shh',
+      audience: 'prod',
+    };
+    await run({ auth });
+    await run({ auth: { ...auth, audience: 'staging' } });
+    expect(tokensIssued).toBe(2);
+    expect(last()?.headers.authorization).toBe('Bearer tok-2');
+    await run({ auth: { ...auth, scope: 'jobs' } });
+    expect(tokensIssued).toBe(3);
+    await run({ auth });
+    expect(tokensIssued).toBe(3);
   });
 
   it('reports a missing secret before calling anything', async () => {

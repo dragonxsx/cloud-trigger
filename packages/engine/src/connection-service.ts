@@ -11,6 +11,7 @@ import {
   ConnectionSpec,
   type ConnectionTestResult,
   type EndpointKind,
+  type EnvironmentRepository,
   type Group,
   type GroupRepository,
   type Job,
@@ -33,19 +34,29 @@ import {
   notFound,
   ok,
   endpointProvider,
+  findEndpoint,
+  mergePatch,
   notificationConnectionRefs,
+  overlayConnection,
   resolveNotifier,
   resolveTarget,
   resolveTrigger,
   toError,
 } from '@cloud-trigger/core';
 
-import { bindJob, bindNotifications, loadConnections } from './config-validation.js';
+import {
+  bindJob,
+  bindNotifications,
+  loadConnections,
+  unknownEnvironment,
+} from './config-validation.js';
+import { PolicyResolver } from './policies.js';
 
 export interface ConnectionServiceDeps {
   readonly connections: ConnectionRepository;
   readonly jobs: JobRepository;
   readonly groups: GroupRepository;
+  readonly environments: EnvironmentRepository;
   readonly outbox: NotificationOutbox;
   readonly registry: ProviderRegistry;
   readonly secrets: SecretResolver;
@@ -82,7 +93,11 @@ export interface ConnectionUsers {
 }
 
 export class ConnectionService {
-  constructor(private readonly deps: ConnectionServiceDeps) {}
+  readonly #policies: PolicyResolver;
+
+  constructor(private readonly deps: ConnectionServiceDeps) {
+    this.#policies = new PolicyResolver(deps.groups, deps.clock, 0);
+  }
 
   list(query: ConnectionQuery): Promise<Page<Connection>> {
     return this.deps.connections.list(query);
@@ -122,26 +137,85 @@ export class ConnectionService {
       spec,
       now: this.deps.clock.now(),
     });
-    const catalog = connectionCatalog([draft]);
-    const issues = spec.endpoints.flatMap((endpoint, index) => {
+    const issues = [
+      ...this.#endpointIssues(draft, (index, field) => `endpoints.${index}.${field}`),
+      ...spec.overlays.flatMap((_overlay, i) => this.#overlayIssues(draft, i)),
+    ];
+
+    return issues.length === 0 ? ok(spec) : err(invalid(issues));
+  }
+
+  #endpointIssues(
+    connection: Connection,
+    pathOf: (index: number, field: string) => string | undefined,
+  ): ConfigIssue[] {
+    const catalog = connectionCatalog([connection]);
+
+    return connection.endpoints.flatMap((endpoint, index) => {
       const { kind, ref } = endpointProvider(endpoint);
-      const field = ENDPOINT_FIELD[kind];
+      const prefix = pathOf(index, ENDPOINT_FIELD[kind]);
+      if (prefix === undefined) {
+        return [];
+      }
       const resolved = this.#resolveEndpoint(
         kind,
-        { ...ref, connection: { key: spec.key } },
+        { ...ref, connection: { key: connection.key } },
         catalog,
       );
       const found = resolved.isOk() ? resolved.value : resolved.error.issues;
 
       return found.map((issue) => ({
-        path: issue.path.startsWith('connection')
-          ? `endpoints.${index}.${field}.type`
-          : `endpoints.${index}.${field}.${issue.path}`,
+        path: issue.path.startsWith('connection') ? `${prefix}.type` : `${prefix}.${issue.path}`,
         message: issue.message,
       }));
     });
+  }
 
-    return issues.length === 0 ? ok(spec) : err(invalid(issues));
+  #overlayIssues(draft: Connection, index: number): ConfigIssue[] {
+    const overlay = draft.overlays[index];
+    if (!overlay) {
+      return [];
+    }
+    const at = `overlays.${index}`;
+    const missing = overlay.endpoints.flatMap((patch, i) =>
+      findEndpoint(draft, patch.key)
+        ? []
+        : [{ path: `${at}.endpoints.${i}.key`, message: `No endpoint "${patch.key}"` }],
+    );
+    if (missing.length > 0) {
+      return missing;
+    }
+    const overlaid = overlayConnection(draft, overlay.environment);
+    const bound = this.deps.registry
+      .get('connection', draft.type)
+      .andThen((provider) => provider.bind(overlaid.config));
+    if (bound.isErr()) {
+      return 'issues' in bound.error
+        ? prefixed(`${at}.config`, bound.error.issues)
+        : [{ path: `${at}.config`, message: bound.error.message }];
+    }
+    const patched = new Map(overlay.endpoints.map((patch, i) => [patch.key, i]));
+
+    return this.#endpointIssues(overlaid, (i) => {
+      const key = overlaid.endpoints[i]?.key;
+      const patch = key === undefined ? undefined : patched.get(key);
+
+      return patch === undefined ? undefined : `${at}.endpoints.${patch}`;
+    });
+  }
+
+  async #unknownEnvironments(spec: ConnectionSpec): Promise<ConfigIssue[]> {
+    const issues = await Promise.all(
+      spec.overlays.map((overlay, i) =>
+        unknownEnvironment(
+          this.deps.environments,
+          overlay.environment,
+          `overlays.${i}.environment`,
+        ),
+      ),
+    );
+
+    return issues.flat();
   }
 
   #resolveEndpoint(
@@ -170,6 +244,10 @@ export class ConnectionService {
     if (spec.isErr()) {
       return err(spec.error);
     }
+    const unknown = await this.#unknownEnvironments(spec.value);
+    if (unknown.length > 0) {
+      return err(invalid(unknown));
+    }
 
     return this.deps.connections.insert(
       createConnection({ id: newConnectionId(), spec: spec.value, now: this.deps.clock.now() }),
@@ -187,6 +265,10 @@ export class ConnectionService {
     }
     if (spec.value.key !== key) {
       return err(invalid([{ path: 'key', message: 'A connection key cannot change' }]));
+    }
+    const unknown = await this.#unknownEnvironments(spec.value);
+    if (unknown.length > 0) {
+      return err(invalid(unknown));
     }
     const current = await this.deps.connections.get(key);
     if (!current) {
@@ -235,14 +317,15 @@ export class ConnectionService {
   }
 
   async test(
-    raw: { readonly type: string; readonly config: unknown },
+    raw: { readonly type: string; readonly config: unknown; readonly overlay?: unknown },
     options: ConnectionTestOptions = {},
   ): Promise<Result<ConnectionTestResult, ConfigError>> {
+    const config = raw.overlay === undefined ? raw.config : mergePatch(raw.config, raw.overlay);
     const bound = this.deps.registry
       .get('connection', raw.type)
       .mapErr((e) => invalid([{ path: 'type', message: e.message }]))
       .andThen((provider) =>
-        provider.bind(raw.config).mapErr((e) => invalid(prefixed('config', e.issues))),
+        provider.bind(config).mapErr((e) => invalid(prefixed('config', e.issues))),
       );
     if (bound.isErr()) {
       return err(bound.error);
@@ -261,8 +344,9 @@ export class ConnectionService {
     const jobs = await this.deps.jobs.findByConnection(next.key);
     const issues: ConfigIssue[] = [];
     for (const job of jobs) {
-      const loaded = await loadConnections(this.deps.connections, job.connectionRefs);
-      const catalog = new Map(loaded).set(next.key, next);
+      const environment = await this.#policies.environment(job);
+      const loaded = await loadConnections(this.deps.connections, job.connectionRefs, environment);
+      const catalog = new Map(loaded).set(next.key, overlayConnection(next, environment));
       const resolved = bindJob(this.deps.registry, job, catalog);
       if (resolved.isErr()) {
         issues.push(
@@ -287,8 +371,9 @@ export class ConnectionService {
       const loaded = await loadConnections(
         this.deps.connections,
         notificationConnectionRefs(rules),
+        group.environment,
       );
-      const catalog = new Map(loaded).set(next.key, next);
+      const catalog = new Map(loaded).set(next.key, overlayConnection(next, group.environment));
       const bound = bindNotifications(this.deps.registry, rules, catalog, 'defaultNotifications');
       if (bound.isErr()) {
         issues.push(
@@ -306,10 +391,13 @@ export class ConnectionService {
   // A queued delivery resolves its notifier on every attempt, so it outlives the rule that queued it.
   async #brokenDeliveries(next: Connection): Promise<ConfigIssue[]> {
     const deliveries = await this.deps.outbox.listOpenByConnection(next.key);
-    const catalog = new Map([[next.key, next]]);
 
     return deliveries.flatMap((delivery) =>
-      resolveNotifier(this.deps.registry, delivery.notifier, catalog).match(
+      resolveNotifier(
+        this.deps.registry,
+        delivery.notifier,
+        new Map([[next.key, overlayConnection(next, delivery.environment)]]),
+      ).match(
         () => [],
         (error) =>
           error.issues.map((issue) => ({

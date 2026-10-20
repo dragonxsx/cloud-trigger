@@ -110,7 +110,12 @@ export class EventIngestor {
   }
 
   async #bindTrigger(job: Job): Promise<BoundTrigger | undefined> {
-    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
+    const bound = await loadTrigger(
+      this.deps.registry,
+      this.deps.connections,
+      job,
+      await this.#policies.environment(job),
+    );
 
     return bound.isOk() ? bound.value : undefined;
   }

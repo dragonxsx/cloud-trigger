@@ -34,6 +34,7 @@ export const TABLES = {
       enabled: req('flag'),
       paused_reason: opt('text'),
       group_id: opt('text'),
+      environment: opt('text'),
       event_source: opt('text'),
       workflow_id: opt('text'),
       next_fire_at: opt('ms'),
@@ -53,6 +54,7 @@ export const TABLES = {
     indexes: [
       { name: 'jobs_due', on: ['enabled', 'next_fire_at'] },
       { name: 'jobs_group', on: ['group_id'] },
+      { name: 'jobs_environment', on: ['environment'], whereNotNull: true },
       { name: 'jobs_name', on: ['name'] },
       { name: 'jobs_success_deadline', on: ['success_deadline'] },
       { name: 'jobs_event_source', on: ['event_source'], whereNotNull: true },
@@ -93,6 +95,22 @@ export const TABLES = {
       { name: 'connections_key', on: ['key'], unique: true },
       { name: 'connections_type', on: ['type', 'key'] },
     ],
+  },
+  connection_environments: {
+    columns: { connection_key: req('text'), environment: req('text') },
+    primaryKey: ['connection_key', 'environment'],
+    indexes: [{ name: 'connection_environments_environment', on: ['environment'] }],
+  },
+  environments: {
+    columns: {
+      id,
+      key: req('text'),
+      name: req('text'),
+      version: req('int'),
+      created_at: req('ms'),
+      doc: req('doc'),
+    },
+    indexes: [{ name: 'environments_key', on: ['key'], unique: true }],
   },
   runs: {
     columns: {
@@ -136,8 +154,18 @@ export const TABLES = {
     columns: { key: id, job_id: req('text'), created_at: req('ms') },
   },
   groups: {
-    columns: { id, name: req('text'), version: req('int'), created_at: req('ms'), doc: req('doc') },
-    indexes: [{ name: 'groups_name', on: ['name'], unique: true, lowercase: true }],
+    columns: {
+      id,
+      name: req('text'),
+      environment: opt('text'),
+      version: req('int'),
+      created_at: req('ms'),
+      doc: req('doc'),
+    },
+    indexes: [
+      { name: 'groups_name', on: ['name'], unique: true, lowercase: true },
+      { name: 'groups_environment', on: ['environment'], whereNotNull: true },
+    ],
   },
   group_connections: {
     columns: { group_id: req('text'), connection_key: req('text'), endpoint_key: req('text') },
@@ -216,12 +244,16 @@ export const TABLES = {
       id,
       name: req('text'),
       enabled: req('flag'),
+      environment: opt('text'),
       next_fire_at: opt('ms'),
       version: req('int'),
       created_at: req('ms'),
       doc: req('doc'),
     },
-    indexes: [{ name: 'workflows_due', on: ['enabled', 'next_fire_at'] }],
+    indexes: [
+      { name: 'workflows_due', on: ['enabled', 'next_fire_at'] },
+      { name: 'workflows_environment', on: ['environment'], whereNotNull: true },
+    ],
   },
   workflow_runs: {
     columns: {

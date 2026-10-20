@@ -22,6 +22,7 @@ import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { type ConnectionSpecDto, client } from '../../lib/api';
 import type { ConfigIssueDto } from '../../lib/errors';
 import { errorMessage } from '../../lib/errors';
+import { type OverlayEndpoint, type OverlayValues, OverlaysSection } from './overlays';
 
 interface ProviderRefValues {
   type: string;
@@ -77,6 +78,7 @@ export interface ConnectionFormValues {
   type: string;
   config: unknown;
   endpoints: EndpointValues[];
+  overlays: OverlayValues[];
   version?: number;
 }
 
@@ -92,6 +94,7 @@ export const blankConnection: ConnectionFormValues = {
   type: 'http',
   config: { baseUrl: 'https://', auth: { type: 'none' } },
   endpoints: [],
+  overlays: [],
 };
 
 export const toConnectionSpec = ({
@@ -104,8 +107,18 @@ export const toConnectionSpec = ({
   type: v.type,
   config: v.config,
   endpoints: v.endpoints,
+  overlays: v.overlays,
   ...(version !== undefined && { expectedVersion: version }),
 });
+
+/** Overlay endpoint patches follow their endpoint's key; `to: null` drops them with it. */
+const movePatches = (overlays: OverlayValues[], from: string, to: string | null): OverlayValues[] =>
+  overlays.map((overlay) => ({
+    ...overlay,
+    endpoints: overlay.endpoints.flatMap((patch) =>
+      patch.key !== from ? [patch] : to === null ? [] : [{ ...patch, key: to }],
+    ),
+  }));
 
 const issuesAt = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
   Object.entries(errors).flatMap(([path, message]) =>
@@ -145,14 +158,21 @@ export function ConnectionTestButton({
   type,
   config,
   savedKey,
+  overlay,
 }: {
   type: string;
   config: unknown;
   savedKey?: string | undefined;
+  overlay?: { environment: string; config: unknown } | undefined;
 }) {
   const test = useMutation({
     mutationFn: () =>
-      client.connections.test({ type, config, ...(savedKey !== undefined && { key: savedKey }) }),
+      client.connections.test({
+        type,
+        config,
+        ...(savedKey !== undefined && { key: savedKey }),
+        ...(overlay !== undefined && { overlay }),
+      }),
   });
 
   return (
@@ -192,6 +212,30 @@ export function ConnectionFormFields({
   }, [providers.data, form.values.type]);
   const { values, errors } = form;
   const setEndpoints = (endpoints: EndpointValues[]) => form.setFieldValue('endpoints', endpoints);
+  // Patches stay put while another endpoint still has the old key or already has the new one.
+  const moveEndpoint = (index: number, to: string | null) => {
+    const from = values.endpoints[index]?.key ?? '';
+    const shared = values.endpoints.some(
+      (endpoint, i) => i !== index && (endpoint.key === from || endpoint.key === to),
+    );
+    if (!shared) {
+      form.setFieldValue('overlays', movePatches(values.overlays, from, to));
+    }
+  };
+  const overlayEndpoints: OverlayEndpoint[] = values.endpoints.flatMap((endpoint) => {
+    const { kind, ref } = endpointProvider(endpoint);
+
+    return endpoint.key
+      ? [
+          {
+            key: endpoint.key,
+            name: endpoint.name,
+            type: ref.type,
+            provider: choices[kind].find((p) => p.type === ref.type),
+          },
+        ]
+      : [];
+  });
   const kinds = ENDPOINT_KINDS.filter((kind) => choices[kind].length > 0);
   const blankEndpoint = (fields: EndpointFields, kind: EndpointKind): EndpointValues =>
     endpointOf(fields, kind, { type: choices[kind][0]?.type ?? '', config: {} });
@@ -237,6 +281,7 @@ export function ConnectionFormFields({
             form.setFieldValue('type', type);
             form.setFieldValue('config', {});
             setEndpoints([]);
+            form.setFieldValue('overlays', []);
           }}
           onConfigChange={(config) => form.setFieldValue('config', config)}
         />
@@ -277,16 +322,25 @@ export function ConnectionFormFields({
                   <Accordion.Panel>
                     <Stack spacing="sm">
                       <Group align="flex-end" grow>
-                        <TextInput label="Key" required {...form.getInputProps(`${base}.key`)} />
+                        <TextInput
+                          label="Key"
+                          required
+                          {...form.getInputProps(`${base}.key`)}
+                          onChange={(event) => {
+                            moveEndpoint(index, event.currentTarget.value);
+                            form.setFieldValue(`${base}.key`, event.currentTarget.value);
+                          }}
+                        />
                         <TextInput label="Display name" {...form.getInputProps(`${base}.name`)} />
                         <Group position="right" style={{ flexGrow: 0 }}>
                           <ActionIcon
                             color="red"
                             variant="subtle"
                             aria-label={`Remove ${endpoint.key}`}
-                            onClick={() =>
-                              setEndpoints(values.endpoints.filter((_, i) => i !== index))
-                            }
+                            onClick={() => {
+                              moveEndpoint(index, null);
+                              setEndpoints(values.endpoints.filter((_, i) => i !== index));
+                            }}
                           >
                             <IconTrash size={16} />
                           </ActionIcon>
@@ -339,6 +393,29 @@ export function ConnectionFormFields({
             {errors['endpoints']}
           </Alert>
         )}
+      </Section>
+
+      <Section
+        title="Environment overlays"
+        hint="Per-environment overrides of the address, credentials and endpoints. Jobs in an environment without an overlay use the base config."
+      >
+        <OverlaysSection
+          overlays={values.overlays}
+          connectionProvider={connectionTypes.find((p) => p.type === values.type)}
+          endpoints={overlayEndpoints}
+          issuesAt={(prefix) => issuesAt(errors, prefix)}
+          onChange={(overlays) => form.setFieldValue('overlays', overlays)}
+          renderTest={(overlay) =>
+            overlay.environment ? (
+              <ConnectionTestButton
+                type={values.type}
+                config={values.config}
+                savedKey={editing ? values.key : undefined}
+                overlay={{ environment: overlay.environment, config: overlay.config ?? {} }}
+              />
+            ) : null
+          }
+        />
       </Section>
     </Stack>
   );

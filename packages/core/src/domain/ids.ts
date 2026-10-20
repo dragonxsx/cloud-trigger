@@ -37,3 +37,7 @@ export const newApiKeyId = (): ApiKeyId => ApiKeyId.parse(uuidv7());
 export const ConnectionId = z.uuidv7().brand<'ConnectionId'>();
 export type ConnectionId = z.output<typeof ConnectionId>;
 export const newConnectionId = (): ConnectionId => ConnectionId.parse(uuidv7());
+
+export const EnvironmentId = z.uuidv7().brand<'EnvironmentId'>();
+export type EnvironmentId = z.output<typeof EnvironmentId>;
+export const newEnvironmentId = (): EnvironmentId => EnvironmentId.parse(uuidv7());

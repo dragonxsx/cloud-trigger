@@ -33,6 +33,7 @@ export class MongoConnectionRepository implements ConnectionRepository {
     await connections.createIndexes([
       { key: { key: 1 }, name: 'key', unique: true },
       { key: { type: 1, key: 1 }, name: 'type' },
+      { key: { 'overlays.environment': 1 }, name: 'overlay_environments' },
     ]);
   }
 
@@ -115,5 +116,14 @@ export class MongoConnectionRepository implements ConnectionRepository {
     const res = await this.connections.deleteOne({ key });
 
     return res.deletedCount === 1;
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Connection[]> {
+    const docs = await this.connections
+      .find({ 'overlays.environment': environment })
+      .sort({ key: 1 })
+      .toArray();
+
+    return docs.map(fromDocument);
   }
 }

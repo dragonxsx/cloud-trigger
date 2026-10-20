@@ -27,6 +27,7 @@ export interface WorkflowRepository {
     expectedVersion: number,
   ): Promise<Result<Workflow, VersionConflictError | NotFoundError>>;
   delete(id: WorkflowId): Promise<boolean>;
+  findByEnvironment(environment: string): Promise<readonly Workflow[]>;
   /** Enabled workflows whose schedule is due. */
   findDue(p: { now: Date; limit: number }): Promise<readonly Workflow[]>;
   /** Moves `nextFireAt` from `from` to `to`; false when another replica already did. */

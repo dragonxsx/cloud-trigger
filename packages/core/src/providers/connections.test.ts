@@ -4,8 +4,11 @@ import { z } from 'zod';
 
 import {
   type Connection,
+  ConnectionSpec,
   connectionCatalog,
   emptyConnectionCatalog,
+  inEnvironment,
+  overlayConnection,
 } from '../domain/connection.js';
 import { ConnectionId } from '../domain/ids.js';
 import type { TargetResult } from '../domain/target-result.js';
@@ -119,6 +122,13 @@ const billing: Connection = {
       name: '',
       description: '',
       source: { type: 'poll', config: { feed: '/invoices', batch: 5 } },
+    },
+  ],
+  overlays: [
+    {
+      environment: 'staging',
+      config: { baseUrl: 'https://staging.billing.test/v1' },
+      endpoints: [{ key: 'charge', config: { headers: { a: null, s: 'yes' } } }],
     },
   ],
   version: 3,
@@ -426,5 +436,56 @@ describe('ProviderRegistry.list', () => {
       connectionType: 'api',
       connectionFields: ['baseUrl', 'token'],
     });
+  });
+});
+
+describe('environment overlays', () => {
+  it('patches the connection and its endpoints in the environment', async () => {
+    const resolved = resolveTarget(
+      registry,
+      { type: 'call', connection: { key: 'billing', endpoint: 'charge' }, config: undefined },
+      inEnvironment(catalog, 'staging'),
+    )._unsafeUnwrap();
+    expect((await resolved.target.execute(request)).metadata).toEqual({
+      url: 'https://staging.billing.test/v1/charges',
+      method: 'POST',
+      headers: { b: '2', s: 'yes' },
+      connection: 'billing@3',
+    });
+  });
+
+  it('uses the base config without an environment or without its overlay', () => {
+    expect(inEnvironment(catalog, null)).toBe(catalog);
+    expect(overlayConnection(billing, 'prod')).toBe(billing);
+    expect(overlayConnection(billing, null)).toBe(billing);
+  });
+
+  it('leaves endpoints without a patch untouched', () => {
+    const staged = overlayConnection(billing, 'staging');
+    expect(staged.endpoints[1]).toBe(billing.endpoints[1]);
+    expect(billing.config).toEqual({ baseUrl: 'https://billing.test/v1' });
+  });
+
+  it('rejects duplicate environments and duplicate endpoint patches', () => {
+    const parsed = ConnectionSpec.safeParse({
+      key: 'billing',
+      type: 'api',
+      config: {},
+      overlays: [
+        {
+          environment: 'staging',
+          endpoints: [
+            { key: 'a', config: {} },
+            { key: 'a', config: {} },
+          ],
+        },
+        { environment: 'staging' },
+      ],
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((issue) => issue.path.join('.'))).toEqual([
+      'overlays.0.endpoints.1.key',
+      'overlays.1.environment',
+    ]);
   });
 });

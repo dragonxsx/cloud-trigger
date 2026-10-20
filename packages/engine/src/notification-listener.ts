@@ -47,8 +47,12 @@ export class NotificationEnqueuer {
     this.#policies = new PolicyResolver(deps.groups, deps.clock);
   }
 
-  async #rulesFor(job: Job): Promise<readonly NotificationRule[]> {
-    return (await this.#policies.resolve(job)).notifications;
+  async #rulesFor(
+    job: Job,
+  ): Promise<{ rules: readonly NotificationRule[]; environment: string | null }> {
+    const { notifications, environment } = await this.#policies.resolve(job);
+
+    return { rules: notifications, environment };
   }
 
   async forRun(
@@ -61,7 +65,7 @@ export class NotificationEnqueuer {
 
     return this.deps.outbox.enqueue(
       newDeliveries({
-        rules: await this.#rulesFor(job),
+        ...(await this.#rulesFor(job)),
         subject,
         now,
         event: {
@@ -89,7 +93,7 @@ export class NotificationEnqueuer {
 
     return this.deps.outbox.enqueue(
       newDeliveries({
-        rules: await this.#rulesFor(job),
+        ...(await this.#rulesFor(job)),
         subject: p.subject,
         now,
         event: {

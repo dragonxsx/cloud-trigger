@@ -197,8 +197,19 @@ function accessToken(
   clientSecret: string,
   p: { cacheKey: string | undefined; now: Date; signal: AbortSignal },
 ): ResultAsync<string, HttpFailure> {
+  // Every grant parameter is part of the identity: environment overlays share the
+  // connection key and version but may change audience or scope.
   const credentials = createHash('sha256')
-    .update(`${auth.tokenUrl}|${auth.clientId}|${clientSecret}`)
+    .update(
+      JSON.stringify([
+        auth.tokenUrl,
+        auth.clientId,
+        clientSecret,
+        auth.clientAuth,
+        auth.scope ?? null,
+        auth.audience ?? null,
+      ]),
+    )
     .digest('hex');
   const key = p.cacheKey === undefined ? undefined : `${p.cacheKey}|${credentials}`;
   const cached = key === undefined ? undefined : tokens.get(key);

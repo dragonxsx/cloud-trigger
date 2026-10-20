@@ -3,6 +3,7 @@ import {
   type ConfigIssue,
   type ConflictError,
   type Clock,
+  type EnvironmentRepository,
   type JobId,
   type JobRepository,
   type NotFoundError,
@@ -29,6 +30,7 @@ import {
   validateWorkflowGraph,
 } from '@cloud-trigger/core';
 
+import { unknownEnvironment } from './config-validation.js';
 import type { JobService } from './job-service.js';
 import type { WorkflowRuntime } from './workflow-runtime.js';
 
@@ -36,6 +38,7 @@ export interface WorkflowServiceDeps {
   readonly workflows: WorkflowRepository;
   readonly workflowRuns: WorkflowRunRepository;
   readonly jobs: JobRepository;
+  readonly environments?: EnvironmentRepository | undefined;
   readonly registry: ProviderRegistry;
   readonly clock: Clock;
   readonly jobService: JobService;
@@ -85,7 +88,10 @@ export class WorkflowService {
     if (graph.isErr()) {
       return err(graph.error);
     }
-    const issues: ConfigIssue[] = [];
+    const issues: ConfigIssue[] = await unknownEnvironment(
+      this.deps.environments,
+      spec.environment,
+    );
     for (const [index, node] of spec.nodes.entries()) {
       if (node.kind === 'job' && !(await this.deps.jobs.get(node.jobId))) {
         issues.push({ path: `nodes.${index}.jobId`, message: `Job ${node.jobId} does not exist` });
@@ -128,6 +134,7 @@ export class WorkflowService {
       index,
       spec: {
         ...node.job,
+        environment: node.job.environment ?? spec.environment,
         name: `${spec.name} · ${node.label ?? node.key}`,
         enabled: true,
         trigger: { type: 'manual', config: {} },

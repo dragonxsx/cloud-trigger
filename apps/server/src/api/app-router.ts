@@ -3,6 +3,7 @@ import { AnalyticsRouter } from './analytics/analytics.router.js';
 import { CalendarRouter } from './calendar/calendar.router.js';
 import { CatalogRouter } from './catalog/catalog.router.js';
 import { ConnectionsRouter } from './connections/connections.router.js';
+import { EnvironmentsRouter } from './environments/environments.router.js';
 import { GroupsRouter } from './groups/groups.router.js';
 import { JobsRouter } from './jobs/jobs.router.js';
 import { RunsRouter } from './runs/runs.router.js';
@@ -15,6 +16,7 @@ export const APP_ROUTER_PARTS = [
   RunsRouter,
   GroupsRouter,
   ConnectionsRouter,
+  EnvironmentsRouter,
   WorkflowsRouter,
   CalendarRouter,
   AnalyticsRouter,
@@ -29,6 +31,7 @@ export const composeAppRouter = (
   runs: RunsRouter,
   groups: GroupsRouter,
   connections: ConnectionsRouter,
+  environments: EnvironmentsRouter,
   workflows: WorkflowsRouter,
   calendar: CalendarRouter,
   analytics: AnalyticsRouter,
@@ -41,6 +44,7 @@ export const composeAppRouter = (
   runs: runs.handlers,
   groups: groups.handlers,
   connections: connections.handlers,
+  environments: environments.handlers,
   workflows: workflows.workflows,
   workflowRuns: workflows.workflowRuns,
   calendar: calendar.handlers,

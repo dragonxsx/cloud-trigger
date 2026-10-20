@@ -2,6 +2,7 @@ import type { RunAnalytics } from './analytics.js';
 import type { ApiKeyRepository, AuthSettingsStore, UserRepository } from './auth.js';
 import type { ConnectionRepository } from './connections.js';
 import type { DecisionLog } from './decisions.js';
+import type { EnvironmentRepository } from './environments.js';
 import type { EventSourceLeases } from './event-sources.js';
 import type { EventBus } from './events.js';
 import type { GroupRepository, RateLimiter } from './groups.js';
@@ -18,6 +19,7 @@ export interface StartableEventBus extends EventBus {
 export interface Persistence {
   readonly jobs: JobRepository;
   readonly connections: ConnectionRepository;
+  readonly environments: EnvironmentRepository;
   readonly schedule: ScheduleStore;
   readonly runs: RunRepository;
   readonly queue: RunQueue;

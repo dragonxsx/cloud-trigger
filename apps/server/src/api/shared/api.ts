@@ -2,6 +2,7 @@ import { type Contract, contract } from '@cloud-trigger/api-contract';
 import {
   type ConfigError,
   type ConnectionInUseError,
+  type EnvironmentInUseError,
   type DomainError,
   assertNever,
 } from '@cloud-trigger/core';
@@ -53,6 +54,7 @@ export type Api = ReturnType<typeof createApi>;
 type KnownError =
   | ConfigError
   | ConnectionInUseError
+  | EnvironmentInUseError
   | DomainError<
       | 'not_found'
       | 'version_conflict'
@@ -93,6 +95,7 @@ export function toApiError(errors: ErrorFactories, error: KnownError): Error {
     case 'not_cancellable':
     case 'conflict':
     case 'connection_in_use':
+    case 'environment_in_use':
       return errors.CONFLICT({ message: error.message });
     default:
       return assertNever(error);

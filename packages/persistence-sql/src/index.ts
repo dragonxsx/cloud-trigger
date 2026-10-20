@@ -5,6 +5,7 @@ import { SqlRunAnalytics } from './analytics.js';
 import { SqlApiKeyRepository, SqlAuthSettingsStore, SqlUserRepository } from './auth.js';
 import { SqlConnectionRepository } from './connections.js';
 import { SqlDecisionLog } from './decisions.js';
+import { SqlEnvironmentRepository } from './environments.js';
 import { SqlEventSourceLeases } from './event-sources.js';
 import type { ChangeSink, ClosableEventBus } from './events.js';
 import { SqlGroupRepository, SqlRateLimiter } from './groups.js';
@@ -27,6 +28,7 @@ export {
   SqlConnectionRepository,
   SqlUserRepository,
   SqlDecisionLog,
+  SqlEnvironmentRepository,
   SqlEventSourceLeases,
   SqlGroupRepository,
   SqlJobRepository,
@@ -92,6 +94,7 @@ export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersist
   return {
     jobs: new SqlJobRepository(session, changes),
     connections: new SqlConnectionRepository(session),
+    environments: new SqlEnvironmentRepository(session),
     schedule: new SqlScheduleStore(session, changes),
     runs: new SqlRunRepository(session, changes),
     queue: new SqlRunQueue(session, changes),

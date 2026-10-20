@@ -101,6 +101,7 @@ export class NotificationDispatcher {
     const catalog = await loadConnections(
       this.deps.connections,
       notifier.connection ? [notifier.connection] : [],
+      claimed.environment,
     );
     const bound = resolveNotifier(this.deps.registry, notifier, catalog);
     if (bound.isErr()) {

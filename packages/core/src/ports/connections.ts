@@ -27,4 +27,6 @@ export interface ConnectionRepository {
     expectedVersion: number,
   ): Promise<Result<Connection, VersionConflictError | NotFoundError>>;
   delete(key: string): Promise<boolean>;
+  /** Connections with an overlay for the environment. */
+  findByEnvironment(environment: string): Promise<readonly Connection[]>;
 }

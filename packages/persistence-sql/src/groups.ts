@@ -60,6 +60,7 @@ export class SqlGroupRepository implements GroupRepository {
         sql`${insertInto(this.session, 'groups', {
           id: group.id,
           name: group.name,
+          environment: group.environment,
           version: group.version,
           created_at: group.createdAt,
           doc: group,
@@ -113,6 +114,7 @@ export class SqlGroupRepository implements GroupRepository {
         const changed = await this.session.run(sql`
           UPDATE groups SET ${assignments(this.session, 'groups', {
             name: next.name,
+            environment: next.environment,
             version: next.version,
             doc: next,
           })}
@@ -147,6 +149,14 @@ export class SqlGroupRepository implements GroupRepository {
         WHERE c.group_id = groups.id AND c.connection_key = ${key}
         ${endpoint === undefined ? sql`` : sql`AND c.endpoint_key = ${endpoint}`}
       ) ORDER BY id`);
+
+    return rows.map(groupFromRow);
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Group[]> {
+    const rows = await this.session.all(
+      sql`SELECT doc FROM groups WHERE environment = ${environment} ORDER BY id`,
+    );
 
     return rows.map(groupFromRow);
   }

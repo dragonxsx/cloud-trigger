@@ -1,15 +1,10 @@
 import { z } from 'zod';
 
+import { mergePatch } from '../shared/merge-patch.js';
+import { EnvironmentKey } from './environment.js';
 import { ConnectionId } from './ids.js';
 import { ProviderRef } from './provider-ref.js';
-
-const slug = (what: string) =>
-  z
-    .string()
-    .regex(
-      /^[a-z0-9][a-z0-9_-]{0,62}$/,
-      `${what} keys use lowercase letters, digits, "-" and "_", at most 63 characters`,
-    );
+import { slug } from './slug.js';
 
 export const ConnectionKey = slug('Connection').describe(
   'Stable name jobs use to reference the connection; each deployment defines its own.',
@@ -70,6 +65,43 @@ export const withEndpointProvider = (endpoint: Endpoint, ref: ProviderRef): Endp
   return 'source' in endpoint ? { ...endpoint, source: ref } : { ...endpoint, notifier: ref };
 };
 
+const uniqueBy =
+  <T>(what: string, field: string, keyOf: (item: T) => string) =>
+  (items: readonly T[], ctx: z.RefinementCtx) => {
+    const seen = new Set<string>();
+    items.forEach((item, index) => {
+      const key = keyOf(item);
+      if (seen.has(key)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [index, field],
+          message: `${what} "${key}" is used twice`,
+        });
+      }
+      seen.add(key);
+    });
+  };
+
+export const EndpointOverlay = z.strictObject({
+  key: EndpointKey,
+  config: z.unknown().describe("JSON merge patch over the endpoint's config in this environment."),
+});
+export type EndpointOverlay = z.output<typeof EndpointOverlay>;
+
+export const ConnectionOverlay = z.strictObject({
+  environment: EnvironmentKey,
+  config: z
+    .unknown()
+    .optional()
+    .describe("JSON merge patch over the connection's config in this environment."),
+  endpoints: z
+    .array(EndpointOverlay)
+    .max(200)
+    .default([])
+    .superRefine(uniqueBy('Endpoint key', 'key', (endpoint: EndpointOverlay) => endpoint.key)),
+});
+export type ConnectionOverlay = z.output<typeof ConnectionOverlay>;
+
 export const ConnectionSpec = z.object({
   key: ConnectionKey,
   name: z.string().trim().max(200).default(''),
@@ -80,19 +112,15 @@ export const ConnectionSpec = z.object({
     .array(Endpoint)
     .max(200)
     .default([])
-    .superRefine((endpoints, ctx) => {
-      const seen = new Set<string>();
-      endpoints.forEach((endpoint, index) => {
-        if (seen.has(endpoint.key)) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [index, 'key'],
-            message: `Endpoint key "${endpoint.key}" is used twice`,
-          });
-        }
-        seen.add(endpoint.key);
-      });
-    }),
+    .superRefine(uniqueBy('Endpoint key', 'key', (endpoint: Endpoint) => endpoint.key)),
+  overlays: z
+    .array(ConnectionOverlay)
+    .max(50)
+    .default([])
+    .superRefine(
+      uniqueBy('Environment', 'environment', (overlay: ConnectionOverlay) => overlay.environment),
+    )
+    .describe('Per-environment overrides; an environment without one uses the base config.'),
 });
 export type ConnectionSpec = z.output<typeof ConnectionSpec>;
 export type ConnectionSpecInput = z.input<typeof ConnectionSpec>;
@@ -135,6 +163,49 @@ export const connectionCatalog = (connections: Iterable<Connection>): Connection
 
 export const findEndpoint = (connection: Connection, key: string): Endpoint | undefined =>
   connection.endpoints.find((endpoint) => endpoint.key === key);
+
+export const findOverlay = (
+  connection: Pick<Connection, 'overlays'>,
+  environment: string | null,
+): ConnectionOverlay | undefined =>
+  environment === null
+    ? undefined
+    : connection.overlays.find((overlay) => overlay.environment === environment);
+
+export function overlayConnection(connection: Connection, environment: string | null): Connection {
+  const overlay = findOverlay(connection, environment);
+  if (!overlay) {
+    return connection;
+  }
+  const patches = new Map(overlay.endpoints.map((endpoint) => [endpoint.key, endpoint.config]));
+
+  return {
+    ...connection,
+    config:
+      overlay.config === undefined
+        ? connection.config
+        : mergePatch(connection.config, overlay.config),
+    endpoints: connection.endpoints.map((endpoint) => {
+      const patch = patches.get(endpoint.key);
+      if (patch === undefined) {
+        return endpoint;
+      }
+      const { ref } = endpointProvider(endpoint);
+
+      return withEndpointProvider(endpoint, { ...ref, config: mergePatch(ref.config, patch) });
+    }),
+  };
+}
+
+export const inEnvironment = (
+  catalog: ConnectionCatalog,
+  environment: string | null,
+): ConnectionCatalog =>
+  environment === null
+    ? catalog
+    : new Map(
+        [...catalog].map(([key, connection]) => [key, overlayConnection(connection, environment)]),
+      );
 
 export function createConnection(params: {
   id: ConnectionId;

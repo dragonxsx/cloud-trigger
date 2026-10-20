@@ -45,6 +45,7 @@ const JobFilters = z.object({
   tag: z.string().optional(),
   enabled: z.boolean().optional(),
   slaBreached: z.boolean().optional(),
+  environment: z.string().optional(),
 });
 const RunFilters = RunListQuery.pick({
   jobId: true,

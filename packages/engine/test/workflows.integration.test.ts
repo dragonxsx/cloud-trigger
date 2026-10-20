@@ -1,3 +1,4 @@
+import { EnvironmentSpec, createEnvironment, newEnvironmentId } from '@cloud-trigger/core';
 import { describe, expect, it } from 'vitest';
 
 import type { Worker } from '../src/index.js';
@@ -141,6 +142,38 @@ describe('DAG workflows', () => {
     expect(runs.items).toHaveLength(1);
     expect(runs.items[0]?.reason).toBe('scheduled');
     expect(runs.items[0]?.idempotencyKey).toMatch(/^wfsched:/);
+  });
+
+  it('passes its environment to inline jobs that set none', async () => {
+    for (const key of ['staging', 'prod']) {
+      await h.db.environments.insert(
+        createEnvironment({
+          id: newEnvironmentId(),
+          spec: EnvironmentSpec.parse({ key }),
+          now: h.now(),
+        }),
+      );
+    }
+    const workflow = (
+      await h.workflows().create({
+        name: 'staged',
+        environment: 'staging',
+        nodes: [inline('inherits', '/a'), inline('own', '/b', { environment: 'prod' })],
+      })
+    )._unsafeUnwrap();
+    const environmentOf = async (key: string) => {
+      const id = workflow.inlineJobIds[key];
+
+      return id === undefined ? undefined : (await h.db.jobs.get(id))?.environment;
+    };
+    expect(await environmentOf('inherits')).toBe('staging');
+    expect(await environmentOf('own')).toBe('prod');
+    const unknown = await h.workflows().create({
+      name: 'nowhere',
+      environment: 'qa',
+      nodes: [inline('a', '/a')],
+    });
+    expect(unknown._unsafeUnwrapErr()).toMatchObject({ issues: [{ path: 'environment' }] });
   });
 
   it('cancels a running workflow and its pending node runs', async () => {

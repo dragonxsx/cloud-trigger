@@ -7,6 +7,9 @@ import {
   ConnectionKey,
   ConnectionSpec,
   EndpointKey,
+  Environment,
+  EnvironmentKey,
+  EnvironmentSpec,
   Password,
   Scope,
   User,
@@ -118,6 +121,7 @@ export const JobListQuery = PageQuery.extend({
   groupId: GroupId.optional(),
   enabled: z.boolean().optional(),
   slaBreached: z.boolean().optional(),
+  environment: EnvironmentKey.optional().describe('Jobs that set this environment themselves.'),
 });
 
 export const UpdateJobInput = JobSpec.extend({ id: JobId, expectedVersion: z.int().min(1) });
@@ -173,7 +177,18 @@ export const ConnectionTestInput = z.object({
   key: ConnectionKey.optional().describe(
     'Saved connection whose stored secrets replace *** values in config.',
   ),
+  overlay: z
+    .object({ environment: EnvironmentKey, config: z.unknown() })
+    .optional()
+    .describe(
+      "Tests the config with this environment's merge patch applied; *** values come from the saved overlay.",
+    ),
 });
+
+export const EnvironmentKeyParam = z.object({ key: EnvironmentKey });
+export const EnvironmentPage = page(Environment);
+export const EnvironmentListQuery = PageQuery.extend({ search: z.string().optional() });
+export const UpdateEnvironmentInput = EnvironmentSpec.extend({ expectedVersion: z.int().min(1) });
 export const ConnectionTestOutcome = z.object({ ok: z.boolean(), message: z.string() });
 export const ConnectionUsage = z.object({
   id: JobId,

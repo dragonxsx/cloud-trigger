@@ -13,6 +13,7 @@ export interface JobQuery extends PageRequest {
   readonly groupId?: GroupId | undefined;
   readonly enabled?: boolean | undefined;
   readonly slaBreached?: boolean | undefined;
+  readonly environment?: string | undefined;
 }
 
 export interface JobUpdate {
@@ -52,6 +53,8 @@ export interface JobRepository {
   findDependants(jobId: JobId): Promise<readonly Job[]>;
   /** Jobs whose trigger or target uses the connection, or one of its endpoints when `endpoint` is given. */
   findByConnection(key: string, endpoint?: string): Promise<readonly Job[]>;
+  /** Jobs whose own `environment` is the given one, not counting what they inherit. */
+  findByEnvironment(environment: string): Promise<readonly Job[]>;
   /** Jobs whose trigger is a long-lived event source, enabled or not. */
   findEventSourced(): Promise<readonly Job[]>;
   findByName(name: string): Promise<readonly Job[]>;

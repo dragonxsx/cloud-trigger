@@ -12,6 +12,7 @@ import { APP_ROUTER_PARTS, ApiRouter, composeAppRouter } from './app-router.js';
 import { CalendarModule } from './calendar/calendar.module.js';
 import { CatalogModule } from './catalog/catalog.module.js';
 import { ConnectionsModule } from './connections/connections.module.js';
+import { EnvironmentsModule } from './environments/environments.module.js';
 import { GroupsModule } from './groups/groups.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
 import { OpenApiController } from './openapi.controller.js';
@@ -40,6 +41,7 @@ export const orpcRootModule = () =>
     RunsModule,
     GroupsModule,
     ConnectionsModule,
+    EnvironmentsModule,
     WorkflowsModule,
     CalendarModule,
     AnalyticsModule,

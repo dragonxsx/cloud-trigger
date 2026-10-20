@@ -45,6 +45,7 @@ describe('notifications', () => {
             notifier: { type: 'webhook', config: { url: '/hook' } },
           },
         ],
+        overlays: [],
       },
       now: h.clock.now(),
     });

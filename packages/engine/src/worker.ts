@@ -229,7 +229,11 @@ export class Worker {
       claimed = throttled;
     }
 
-    const connections = await loadConnections(this.deps.connections, job.connectionRefs);
+    const connections = await loadConnections(
+      this.deps.connections,
+      job.connectionRefs,
+      resolved.environment,
+    );
     const bound = bindJob(this.deps.registry, job, connections);
     if (bound.isErr()) {
       const message = bound.error.issues.map((i) => `${i.path}: ${i.message}`).join('; ');

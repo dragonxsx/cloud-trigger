@@ -165,7 +165,13 @@ export class JobTransfer {
   }
 
   async #upstreamNames(job: Job): Promise<Record<string, string>> {
-    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
+    const group = job.groupId === null ? undefined : await this.deps.groups?.get(job.groupId);
+    const bound = await loadTrigger(
+      this.deps.registry,
+      this.deps.connections,
+      job,
+      job.environment ?? group?.environment ?? null,
+    );
     const refs = bound.isOk() ? (bound.value.upstream?.() ?? []) : [];
     const names: Record<string, string> = {};
     for (const ref of refs) {

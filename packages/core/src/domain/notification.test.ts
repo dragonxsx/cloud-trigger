@@ -36,6 +36,7 @@ describe('notifications', () => {
         { on: ['permanent_failure'], notifier: webhook },
       ],
       subject: pending.id,
+      environment: null,
       now: t0,
       event: {
         event: 'permanent_failure',

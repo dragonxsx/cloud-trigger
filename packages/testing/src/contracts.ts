@@ -4,6 +4,10 @@ import {
   ConnectionSpec,
   createConnection,
   newConnectionId,
+  type EnvironmentRepository,
+  EnvironmentSpec,
+  createEnvironment,
+  newEnvironmentId,
   type AuthSettingsStore,
   type UserRepository,
   type DecisionLog,
@@ -47,6 +51,7 @@ import {
 export interface PortsUnderTest {
   readonly jobs: JobRepository;
   readonly connections: ConnectionRepository;
+  readonly environments: EnvironmentRepository;
   readonly schedule: ScheduleStore;
   readonly runs: RunRepository;
   readonly queue: RunQueue;
@@ -76,6 +81,13 @@ const makeConnection = (key: string, type = 'http') =>
       config: { baseUrl: `https://${key}.test` },
       endpoints: [{ key: 'ping', target: { type: 'http', config: { url: '/ping' } } }],
     }),
+    now: T0,
+  });
+
+const makeEnvironment = (key: string, name = '') =>
+  createEnvironment({
+    id: newEnvironmentId(),
+    spec: EnvironmentSpec.parse({ key, name }),
     now: T0,
   });
 
@@ -180,6 +192,28 @@ export function describePersistenceContract(
         );
         expect(await workflows.delete(a.id)).toBe(true);
         expect(await workflows.get(a.id)).toBeUndefined();
+      });
+
+      it('finds workflows by their environment', async () => {
+        const { workflows } = setup.ports();
+        const staged = makeWorkflow({ name: 'staged', environment: 'staging' });
+        await workflows.insert(staged);
+        await workflows.insert(makeWorkflow({ name: 'base' }));
+        const names = async (environment: string) =>
+          (await workflows.findByEnvironment(environment)).map((w) => w.name);
+        expect(await names('staging')).toEqual(['staged']);
+        await workflows.update(
+          staged.id,
+          {
+            spec: { ...staged, environment: 'prod' },
+            inlineJobIds: {},
+            nextFireAt: null,
+            updatedAt: at(1),
+          },
+          1,
+        );
+        expect(await names('staging')).toEqual([]);
+        expect(await names('prod')).toEqual(['staged']);
       });
 
       it('finds due workflows and advances each schedule once', async () => {
@@ -440,6 +474,28 @@ export function describePersistenceContract(
         expect(await ids('audit')).toEqual(['refund']);
       });
 
+      it('finds and filters jobs by their own environment', async () => {
+        const { jobs } = setup.ports();
+        const staged = makeJob({ name: 'staged', environment: 'staging' });
+        await jobs.insert(staged);
+        await jobs.insert(makeJob({ name: 'prod', environment: 'prod' }));
+        await jobs.insert(makeJob({ name: 'base' }));
+        const names = async (environment: string) =>
+          (await jobs.findByEnvironment(environment)).map((j) => j.name);
+        expect(await names('staging')).toEqual(['staged']);
+        expect(
+          (await jobs.list({ limit: 10, environment: 'prod' })).items.map((j) => j.name),
+        ).toEqual(['prod']);
+        expect((await jobs.get(staged.id))?.environment).toBe('staging');
+
+        await jobs.update(
+          staged.id,
+          { spec: { ...staged, environment: null }, updatedAt: at(1) },
+          staged.version,
+        );
+        expect(await names('staging')).toEqual([]);
+      });
+
       it('counts concurrent failures atomically and auto-pauses at the threshold', async () => {
         const { jobs } = setup.ports();
         const job = makeJob();
@@ -688,6 +744,26 @@ export function describePersistenceContract(
         expect(await groups.delete(ops.id)).toBe(true);
         expect(await ids('mail')).toEqual([]);
       });
+
+      it('finds groups by their environment', async () => {
+        const { groups } = setup.ports();
+        const ops = createGroup({
+          id: newGroupId(),
+          spec: GroupSpec.parse({ name: 'ops', environment: 'staging' }),
+          now: T0,
+        });
+        await groups.insert(ops);
+        await groups.insert(makeGroup('billing'));
+        const ids = async (environment: string) =>
+          (await groups.findByEnvironment(environment)).map((g) => g.id);
+        expect(await ids('staging')).toEqual([ops.id]);
+        await groups.update(
+          ops.id,
+          { spec: GroupSpec.parse({ name: 'ops' }), updatedAt: at(1) },
+          1,
+        );
+        expect(await ids('staging')).toEqual([]);
+      });
     });
 
     describe('ConnectionRepository', () => {
@@ -740,6 +816,77 @@ export function describePersistenceContract(
         expect(await connections.delete('billing')).toBe(true);
         expect(await connections.delete('billing')).toBe(false);
         expect(await connections.get('billing')).toBeUndefined();
+      });
+
+      it('finds connections by the environments they overlay', async () => {
+        const { connections } = setup.ports();
+        const billing = makeConnection('billing');
+        const staged = ConnectionSpec.parse({
+          ...billing,
+          overlays: [
+            { environment: 'staging', config: { baseUrl: 'https://staging.test' } },
+            { environment: 'prod', endpoints: [{ key: 'ping', config: { url: '/live' } }] },
+          ],
+        });
+        await connections.insert({ ...billing, ...staged });
+        await connections.insert(makeConnection('audit'));
+        const keys = async (environment: string) =>
+          (await connections.findByEnvironment(environment)).map((c) => c.key);
+        expect(await keys('staging')).toEqual(['billing']);
+        expect(await keys('prod')).toEqual(['billing']);
+        expect((await connections.get('billing'))?.overlays).toEqual(staged.overlays);
+
+        const prodOnly = ConnectionSpec.parse({ ...staged, overlays: staged.overlays.slice(1) });
+        await connections.update('billing', { spec: prodOnly, updatedAt: at(1) }, 1);
+        expect(await keys('staging')).toEqual([]);
+        expect(await keys('prod')).toEqual(['billing']);
+        expect(await connections.delete('billing')).toBe(true);
+        expect(await keys('prod')).toEqual([]);
+      });
+    });
+
+    describe('EnvironmentRepository', () => {
+      it('round-trips, enforces unique keys and versions, lists and deletes', async () => {
+        const { environments } = setup.ports();
+        const staging = makeEnvironment('staging', 'Staging');
+        expect((await environments.insert(staging))._unsafeUnwrap()).toEqual(staging);
+        expect(
+          (await environments.insert(makeEnvironment('staging')))._unsafeUnwrapErr().code,
+        ).toBe('conflict');
+        await environments.insert(makeEnvironment('prod', 'Production'));
+        expect(await environments.get('staging')).toEqual(staging);
+        expect(await environments.get('nope')).toBeUndefined();
+
+        const page = await environments.list({ limit: 1 });
+        expect(page.items.map((e) => e.key)).toEqual(['prod']);
+        expect(page.total).toBe(2);
+        const rest = await environments.list({ limit: 1, cursor: page.nextCursor ?? undefined });
+        expect(rest.items.map((e) => e.key)).toEqual(['staging']);
+        expect(rest.nextCursor).toBeNull();
+        expect(
+          (await environments.list({ limit: 10, search: 'PROD' })).items.map((e) => e.key),
+        ).toEqual(['prod']);
+
+        const spec = EnvironmentSpec.parse({ key: 'staging', name: 'Pre-production' });
+        const renamed = await environments.update('staging', { spec, updatedAt: at(1) }, 1);
+        expect(renamed._unsafeUnwrap()).toMatchObject({
+          key: 'staging',
+          name: 'Pre-production',
+          version: 2,
+          createdAt: T0,
+          updatedAt: at(1),
+        });
+        expect(
+          (await environments.update('staging', { spec, updatedAt: at(2) }, 1))._unsafeUnwrapErr()
+            .code,
+        ).toBe('version_conflict');
+        expect(
+          (await environments.update('nope', { spec, updatedAt: at(2) }, 1))._unsafeUnwrapErr()
+            .code,
+        ).toBe('not_found');
+        expect(await environments.delete('staging')).toBe(true);
+        expect(await environments.delete('staging')).toBe(false);
+        expect(await environments.get('staging')).toBeUndefined();
       });
     });
 

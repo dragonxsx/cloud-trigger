@@ -59,6 +59,7 @@ const jobColumns = (job: Job): RowValues<'jobs'> => ({
   enabled: job.enabled,
   paused_reason: job.pausedReason,
   group_id: job.groupId,
+  environment: job.environment,
   event_source: job.eventSource,
   workflow_id: job.workflowId,
   next_fire_at: job.schedule.nextFireAt,
@@ -161,6 +162,7 @@ export class SqlJobRepository implements JobRepository {
         ? sql`EXISTS (SELECT 1 FROM job_tags t WHERE t.job_id = jobs.id AND t.tag = ${query.tag})`
         : undefined,
       query.groupId ? sql`group_id = ${query.groupId}` : undefined,
+      query.environment ? sql`environment = ${query.environment}` : undefined,
       query.enabled === undefined ? undefined : sql`enabled = ${flag(query.enabled)}`,
       query.slaBreached === undefined
         ? undefined
@@ -218,6 +220,7 @@ export class SqlJobRepository implements JobRepository {
             'name',
             'enabled',
             'group_id',
+            'environment',
             'event_source',
             'next_fire_at',
             'scheduler_owner',
@@ -296,6 +299,14 @@ export class SqlJobRepository implements JobRepository {
         WHERE c.job_id = jobs.id AND c.connection_key = ${key}
         ${endpoint === undefined ? sql`` : sql`AND c.endpoint_key = ${endpoint}`}
       ) ORDER BY id`);
+
+    return rows.map(jobFromRow);
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Job[]> {
+    const rows = await this.session.all(
+      sql`SELECT * FROM jobs WHERE environment = ${environment} ORDER BY id`,
+    );
 
     return rows.map(jobFromRow);
   }

@@ -37,7 +37,11 @@ describe('effective policy', () => {
       rateLimit: { maxConcurrent: 2 },
     });
     const resolved = resolvePolicy(
-      { policy: {}, notifications: [{ on: ['success'], notifier: webhook('http://job') }] },
+      {
+        policy: {},
+        notifications: [{ on: ['success'], notifier: webhook('http://job') }],
+        environment: null,
+      },
       group,
     );
     expect(resolved.notifications.map((n) => n.notifier.config)).toEqual([
@@ -45,7 +49,17 @@ describe('effective policy', () => {
       { url: 'http://job' },
     ]);
     expect(resolved.rateLimit).toEqual({ maxConcurrent: 2 });
-    expect(resolvePolicy({ policy: {}, notifications: [] }, undefined).rateLimit).toBeNull();
+    expect(
+      resolvePolicy({ policy: {}, notifications: [], environment: null }, undefined).rateLimit,
+    ).toBeNull();
+  });
+
+  it('takes the job environment over the group environment', () => {
+    const group = GroupSpec.parse({ name: 'billing', environment: 'staging' });
+    const job = { policy: {}, notifications: [] };
+    expect(resolvePolicy({ ...job, environment: 'prod' }, group).environment).toBe('prod');
+    expect(resolvePolicy({ ...job, environment: null }, group).environment).toBe('staging');
+    expect(resolvePolicy({ ...job, environment: null }, undefined).environment).toBeNull();
   });
 
   it('requires at least one rate limit', () => {

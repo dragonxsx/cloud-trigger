@@ -1,6 +1,8 @@
 import {
   Connection,
   ConnectionSpec,
+  Environment,
+  EnvironmentSpec,
   Group,
   GroupSpec,
   Job,
@@ -47,6 +49,10 @@ import {
   ConfigIssue,
   ConnectionKeyParam,
   ConnectionListQuery,
+  EnvironmentKeyParam,
+  EnvironmentListQuery,
+  EnvironmentPage,
+  UpdateEnvironmentInput,
   ConnectionPage,
   ConnectionTestInput,
   ConnectionTestOutcome,
@@ -361,6 +367,34 @@ const connections = {
     .output(z.object({ deleted: z.boolean() })),
 };
 
+const environments = {
+  list: base
+    .route({ method: 'GET', path: '/environments', summary: 'List environments by key' })
+    .input(EnvironmentListQuery)
+    .output(EnvironmentPage),
+  create: write
+    .route({ method: 'POST', path: '/environments', successStatus: 201 })
+    .input(EnvironmentSpec)
+    .output(Environment),
+  get: base
+    .route({ method: 'GET', path: '/environments/{key}' })
+    .input(EnvironmentKeyParam)
+    .output(Environment),
+  update: write
+    .route({ method: 'PUT', path: '/environments/{key}' })
+    .input(UpdateEnvironmentInput)
+    .output(Environment),
+  delete: write
+    .route({
+      method: 'DELETE',
+      path: '/environments/{key}',
+      summary:
+        'Delete an environment; CONFLICT while a job, group, workflow or connection overlay uses it',
+    })
+    .input(EnvironmentKeyParam)
+    .output(z.object({ deleted: z.boolean() })),
+};
+
 const calendar = {
   token: base
     .route({
@@ -593,6 +627,7 @@ export const contract = oc.prefix('/api').router({
   runs: oc.tag('Runs').router(runs),
   groups: oc.tag('Groups').router(groups),
   connections: oc.tag('Connections').router(connections),
+  environments: oc.tag('Environments').router(environments),
   workflows: oc.tag('Workflows').router(workflows),
   workflowRuns: oc.tag('Workflows').router(workflowRuns),
   calendar: oc.tag('Calendar').router(calendar),

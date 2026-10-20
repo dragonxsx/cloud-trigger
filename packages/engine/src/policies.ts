@@ -34,8 +34,14 @@ export class PolicyResolver {
     return group;
   }
 
-  async resolve(job: Pick<Job, 'groupId' | 'policy' | 'notifications'>): Promise<ResolvedPolicy> {
+  async resolve(
+    job: Pick<Job, 'groupId' | 'policy' | 'notifications' | 'environment'>,
+  ): Promise<ResolvedPolicy> {
     return resolvePolicy(job, await this.group(job.groupId));
+  }
+
+  async environment(job: Pick<Job, 'groupId' | 'environment'>): Promise<string | null> {
+    return job.environment ?? (await this.group(job.groupId))?.environment ?? null;
   }
 }
 

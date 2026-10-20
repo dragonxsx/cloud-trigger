@@ -18,6 +18,7 @@ import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
 import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicker';
+import { EnvironmentSelect } from '../../components/EnvironmentSelect';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
@@ -32,6 +33,7 @@ export type JobFormValues = Pick<
   | 'tags'
   | 'enabled'
   | 'groupId'
+  | 'environment'
   | 'trigger'
   | 'input'
   | 'target'
@@ -51,6 +53,7 @@ export const blankJob: JobFormValues = {
   tags: [],
   enabled: true,
   groupId: null,
+  environment: null,
   trigger: { type: 'cron', config: { expression: '*/5 * * * *', timezone: 'UTC' }, jitterMs: 0 },
   input: { type: 'static', config: { format: 'none' } },
   target: { type: 'http', config: { method: 'POST', url: 'https://' } },
@@ -67,6 +70,7 @@ export const toSpec = ({
   tags: v.tags,
   enabled: v.enabled,
   groupId: v.groupId,
+  environment: v.environment,
   trigger: v.trigger,
   input: v.input,
   target: v.target,
@@ -182,6 +186,7 @@ export function JobFormFields({ form }: { form: JobForm }) {
   });
   const { values, errors } = form;
   const group = groups.data?.items.find((g) => g.id === values.groupId);
+  const groupEnvironment = group?.environment ?? null;
   const spec = useMemo(() => toSpec(values), [values]);
   const num =
     (path: Parameters<JobForm['setFieldValue']>[0], fallback: number | undefined) =>
@@ -205,18 +210,29 @@ export function JobFormFields({ form }: { form: JobForm }) {
             placeholder="Type to add"
           />
         </SimpleGrid>
-        <Select
-          label="Group"
-          description="Groups supply default policies, notifications and rate limits."
-          placeholder="No group"
-          clearable
-          searchable
-          data={(groups.data?.items ?? []).map((g) => ({ value: g.id, label: g.name }))}
-          value={values.groupId}
-          onChange={(id) =>
-            form.setFieldValue('groupId', groups.data?.items.find((g) => g.id === id)?.id ?? null)
-          }
-        />
+        <SimpleGrid cols={2} breakpoints={[{ maxWidth: 'sm', cols: 1 }]}>
+          <Select
+            label="Group"
+            description="Groups supply default policies, notifications and rate limits."
+            placeholder="No group"
+            clearable
+            searchable
+            data={(groups.data?.items ?? []).map((g) => ({ value: g.id, label: g.name }))}
+            value={values.groupId}
+            onChange={(id) =>
+              form.setFieldValue('groupId', groups.data?.items.find((g) => g.id === id)?.id ?? null)
+            }
+          />
+          <EnvironmentSelect
+            description="Picks the connection overlays the job runs with."
+            placeholder={
+              groupEnvironment ? `Inherit from group (${groupEnvironment})` : 'Inherit from group'
+            }
+            value={values.environment}
+            onChange={(environment) => form.setFieldValue('environment', environment)}
+            error={fieldError(errors, 'environment')}
+          />
+        </SimpleGrid>
         <Textarea label="Description" autosize minRows={2} {...form.getInputProps('description')} />
         <Switch label="Enabled" {...form.getInputProps('enabled', { type: 'checkbox' })} />
       </Section>

@@ -11,6 +11,7 @@ import type { UseFormReturnType } from '@mantine/form';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
+import { EnvironmentSelect } from '../../components/EnvironmentSelect';
 import { GROUP_SWATCHES } from '../../components/GroupChip';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
@@ -20,7 +21,13 @@ type GroupSpecDto = Parameters<typeof client.groups.create>[0];
 
 export type GroupFormValues = Pick<
   GroupDto,
-  'name' | 'color' | 'description' | 'defaultPolicy' | 'defaultNotifications' | 'rateLimit'
+  | 'name'
+  | 'color'
+  | 'description'
+  | 'environment'
+  | 'defaultPolicy'
+  | 'defaultNotifications'
+  | 'rateLimit'
 > & { version?: number };
 
 export type GroupForm = UseFormReturnType<
@@ -32,6 +39,7 @@ export const blankGroup: GroupFormValues = {
   name: '',
   color: GROUP_SWATCHES[0],
   description: '',
+  environment: null,
   defaultPolicy: {},
   defaultNotifications: [],
   rateLimit: null,
@@ -44,6 +52,7 @@ export const toGroupSpec = ({
   name: v.name,
   color: v.color,
   description: v.description,
+  environment: v.environment,
   defaultPolicy: v.defaultPolicy,
   defaultNotifications: v.defaultNotifications,
   rateLimit: v.rateLimit,
@@ -98,6 +107,13 @@ export function GroupFormFields({ form }: { form: GroupForm }) {
             {...form.getInputProps('color')}
           />
         </SimpleGrid>
+        <EnvironmentSelect
+          description="Member jobs that set no environment run with this environment's connection overlays."
+          placeholder="Base connection configs"
+          value={values.environment}
+          onChange={(environment) => form.setFieldValue('environment', environment)}
+          error={form.errors['environment']}
+        />
         <Textarea label="Description" autosize minRows={2} {...form.getInputProps('description')} />
       </Section>
 

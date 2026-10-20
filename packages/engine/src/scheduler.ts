@@ -74,7 +74,12 @@ export class Scheduler {
   }
 
   async #fire(job: Job, now: Date): Promise<void> {
-    const connections = await loadConnections(this.deps.connections, job.connectionRefs);
+    const { policy, environment } = await this.#policies.resolve(job);
+    const connections = await loadConnections(
+      this.deps.connections,
+      job.connectionRefs,
+      environment,
+    );
     const bound = bindJob(this.deps.registry, job, connections);
     if (bound.isErr()) {
       this.deps.logger.warn('Pausing job with invalid configuration', {
@@ -93,7 +98,6 @@ export class Scheduler {
       return;
     }
 
-    const { policy } = await this.#policies.resolve(job);
     const plan = planFires({ job, trigger: bound.value.trigger, misfire: policy.misfire, now });
     const runs = plan.fires.map((fire) =>
       newPendingRun({

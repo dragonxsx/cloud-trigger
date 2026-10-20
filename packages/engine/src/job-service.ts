@@ -9,6 +9,7 @@ import {
   type ConflictError,
   type DecisionLog,
   type DomainError,
+  type EnvironmentRepository,
   type EventBus,
   type FinishedRun,
   type GroupId,
@@ -42,7 +43,13 @@ import {
   jobConnectionRefs,
 } from '@cloud-trigger/core';
 
-import { bindJob, loadConnections, loadTrigger } from './config-validation.js';
+import {
+  bindJob,
+  inheritedNotificationIssues,
+  loadConnections,
+  loadTrigger,
+  unknownEnvironment,
+} from './config-validation.js';
 import { DecisionRecorder } from './decisions.js';
 import { type Explanation, explain } from './explain.js';
 import { upcomingFireTimes } from './fire-plan.js';
@@ -53,6 +60,7 @@ import { RunCompletion } from './run-completion.js';
 export interface JobServiceDeps {
   readonly jobs: JobRepository;
   readonly connections?: ConnectionRepository | undefined;
+  readonly environments?: EnvironmentRepository | undefined;
   readonly runs: RunRepository;
   readonly queue: RunQueue;
   readonly events: EventBus;
@@ -111,6 +119,15 @@ export class JobService {
     this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger);
   }
 
+  async #trigger(job: Job) {
+    return loadTrigger(
+      this.deps.registry,
+      this.deps.connections,
+      job,
+      await this.#policies.environment(job),
+    );
+  }
+
   async explain(id: JobId, before?: Date): Promise<Result<Explanation, NotFoundError>> {
     const job = await this.deps.jobs.get(id);
     if (!job) {
@@ -120,7 +137,7 @@ export class JobService {
     const decisions = this.deps.decisions
       ? await this.deps.decisions.listRecent(id, { before: before ?? now, limit: 20 })
       : [];
-    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
+    const bound = await this.#trigger(job);
     const wouldFireAt = bound.isOk()
       ? bound.value.nextFireAt({
           after: now,
@@ -131,6 +148,25 @@ export class JobService {
       : null;
 
     return ok(explain({ job, decisions, wouldFireAt }));
+  }
+
+  /** Group defaults were validated in the group's environment; recheck them in the job's own. */
+  async #inheritedIssues(spec: JobSpec, environment: string | null): Promise<ConfigIssue[]> {
+    const group = await this.#policies.group(spec.groupId);
+    if (!group || group.environment === environment) {
+      return [];
+    }
+    const issues = await inheritedNotificationIssues(
+      this.deps.registry,
+      this.deps.connections,
+      group,
+      environment,
+    );
+
+    return issues.map((issue) => ({
+      path: 'groupId',
+      message: `Group "${group.name}" default notification breaks in environment "${environment ?? 'base'}": ${issue.path}: ${issue.message}`,
+    }));
   }
 
   async #checkGroup(spec: JobSpec): Promise<Result<void, ConfigError>> {
@@ -228,8 +264,25 @@ export class JobService {
     if (!parsed.success) {
       return err(configErrorFromZod(parsed.error));
     }
+    const unknown = await unknownEnvironment(this.deps.environments, parsed.data.environment);
+    if (unknown.length > 0) {
+      return err<never, ConfigError>({
+        code: 'invalid_config',
+        message: 'Invalid job configuration',
+        issues: unknown,
+      });
+    }
+    const environment = await this.#policies.environment(parsed.data);
+    const inherited = await this.#inheritedIssues(parsed.data, environment);
+    if (inherited.length > 0) {
+      return err<never, ConfigError>({
+        code: 'invalid_config',
+        message: 'Invalid job configuration',
+        issues: inherited,
+      });
+    }
     const connectionRefs = jobConnectionRefs(this.deps.registry, parsed.data);
-    const connections = await loadConnections(this.deps.connections, connectionRefs);
+    const connections = await loadConnections(this.deps.connections, connectionRefs, environment);
     const now = this.deps.clock.now();
 
     return bindJob(this.deps.registry, parsed.data, connections).map(({ trigger }) => ({
@@ -400,7 +453,7 @@ export class JobService {
     if (!job) {
       return err(notFound('Job', id));
     }
-    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
+    const bound = await this.#trigger(job);
     if (bound.isErr()) {
       return err(bound.error);
     }
@@ -488,7 +541,7 @@ export class JobService {
     if (p.to.getTime() <= p.from.getTime()) {
       return err(invalidBackfill('to', 'Must be after "from"'));
     }
-    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
+    const bound = await this.#trigger(job);
     if (bound.isErr()) {
       return err(bound.error);
     }
@@ -558,7 +611,7 @@ export class JobService {
         cursor,
       });
       for (const job of page.items.filter((j) => j.pausedReason === null)) {
-        const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
+        const bound = await this.#trigger(job);
         if (bound.isErr() || bound.value.matches) {
           continue;
         }

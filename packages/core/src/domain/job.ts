@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ConnectionRef, NotifierRef, TargetRef } from './connection.js';
+import { EnvironmentChoice } from './environment.js';
 import { GroupId, JobId, WorkflowId } from './ids.js';
 import { JobPolicyPatch } from './policy.js';
 import { ProviderRef } from './provider-ref.js';
@@ -45,6 +46,9 @@ export const JobSpec = z.object({
   description: z.string().max(2_000).default(''),
   tags: z.array(z.string().trim().min(1).max(64)).max(50).default([]),
   groupId: GroupId.nullable().default(null),
+  environment: EnvironmentChoice.describe(
+    'Environment whose connection overlays the job uses; unset inherits the group environment.',
+  ),
   enabled: z.boolean().default(true),
   input: ProviderRef.default({ type: 'static', config: { format: 'none' } }),
   trigger: TriggerRef,

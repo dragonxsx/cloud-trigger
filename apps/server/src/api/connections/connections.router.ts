@@ -21,14 +21,18 @@ export const connectionsHandlers = ({
   return {
     test: connections.test.handler(async ({ input, errors }) => {
       let config = input.config;
+      let overlay = input.overlay?.config;
       if (input.key !== undefined) {
         const previous = await connectionService.get(input.key);
         if (previous.isErr()) {
           throw toApiError(errors, previous.error);
         }
         config = redactor.restoreConnectionConfig(input, previous.value);
+        if (input.overlay) {
+          overlay = redactor.restoreOverlayConfig(input, input.overlay, previous.value);
+        }
       }
-      const tested = await connectionService.test({ type: input.type, config });
+      const tested = await connectionService.test({ type: input.type, config, overlay });
       if (tested.isErr()) {
         throw toApiError(errors, tested.error);
       }

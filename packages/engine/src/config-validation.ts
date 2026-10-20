@@ -6,6 +6,8 @@ import {
   type ConfigError,
   type ConnectionCatalog,
   type ConnectionRepository,
+  type EnvironmentRepository,
+  type Group,
   type JobSpec,
   type NotificationRule,
   type ProviderKind,
@@ -18,6 +20,8 @@ import {
   connectionCatalog,
   emptyConnectionCatalog,
   err,
+  inEnvironment,
+  notificationConnectionRefs,
   ok,
   resolveNotifier,
   resolveTarget,
@@ -136,21 +140,49 @@ export function bindJob(
 export async function loadConnections(
   repository: ConnectionRepository | undefined,
   refs: readonly ConnectionRef[],
+  environment: string | null,
 ): Promise<ConnectionCatalog> {
   const keys = [...new Set(refs.map((ref) => ref.key))];
   if (!repository || keys.length === 0) {
     return emptyConnectionCatalog;
   }
 
-  return connectionCatalog(await repository.getMany(keys));
+  return inEnvironment(connectionCatalog(await repository.getMany(keys)), environment);
+}
+
+/** Group saves only check default notifications in the group's environment; this checks them in a member's. */
+export async function inheritedNotificationIssues(
+  registry: ProviderRegistry,
+  repository: ConnectionRepository | undefined,
+  group: Pick<Group, 'defaultNotifications'>,
+  environment: string | null,
+): Promise<Issue[]> {
+  const rules = group.defaultNotifications;
+  const catalog = await loadConnections(repository, notificationConnectionRefs(rules), environment);
+  const bound = bindNotifications(registry, rules, catalog, 'defaultNotifications');
+
+  return bound.isErr() ? [...bound.error.issues] : [];
 }
 
 export async function loadTrigger(
   registry: ProviderRegistry,
   repository: ConnectionRepository | undefined,
   spec: Pick<JobSpec, 'trigger'>,
+  environment: string | null,
 ): Promise<Result<BoundTrigger, ConfigError>> {
   const refs = spec.trigger.connection ? [spec.trigger.connection] : [];
 
-  return bindTrigger(registry, spec, await loadConnections(repository, refs));
+  return bindTrigger(registry, spec, await loadConnections(repository, refs, environment));
+}
+
+export async function unknownEnvironment(
+  repository: EnvironmentRepository | undefined,
+  environment: string | null,
+  path = 'environment',
+): Promise<Issue[]> {
+  if (environment === null || (await repository?.get(environment))) {
+    return [];
+  }
+
+  return [{ path, message: `No environment named "${environment}"` }];
 }

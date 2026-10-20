@@ -45,6 +45,7 @@ export type GroupDto = Out<ApiClient['groups']['get']>;
 export type ConnectionDto = Out<ApiClient['connections']['get']>;
 export type ConnectionSpecDto = Parameters<ApiClient['connections']['create']>[0];
 export type ConnectionUsagesDto = Out<ApiClient['connections']['usages']>;
+export type EnvironmentDto = Out<ApiClient['environments']['get']>;
 export type WorkflowDto = Out<ApiClient['workflows']['get']>;
 export type WorkflowRunDto = Out<ApiClient['workflowRuns']['get']>;
 export type WorkflowSpecDto = Parameters<ApiClient['workflows']['create']>[0];

@@ -1,4 +1,4 @@
-import { Alert, Button, Code, Group, List, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Alert, Badge, Button, Code, Group, List, SimpleGrid, Stack, Text } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
 import { CanAccess, useInvalidate, useList, useShow } from '@refinedev/core';
 import { DeleteButton, EditButton, Show } from '@refinedev/mantine';
@@ -183,6 +183,7 @@ export function JobShow() {
   const job = query.data?.data;
   const groups = useGroupsById();
   const group = job?.groupId ? groups.get(job.groupId) : undefined;
+  const environment = job?.environment ?? group?.environment ?? null;
   const runs = useList<RunDto>({
     resource: 'runs',
     filters: [{ field: 'jobId', operator: 'eq', value: job?.id }],
@@ -215,9 +216,14 @@ export function JobShow() {
     >
       {job && (
         <Stack spacing="lg">
-          {(job.description || group) && (
+          {(job.description || group || environment) && (
             <Group spacing="sm">
               {group && <GroupChip group={group} />}
+              {environment && (
+                <Badge variant="light" color="gray" tt="none">
+                  {job.environment ? environment : `${environment} (from group)`}
+                </Badge>
+              )}
               {job.description && <Text color="dimmed">{job.description}</Text>}
             </Group>
           )}

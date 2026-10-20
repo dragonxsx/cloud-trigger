@@ -3,6 +3,7 @@ import {
   AnalyticsListener,
   ChainListener,
   ConnectionService,
+  EnvironmentService,
   EventIngestor,
   GroupService,
   JobService,
@@ -76,6 +77,11 @@ export const RUN_LISTENERS = token<readonly RunLifecycleListener[]>('RUN_LISTENE
         new ConnectionService({ ...persistence, registry, secrets, clock }),
     ),
     factoryProvider(
+      EnvironmentService,
+      [PERSISTENCE, CLOCK],
+      (persistence, clock) => new EnvironmentService({ ...persistence, clock }),
+    ),
+    factoryProvider(
       GroupService,
       [PERSISTENCE, ProviderRegistry, CLOCK],
       (persistence, registry, clock) => new GroupService({ ...persistence, registry, clock }),
@@ -107,6 +113,7 @@ export const RUN_LISTENERS = token<readonly RunLifecycleListener[]>('RUN_LISTENE
     WorkflowService,
     GroupService,
     ConnectionService,
+    EnvironmentService,
     JobTransfer,
     EventIngestor,
   ],

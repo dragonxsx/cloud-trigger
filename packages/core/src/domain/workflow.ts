@@ -2,6 +2,7 @@ import { err, ok, type Result } from 'neverthrow';
 import { z } from 'zod';
 
 import type { ConfigError, ConfigIssue } from '../shared/errors.js';
+import { EnvironmentChoice } from './environment.js';
 import { JobId, WorkflowId } from './ids.js';
 import { JobSpec, TriggerRef } from './job.js';
 
@@ -57,6 +58,9 @@ export const WorkflowSpec = WorkflowGraph.extend({
   name: z.string().trim().min(1).max(200),
   description: z.string().max(2_000).default(''),
   enabled: z.boolean().default(true),
+  environment: EnvironmentChoice.describe(
+    'Environment for inline jobs that set none; jobs referenced by node keep their own.',
+  ),
   schedule: TriggerRef.nullable()
     .default(null)
     .describe('Optional time trigger (cron, interval, rrule, once) that starts the workflow.'),

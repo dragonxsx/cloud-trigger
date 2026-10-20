@@ -11,6 +11,7 @@ import {
   type WorkflowRun,
   type WorkflowSpec,
   endpointProvider,
+  findOverlay,
   withEndpointProvider,
   type JsonSchema,
   type NotificationDelivery,
@@ -181,6 +182,16 @@ export class JobRedactor {
 
         return withEndpointProvider(endpoint, { ...ref, config: this.#redactRef(kind, ref) });
       }),
+      overlays: connection.overlays.map((overlay) => ({
+        ...overlay,
+        ...(overlay.config !== undefined && {
+          config: redactBySchema(this.#schema('connection', connection.type), overlay.config),
+        }),
+        endpoints: overlay.endpoints.map((patch) => ({
+          ...patch,
+          config: redactBySchema(this.#endpointSchema(connection, patch.key), patch.config),
+        })),
+      })),
     };
   }
 
@@ -200,7 +211,55 @@ export class JobRedactor {
             })
           : endpoint;
       }),
+      overlays:
+        next.type === previous.type
+          ? next.overlays.map((overlay) => {
+              const before = findOverlay(previous, overlay.environment);
+
+              return {
+                ...overlay,
+                ...(overlay.config !== undefined && {
+                  config: this.restoreOverlayConfig(next, overlay, previous),
+                }),
+                endpoints: overlay.endpoints.map((patch) => ({
+                  ...patch,
+                  config: restoreRedacted(
+                    this.#endpointSchema(next, patch.key),
+                    patch.config,
+                    before?.endpoints.find((candidate) => candidate.key === patch.key)?.config,
+                  ),
+                })),
+              };
+            })
+          : next.overlays,
     };
+  }
+
+  restoreOverlayConfig(
+    next: Pick<ConnectionSpec, 'type'>,
+    overlay: { readonly environment: string; readonly config?: unknown },
+    previous: Pick<Connection, 'type' | 'overlays'>,
+  ): unknown {
+    return next.type === previous.type
+      ? restoreRedacted(
+          this.#schema('connection', next.type),
+          overlay.config,
+          findOverlay(previous, overlay.environment)?.config,
+        )
+      : overlay.config;
+  }
+
+  #endpointSchema(
+    connection: Pick<ConnectionSpec, 'endpoints'>,
+    key: string,
+  ): JsonSchema | undefined {
+    const endpoint = connection.endpoints.find((candidate) => candidate.key === key);
+    if (!endpoint) {
+      return undefined;
+    }
+    const { kind, ref } = endpointProvider(endpoint);
+
+    return this.#schema(kind, ref.type);
   }
 
   restoreConnectionConfig(

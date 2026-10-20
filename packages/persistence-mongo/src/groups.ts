@@ -45,6 +45,11 @@ export class MongoGroupRepository implements GroupRepository {
     await groups.createIndexes([
       { key: { name: 1 }, name: 'name', unique: true, collation: CASE_INSENSITIVE },
       { key: { 'connectionRefs.key': 1, 'connectionRefs.endpoint': 1 }, name: 'connections' },
+      {
+        key: { environment: 1 },
+        name: 'environment',
+        partialFilterExpression: { environment: { $type: 'string' } },
+      },
     ]);
   }
 
@@ -111,6 +116,12 @@ export class MongoGroupRepository implements GroupRepository {
       })
       .sort({ _id: 1 })
       .toArray();
+
+    return docs.map(fromDocument);
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Group[]> {
+    const docs = await this.groups.find({ environment }).sort({ _id: 1 }).toArray();
 
     return docs.map(fromDocument);
   }

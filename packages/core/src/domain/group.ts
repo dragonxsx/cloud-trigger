@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ConnectionRef } from './connection.js';
+import { EnvironmentChoice } from './environment.js';
 import { GroupId } from './ids.js';
 import { type Job, NotificationRule } from './job.js';
 import { type JobPolicy, JobPolicyPatch, effectivePolicy } from './policy.js';
@@ -32,6 +33,9 @@ export const GroupSpec = z.object({
     .regex(/^#[0-9a-fA-F]{6}$/, 'Use a hex colour such as #6b5bd2')
     .default('#6b7280'),
   description: z.string().max(2_000).default(''),
+  environment: EnvironmentChoice.describe(
+    'Environment for member jobs that set none; unset uses the base connection configs.',
+  ),
   defaultPolicy: JobPolicyPatch.prefault({}).describe(
     'Defaults for member jobs. A job setting wins over the group setting.',
   ),
@@ -74,13 +78,17 @@ export interface ResolvedPolicy {
   readonly policy: JobPolicy;
   readonly notifications: readonly NotificationRule[];
   readonly rateLimit: RateLimit | null;
+  readonly environment: string | null;
 }
 
 export const resolvePolicy = (
-  job: Pick<Job, 'policy' | 'notifications'>,
-  group: Pick<Group, 'defaultPolicy' | 'defaultNotifications' | 'rateLimit'> | undefined,
+  job: Pick<Job, 'policy' | 'notifications' | 'environment'>,
+  group:
+    | Pick<Group, 'defaultPolicy' | 'defaultNotifications' | 'rateLimit' | 'environment'>
+    | undefined,
 ): ResolvedPolicy => ({
   policy: effectivePolicy(job.policy, group?.defaultPolicy),
   notifications: [...(group?.defaultNotifications ?? []), ...job.notifications],
   rateLimit: group?.rateLimit ?? null,
+  environment: job.environment ?? group?.environment ?? null,
 });

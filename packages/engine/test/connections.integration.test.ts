@@ -459,6 +459,7 @@ describe('notifier connections', () => {
     )._unsafeUnwrap();
     const [delivery] = newDeliveries({
       rules: [NotificationRule.parse(rule)],
+      environment: null,
       event: {
         event: 'permanent_failure',
         jobId: job.id,

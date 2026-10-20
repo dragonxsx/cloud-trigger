@@ -57,6 +57,7 @@ interface Props {
   readonly configIssues: readonly ConfigIssueDto[];
   readonly onTypeChange: (type: string) => void;
   readonly onConfigChange: (config: unknown) => void;
+  readonly typeLocked?: boolean;
 }
 
 export function ProviderConfigForm({
@@ -67,6 +68,7 @@ export function ProviderConfigForm({
   configIssues,
   onTypeChange,
   onConfigChange,
+  typeLocked = false,
 }: Props) {
   const provider = providers.find((p) => p.type === type);
   const schema = useMemo(
@@ -78,13 +80,15 @@ export function ProviderConfigForm({
 
   return (
     <Stack spacing="sm">
-      <Select
-        label={label}
-        data={providers.map((p) => ({ value: p.type, label: p.displayName }))}
-        value={type}
-        onChange={(value) => value && onTypeChange(value)}
-        {...(provider?.description ? { description: provider.description } : {})}
-      />
+      {!typeLocked && (
+        <Select
+          label={label}
+          data={providers.map((p) => ({ value: p.type, label: p.displayName }))}
+          value={type}
+          onChange={(value) => value && onTypeChange(value)}
+          {...(provider?.description ? { description: provider.description } : {})}
+        />
+      )}
       {schema ? (
         <Form
           key={type}

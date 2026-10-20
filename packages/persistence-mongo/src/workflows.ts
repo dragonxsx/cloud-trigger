@@ -50,6 +50,11 @@ export class MongoWorkflowRepository implements WorkflowRepository {
     await workflows.createIndexes([
       { key: { enabled: 1, nextFireAt: 1 }, name: 'due_workflows' },
       { key: { name: 1 }, name: 'name' },
+      {
+        key: { environment: 1 },
+        name: 'environment',
+        partialFilterExpression: { environment: { $type: 'string' } },
+      },
     ]);
   }
 
@@ -87,6 +92,12 @@ export class MongoWorkflowRepository implements WorkflowRepository {
 
   async delete(id: WorkflowId): Promise<boolean> {
     return (await this.workflows.deleteOne({ _id: id })).deletedCount === 1;
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Workflow[]> {
+    const docs = await this.workflows.find({ environment }).sort({ _id: 1 }).toArray();
+
+    return docs.map(fromWorkflowDocument);
   }
 
   async findDue({ now, limit }: { now: Date; limit: number }): Promise<readonly Workflow[]> {

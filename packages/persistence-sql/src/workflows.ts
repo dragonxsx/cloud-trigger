@@ -37,6 +37,7 @@ const workflowColumns = (workflow: Workflow): RowValues<'workflows'> => ({
   id: workflow.id,
   name: workflow.name,
   enabled: workflow.enabled,
+  environment: workflow.environment,
   next_fire_at: workflow.nextFireAt,
   version: workflow.version,
   created_at: workflow.createdAt,
@@ -97,6 +98,14 @@ export class SqlWorkflowRepository implements WorkflowRepository {
 
   async delete(id: WorkflowId): Promise<boolean> {
     return (await this.session.run(sql`DELETE FROM workflows WHERE id = ${id}`)) === 1;
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Workflow[]> {
+    const rows = await this.session.all(
+      sql`SELECT doc FROM workflows WHERE environment = ${environment} ORDER BY id`,
+    );
+
+    return rows.map(workflowFromRow);
   }
 
   async findDue({ now, limit }: { now: Date; limit: number }): Promise<readonly Workflow[]> {

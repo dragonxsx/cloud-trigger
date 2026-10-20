@@ -1,10 +1,11 @@
 import type { ConnectionInUseError } from '../ports/connections.js';
+import type { EnvironmentInUseError } from '../ports/environments.js';
 import type { ConflictError } from '../ports/groups.js';
 import type { StaleClaimError } from '../ports/jobs.js';
 import type { StaleRunError } from '../ports/runs.js';
 import type { DomainError, NotFoundError, VersionConflictError } from '../shared/errors.js';
 
-export type StoredEntity = 'Job' | 'Group' | 'Workflow' | 'User' | 'Connection';
+export type StoredEntity = 'Job' | 'Group' | 'Workflow' | 'User' | 'Connection' | 'Environment';
 
 export const notFound = (entity: StoredEntity, id: string): NotFoundError => ({
   code: 'not_found',
@@ -17,7 +18,7 @@ export const versionConflict = (entity: StoredEntity, id: string): VersionConfli
 });
 
 export const nameTaken = (
-  entity: 'group' | 'user' | 'connection',
+  entity: 'group' | 'user' | 'connection' | 'environment',
   name: string,
 ): ConflictError => ({
   code: 'conflict',
@@ -48,6 +49,26 @@ export const connectionInUse = (
     jobIds: users.jobIds,
     groupIds,
     deliveryIds,
+  };
+};
+
+export const environmentInUse = (
+  key: string,
+  users: Omit<EnvironmentInUseError, 'code' | 'message'>,
+): EnvironmentInUseError => {
+  const parts = [
+    ...(users.jobIds.length > 0 ? [counted(users.jobIds.length, 'job')] : []),
+    ...(users.groupIds.length > 0 ? [counted(users.groupIds.length, 'group')] : []),
+    ...(users.workflowIds.length > 0 ? [counted(users.workflowIds.length, 'workflow')] : []),
+    ...(users.connectionKeys.length > 0
+      ? [counted(users.connectionKeys.length, 'connection overlay')]
+      : []),
+  ];
+
+  return {
+    code: 'environment_in_use',
+    message: `Environment ${key} is used by ${parts.join(' and ')}`,
+    ...users,
   };
 };
 

@@ -30,6 +30,7 @@ export interface GroupRepository {
   ): Promise<Result<Group, VersionConflictError | NotFoundError | ConflictError>>;
   delete(id: GroupId): Promise<boolean>;
   findByConnection(key: string, endpoint?: string): Promise<readonly Group[]>;
+  findByEnvironment(environment: string): Promise<readonly Group[]>;
 }
 
 export type AcquireResult =

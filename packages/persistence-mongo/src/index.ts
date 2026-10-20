@@ -20,6 +20,7 @@ import {
 import { type ConnectionDocument, MongoConnectionRepository } from './connections.js';
 import { type DecisionDocument, MongoDecisionLog } from './decisions.js';
 import type { JobDocument, RunDocument } from './documents.js';
+import { type EnvironmentDocument, MongoEnvironmentRepository } from './environments.js';
 import { type EventSourceLeaseDocument, MongoEventSourceLeases } from './event-sources.js';
 import { MongoChangeStreamEventBus } from './events.js';
 import {
@@ -45,6 +46,7 @@ export {
   MongoChangeStreamEventBus,
   MongoEventSourceLeases,
   MongoDecisionLog,
+  MongoEnvironmentRepository,
   MongoGroupRepository,
   MongoJobRepository,
   MongoNotificationOutbox,
@@ -74,6 +76,11 @@ async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
     { key: { enabled: 1, pausedReason: 1, 'schedule.nextFireAt': 1 }, name: 'due_jobs' },
     { key: { tags: 1 }, name: 'tags' },
     { key: { groupId: 1 }, name: 'group' },
+    {
+      key: { environment: 1 },
+      name: 'environment',
+      partialFilterExpression: { environment: { $type: 'string' } },
+    },
     { key: { upstreamJobIds: 1 }, name: 'upstream_jobs' },
     { key: { 'connectionRefs.key': 1, 'connectionRefs.endpoint': 1 }, name: 'connections' },
     {
@@ -144,6 +151,9 @@ export async function createMongoPersistence(
   const metrics = analyticsDb.collection<RunMetricDocument>(MongoRunAnalytics.collectionName);
   const groups = db.collection<GroupDocument>(MongoGroupRepository.collectionName);
   const connections = db.collection<ConnectionDocument>(MongoConnectionRepository.collectionName);
+  const environments = db.collection<EnvironmentDocument>(
+    MongoEnvironmentRepository.collectionName,
+  );
   const rateLimits = db.collection<RateLimitDocument>(MongoRateLimiter.collectionName);
   const outbox = db.collection<NotificationDocument>(MongoNotificationOutbox.collectionName);
   const events = new MongoChangeStreamEventBus(runs, jobs, options.onEventBusError);
@@ -157,6 +167,7 @@ export async function createMongoPersistence(
   return {
     jobs: new MongoJobRepository(jobs),
     connections: new MongoConnectionRepository(connections),
+    environments: new MongoEnvironmentRepository(environments),
     schedule: new MongoScheduleStore(client, jobs, runs),
     runs: new MongoRunRepository(
       runs,
@@ -187,6 +198,7 @@ export async function createMongoPersistence(
       await MongoNotificationOutbox.ensureIndexes(outbox);
       await MongoGroupRepository.ensureIndexes(groups);
       await MongoConnectionRepository.ensureIndexes(connections);
+      await MongoEnvironmentRepository.ensureIndexes(environments);
       await MongoWorkflowRepository.ensureIndexes(workflows);
       await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
       await MongoUserRepository.ensureIndexes(users);

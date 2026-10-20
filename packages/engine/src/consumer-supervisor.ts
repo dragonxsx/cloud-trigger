@@ -6,24 +6,28 @@ import {
   type ConnectionCatalog,
   type ConnectionRepository,
   type EventSourceLeases,
+  type GroupRepository,
   type Job,
   type JobRepository,
   type Logger,
   type ProviderRegistry,
   type SecretResolver,
   type SourceMessage,
+  inEnvironment,
   isSchedulable,
 } from '@cloud-trigger/core';
 
 import { bindTrigger, loadConnections } from './config-validation.js';
 import type { EventIngestor } from './event-ingestor.js';
 import { PollingLoop } from './loop.js';
+import { PolicyResolver } from './policies.js';
 
 export interface ConsumerSupervisorDeps {
   readonly jobs: JobRepository;
   readonly eventSources: EventSourceLeases;
   readonly registry: ProviderRegistry;
   readonly connections?: ConnectionRepository | undefined;
+  readonly groups?: GroupRepository | undefined;
   readonly secrets: SecretResolver;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -47,21 +51,27 @@ interface Subscription {
 
 export const eventSourceLeaseKey = (jobId: string) => `source:${jobId}`;
 
-const subscriptionFingerprint = (job: Job, catalog: ConnectionCatalog): string => {
+const subscriptionFingerprint = (
+  job: Job,
+  catalog: ConnectionCatalog,
+  environment: string | null,
+): string => {
   const key = job.trigger.connection?.key;
   const connection = key === undefined ? undefined : catalog.get(key);
 
-  return `${job.version}:${connection?.version ?? 0}`;
+  return `${job.version}:${connection?.version ?? 0}:${environment ?? ''}`;
 };
 
 export class ConsumerSupervisor {
   readonly #loop: PollingLoop;
   readonly #subscriptions = new Map<string, Subscription>();
+  readonly #policies: PolicyResolver;
 
   constructor(
     private readonly deps: ConsumerSupervisorDeps,
     private readonly options: ConsumerSupervisorOptions,
   ) {
+    this.#policies = new PolicyResolver(deps.groups, deps.clock);
     this.#loop = new PollingLoop(
       'consumer-supervisor',
       options.intervalMs,
@@ -89,12 +99,15 @@ export class ConsumerSupervisor {
 
   async tick(): Promise<void> {
     const jobs = (await this.deps.jobs.findEventSourced()).filter(isSchedulable);
-    const catalog = await loadConnections(
+    const base = await loadConnections(
       this.deps.connections,
       jobs.flatMap((job) => (job.trigger.connection ? [job.trigger.connection] : [])),
+      null,
     );
     const wanted = new Set<string>();
     for (const job of jobs) {
+      const environment = await this.#policies.environment(job);
+      const catalog = inEnvironment(base, environment);
       const source = this.#sourceOf(job, catalog);
       if (!source) {
         continue;
@@ -103,7 +116,7 @@ export class ConsumerSupervisor {
         continue;
       }
       wanted.add(job.id);
-      const fingerprint = subscriptionFingerprint(job, catalog);
+      const fingerprint = subscriptionFingerprint(job, catalog, environment);
       const current = this.#subscriptions.get(job.id);
       if (current?.fingerprint === fingerprint) {
         continue;

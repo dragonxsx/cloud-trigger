@@ -319,3 +319,77 @@ describe('connections API', () => {
     expect(await api.connections.delete({ key: 'chatops' })).toEqual({ deleted: true });
   });
 });
+
+describe('environments API', () => {
+  it('manages environments and refuses to delete one in use', async () => {
+    const staging = await api.environments.create({ key: 'staging', name: 'Staging' });
+    expect(staging).toMatchObject({ key: 'staging', name: 'Staging', version: 1 });
+    expect(await api.environments.create({ key: 'staging' }).catch(errorCode)).toBe('CONFLICT');
+    const renamed = await api.environments.update({
+      key: 'staging',
+      name: 'Pre-production',
+      expectedVersion: 1,
+    });
+    expect(renamed.version).toBe(2);
+    expect((await api.environments.list({ limit: 10 })).items.map((e) => e.key)).toEqual([
+      'staging',
+    ]);
+
+    const group = await api.groups.create({ name: 'staged', environment: 'staging' });
+    expect(await api.environments.delete({ key: 'staging' }).catch(errorCode)).toBe('CONFLICT');
+    await api.groups.delete({ id: group.id });
+    expect(await api.environments.delete({ key: 'staging' })).toEqual({ deleted: true });
+    expect(await api.environments.get({ key: 'staging' }).catch(errorCode)).toBe('NOT_FOUND');
+  });
+
+  it('redacts overlay secrets, restores them and runs a job in its environment', async () => {
+    await api.environments.create({ key: 'qa' });
+    const created = await api.connections.create({
+      ...billing(),
+      key: 'ledger',
+      config: { baseUrl: `${target.url}/v1`, auth: { type: 'bearer', token: 'wrong' } },
+      overlays: [
+        {
+          environment: 'qa',
+          config: { baseUrl: `${target.url}/qa`, auth: { type: 'bearer', token: 'live-token' } },
+          endpoints: [{ key: 'charge', config: { url: '/test-charges' } }],
+        },
+      ],
+    });
+    const [overlay] = created.overlays;
+    expect(overlay?.config).toMatchObject({ auth: { token: '***' } });
+
+    expect(
+      await api.connections.test({
+        key: 'ledger',
+        type: 'http',
+        config: created.config,
+        overlay: { environment: 'qa', config: overlay?.config },
+      }),
+    ).toMatchObject({ ok: true });
+
+    const updated = await api.connections.update({
+      ...created,
+      name: 'Ledger',
+      expectedVersion: created.version,
+    });
+    expect(updated.overlays[0]?.config).toMatchObject({ auth: { token: '***' } });
+
+    const job = await api.jobs.create({
+      name: 'qa charge',
+      environment: 'qa',
+      trigger: { type: 'manual', config: {} },
+      target: { type: 'http', connection: { key: 'ledger', endpoint: 'charge' }, config: {} },
+    });
+    expect((await api.jobs.list({ limit: 10, environment: 'qa' })).items.map((j) => j.id)).toEqual([
+      job.id,
+    ]);
+    await api.jobs.run({ id: job.id });
+    expect((await waitForRun(job.id)).status).toBe('succeeded');
+    expect(target.requests.at(-1)).toMatchObject({ method: 'POST', url: '/qa/test-charges' });
+
+    await api.jobs.delete({ id: job.id });
+    await api.connections.delete({ key: 'ledger' });
+    expect(await api.environments.delete({ key: 'qa' })).toEqual({ deleted: true });
+  });
+});

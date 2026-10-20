@@ -56,6 +56,7 @@ describe('ProviderRegistry', () => {
       url: 'https://x.y',
       token: REDACTED,
     });
+    expect(redactBySchema(schema, { token: null })).toEqual({ token: null });
   });
 
   it('redacts and restores secret record values', () => {

@@ -24,6 +24,7 @@ import {
   IconApi,
   IconCalendarTime,
   IconFolders,
+  IconStack2,
   IconHierarchy2,
   IconKey,
   IconLayoutDashboard,
@@ -73,6 +74,7 @@ const SetupWizard = lazyNamed(() => import('./pages/setup/Wizard'), 'SetupWizard
 const AuthSettingsPage = lazyNamed(() => import('./pages/settings/auth'), 'AuthSettingsPage');
 const UserList = lazyNamed(() => import('./pages/settings/users'), 'UserList');
 const ApiKeyList = lazyNamed(() => import('./pages/settings/api-keys'), 'ApiKeyList');
+const EnvironmentList = lazyNamed(() => import('./pages/settings/environments'), 'EnvironmentList');
 const AccountPage = lazyNamed(() => import('./pages/Account'), 'AccountPage');
 
 const PageLoader = () => (
@@ -241,6 +243,15 @@ export function App() {
                   meta: { label: 'Settings', icon: <IconSettings size={18} /> },
                 },
                 {
+                  name: 'environments',
+                  list: '/settings/environments',
+                  meta: {
+                    label: 'Environments',
+                    parent: 'settings',
+                    icon: <IconStack2 size={18} />,
+                  },
+                },
+                {
                   name: 'auth-settings',
                   list: '/settings/auth',
                   meta: {
@@ -328,6 +339,7 @@ export function App() {
                       <Route path="show/:id" element={<ConnectionShow />} />
                     </Route>
                     <Route path="/settings">
+                      <Route path="environments" element={<EnvironmentList />} />
                       <Route path="auth" element={<AuthSettingsPage />} />
                       <Route path="users" element={<UserList />} />
                       <Route path="api-keys" element={<ApiKeyList />} />

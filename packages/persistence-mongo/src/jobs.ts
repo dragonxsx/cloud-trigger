@@ -59,6 +59,9 @@ export class MongoJobRepository implements JobRepository {
     if (query.groupId) {
       filter.groupId = query.groupId;
     }
+    if (query.environment) {
+      filter.environment = query.environment;
+    }
     if (query.enabled !== undefined) {
       filter.enabled = query.enabled;
     }
@@ -129,6 +132,12 @@ export class MongoJobRepository implements JobRepository {
 
   async findDependants(jobId: JobId): Promise<readonly Job[]> {
     const docs = await this.jobs.find({ upstreamJobIds: jobId }).sort({ _id: 1 }).toArray();
+
+    return docs.map(fromJobDocument);
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Job[]> {
+    const docs = await this.jobs.find({ environment }).sort({ _id: 1 }).toArray();
 
     return docs.map(fromJobDocument);
   }

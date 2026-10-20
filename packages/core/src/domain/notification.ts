@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { assertNever } from '../shared/assert-never.js';
 import { NotifierRef } from './connection.js';
+import { EnvironmentChoice } from './environment.js';
 import { JobId, NotificationId, RunId, newNotificationId } from './ids.js';
 import { NotificationEvent, type NotificationRule } from './job.js';
 import { type FinishedRun, Lease, type PendingRun, type SkippedRun } from './run.js';
@@ -35,6 +36,9 @@ export const NotificationDelivery = z.object({
   event: NotificationEvent,
   ruleIndex: z.int().min(0),
   notifier: NotifierRef,
+  environment: EnvironmentChoice.describe(
+    'Environment the notifier resolves in, pinned on enqueue.',
+  ),
   payload: RunLifecycleEvent,
   status: DeliveryStatus,
   attempts: z.int().min(0),
@@ -74,6 +78,7 @@ export function newDeliveries(p: {
   rules: readonly NotificationRule[];
   event: Omit<RunLifecycleEvent, 'idempotencyKey'>;
   subject: string;
+  environment: string | null;
   now: Date;
 }): NotificationDelivery[] {
   return p.rules.flatMap((rule, ruleIndex) => {
@@ -91,6 +96,7 @@ export function newDeliveries(p: {
         event: p.event.event,
         ruleIndex,
         notifier: rule.notifier,
+        environment: p.environment,
         payload: { ...p.event, idempotencyKey: key },
         status: 'pending',
         attempts: 0,

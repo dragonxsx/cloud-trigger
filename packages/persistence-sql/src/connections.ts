@@ -27,20 +27,40 @@ const connectionFromRow = docParser(Connection);
 export class SqlConnectionRepository implements ConnectionRepository {
   constructor(private readonly session: SqlSession) {}
 
-  async insert(connection: Connection): Promise<Result<Connection, ConflictError>> {
-    const inserted = await this.session.run(
-      sql`${insertInto(this.session, 'connections', {
-        id: connection.id,
-        key: connection.key,
-        name: connection.name,
-        type: connection.type,
-        version: connection.version,
-        created_at: connection.createdAt,
-        doc: connection,
-      })} ON CONFLICT DO NOTHING`,
+  async #writeEnvironments(connection: Pick<Connection, 'key' | 'overlays'>): Promise<void> {
+    await this.session.run(
+      sql`DELETE FROM connection_environments WHERE connection_key = ${connection.key}`,
     );
+    for (const environment of new Set(connection.overlays.map((overlay) => overlay.environment))) {
+      await this.session.run(
+        insertInto(this.session, 'connection_environments', {
+          connection_key: connection.key,
+          environment,
+        }),
+      );
+    }
+  }
 
-    return inserted === 1 ? ok(connection) : err(nameTaken('connection', connection.key));
+  insert(connection: Connection): Promise<Result<Connection, ConflictError>> {
+    return this.session.transaction(async () => {
+      const inserted = await this.session.run(
+        sql`${insertInto(this.session, 'connections', {
+          id: connection.id,
+          key: connection.key,
+          name: connection.name,
+          type: connection.type,
+          version: connection.version,
+          created_at: connection.createdAt,
+          doc: connection,
+        })} ON CONFLICT DO NOTHING`,
+      );
+      if (inserted !== 1) {
+        return err(nameTaken('connection', connection.key));
+      }
+      await this.#writeEnvironments(connection);
+
+      return ok(connection);
+    });
   }
 
   async get(key: string): Promise<Connection | undefined> {
@@ -97,19 +117,41 @@ export class SqlConnectionRepository implements ConnectionRepository {
       ...connectionUpdateFields(update, expectedVersion),
       key,
     });
-    const changed = await this.session.run(sql`
-      UPDATE connections SET ${assignments(this.session, 'connections', {
-        name: next.name,
-        type: next.type,
-        version: next.version,
-        doc: next,
-      })}
-      WHERE key = ${key} AND version = ${expectedVersion}`);
 
-    return changed === 1 ? ok(next) : err(versionConflict('Connection', key));
+    return this.session.transaction(async () => {
+      const changed = await this.session.run(sql`
+        UPDATE connections SET ${assignments(this.session, 'connections', {
+          name: next.name,
+          type: next.type,
+          version: next.version,
+          doc: next,
+        })}
+        WHERE key = ${key} AND version = ${expectedVersion}`);
+      if (changed !== 1) {
+        return err(versionConflict('Connection', key));
+      }
+      await this.#writeEnvironments(next);
+
+      return ok(next);
+    });
   }
 
-  async delete(key: string): Promise<boolean> {
-    return (await this.session.run(sql`DELETE FROM connections WHERE key = ${key}`)) === 1;
+  delete(key: string): Promise<boolean> {
+    return this.session.transaction(async () => {
+      await this.session.run(
+        sql`DELETE FROM connection_environments WHERE connection_key = ${key}`,
+      );
+
+      return (await this.session.run(sql`DELETE FROM connections WHERE key = ${key}`)) === 1;
+    });
+  }
+
+  async findByEnvironment(environment: string): Promise<readonly Connection[]> {
+    const rows = await this.session.all(sql`
+      SELECT doc FROM connections WHERE key IN (
+        SELECT connection_key FROM connection_environments WHERE environment = ${environment}
+      ) ORDER BY key`);
+
+    return rows.map(connectionFromRow);
   }
 }

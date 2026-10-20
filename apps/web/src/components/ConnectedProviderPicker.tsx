@@ -83,7 +83,7 @@ export function patchSchema(schema: unknown): unknown {
   );
 }
 
-const asOverrides = (provider: ProviderDto): ProviderDto => {
+export const asOverrides = (provider: ProviderDto): ProviderDto => {
   const schema = patchSchema(provider.configSchema);
 
   return isRecord(schema) ? { ...provider, configSchema: schema } : provider;

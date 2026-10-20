@@ -1,4 +1,5 @@
 import type { ConnectionSpec } from '../domain/connection.js';
+import type { EnvironmentSpec } from '../domain/environment.js';
 import { JobSpec } from '../domain/job.js';
 import type { NotificationDelivery } from '../domain/notification.js';
 import type { RunStatus } from '../domain/run.js';
@@ -41,6 +42,11 @@ export const groupUpdateFields = (update: GroupUpdate, expectedVersion: number) 
 
 export const connectionUpdateFields = (
   update: { readonly spec: ConnectionSpec; readonly updatedAt: Date },
+  expectedVersion: number,
+) => ({ ...update.spec, updatedAt: update.updatedAt, version: expectedVersion + 1 });
+
+export const environmentUpdateFields = (
+  update: { readonly spec: EnvironmentSpec; readonly updatedAt: Date },
   expectedVersion: number,
 ) => ({ ...update.spec, updatedAt: update.updatedAt, version: expectedVersion + 1 });
 
