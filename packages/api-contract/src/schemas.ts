@@ -151,11 +151,13 @@ export const ProviderInfo = z.object({
   connectionType: z
     .string()
     .optional()
-    .describe('For targets: the connection type they can run over.'),
+    .describe('For targets and event sources: the connection type they can run over.'),
   connectionFields: z
     .array(z.string())
     .optional()
-    .describe('For targets: fields the connection owns. Omit them when target.connection is set.'),
+    .describe(
+      'For targets and event sources: fields the connection owns. Omit them when a connection is set.',
+    ),
 });
 
 export const ConnectionKeyParam = z.object({ key: ConnectionKey });

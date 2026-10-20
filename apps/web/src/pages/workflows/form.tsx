@@ -18,8 +18,8 @@ import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
+import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicker';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
-import { TargetPicker } from '../../components/TargetPicker';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
 import { type ProviderDto, type WorkflowSpecDto, client } from '../../lib/api';
 import { configIssuesFor, fieldError } from '../jobs/form';
@@ -186,7 +186,8 @@ function NodeEditor({
         )}
         {node.kind === 'inline' && (
           <SimpleGrid cols={2} spacing="md" breakpoints={[{ maxWidth: 'md', cols: 1 }]}>
-            <TargetPicker
+            <ConnectedProviderPicker
+              kind="target"
               providers={providers.target}
               value={node.job.target}
               configIssues={configIssuesFor(form.errors, `${path}.job.target`)}

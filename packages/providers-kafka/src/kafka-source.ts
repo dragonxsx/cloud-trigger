@@ -1,11 +1,11 @@
-import { defineEventSource } from '@cloud-trigger/core';
+import { defineInlineConnectedEventSource } from '@cloud-trigger/core';
 import { Consumer, stringDeserializers } from '@platformatic/kafka';
 import { z } from 'zod';
 
-import { KafkaConnection, resolveConnection } from './connection.js';
+import { KafkaConnectionConfig, kafkaConnection, resolveConnection } from './connection.js';
 
 export const KafkaSourceConfig = z.object({
-  ...KafkaConnection,
+  ...KafkaConnectionConfig.partial().shape,
   topics: z.array(z.string().regex(/^[\w.-]{1,249}$/)).min(1),
   groupId: z
     .string()
@@ -20,16 +20,17 @@ export const KafkaSourceConfig = z.object({
     .describe('Start from the earliest offset when the group has no committed offset.'),
 });
 
-export const kafkaSource = defineEventSource({
+export const kafkaSource = defineInlineConnectedEventSource({
   type: 'kafka',
   displayName: 'Kafka topic',
   description:
     'Runs once per record. Offsets are committed only after the run is queued; the record offset is the deduplication id.',
   configSchema: KafkaSourceConfig,
+  connection: kafkaConnection,
   exclusive: false,
   describe: (config) => `On Kafka record from ${config.topics.join(', ')}`,
-  async subscribe(config, { signal, secrets, jobId, emit }) {
-    const options = await resolveConnection(config, secrets);
+  async subscribe(config, { signal, secrets, jobId, emit, connection }) {
+    const options = await resolveConnection(connection.config, secrets);
     if (options.isErr()) {
       throw new Error(options.error.message);
     }

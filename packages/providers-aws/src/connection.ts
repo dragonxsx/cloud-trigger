@@ -8,7 +8,8 @@ const stsClient = clientCache((config) => new STSClient(config));
 export const awsConnection = defineConnection({
   type: 'aws',
   displayName: 'AWS account',
-  description: 'Region, endpoint and credentials shared by SQS, SNS and EventBridge targets.',
+  description:
+    'Region, endpoint and credentials shared by SQS, SNS and EventBridge targets and SQS queue consumers.',
   configSchema: AwsConnectionConfig,
   async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
     const clientConfig = await resolveClientConfig(config, secrets);

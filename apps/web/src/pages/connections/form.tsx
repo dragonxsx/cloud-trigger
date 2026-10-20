@@ -1,9 +1,11 @@
+import { type EndpointKind, endpointProvider } from '@cloud-trigger/core';
 import {
   Accordion,
   ActionIcon,
   Alert,
   Button,
   Group,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Text,
@@ -15,18 +17,37 @@ import { IconAlertCircle, IconCircleCheck, IconPlus, IconTrash } from '@tabler/i
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
+import { forConnection } from '../../components/ConnectedProviderPicker';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
-import { forConnection } from '../../components/TargetPicker';
 import { type ConnectionSpecDto, client } from '../../lib/api';
 import type { ConfigIssueDto } from '../../lib/errors';
 import { errorMessage } from '../../lib/errors';
 
-interface EndpointValues {
+interface ProviderRefValues {
+  type: string;
+  config: unknown;
+}
+
+interface EndpointFields {
   key: string;
   name: string;
   description: string;
-  target: { type: string; config: unknown };
 }
+
+type EndpointValues =
+  | (EndpointFields & { target: ProviderRefValues })
+  | (EndpointFields & { source: ProviderRefValues });
+
+const KIND_FIELD: Record<EndpointKind, 'target' | 'source'> = {
+  target: 'target',
+  trigger: 'source',
+};
+
+const endpointOf = (
+  fields: EndpointFields,
+  kind: EndpointKind,
+  ref: ProviderRefValues,
+): EndpointValues => (kind === 'target' ? { ...fields, target: ref } : { ...fields, source: ref });
 
 export interface ConnectionFormValues {
   key: string;
@@ -140,15 +161,30 @@ export function ConnectionFormFields({
   });
   const all = providers.data ?? [];
   const connectionTypes = all.filter((p) => p.kind === 'connection');
-  const targets = useMemo(
-    () =>
+  const choices = useMemo(() => {
+    const over = (kind: EndpointKind) =>
       (providers.data ?? [])
-        .filter((p) => p.kind === 'target' && p.connectionType === form.values.type)
-        .map(forConnection),
-    [providers.data, form.values.type],
-  );
+        .filter((p) => p.kind === kind && p.connectionType === form.values.type)
+        .map(forConnection);
+
+    return { target: over('target'), trigger: over('trigger') };
+  }, [providers.data, form.values.type]);
   const { values, errors } = form;
   const setEndpoints = (endpoints: EndpointValues[]) => form.setFieldValue('endpoints', endpoints);
+  const kinds = (['target', 'trigger'] as const).filter((kind) => choices[kind].length > 0);
+  const blankEndpoint = (fields: EndpointFields, kind: EndpointKind): EndpointValues =>
+    endpointOf(fields, kind, { type: choices[kind][0]?.type ?? '', config: {} });
+  const setKind = (index: number, kind: EndpointKind) =>
+    setEndpoints(
+      values.endpoints.map((endpoint, i) =>
+        i === index
+          ? blankEndpoint(
+              { key: endpoint.key, name: endpoint.name, description: endpoint.description },
+              kind,
+            )
+          : endpoint,
+      ),
+    );
 
   return (
     <Stack spacing="lg">
@@ -192,7 +228,7 @@ export function ConnectionFormFields({
 
       <Section
         title="Endpoints"
-        hint="Saved requests that jobs pick by name. A job can still override any field."
+        hint="Saved requests and event sources that jobs pick by name. A job can still override any field."
       >
         {values.endpoints.length === 0 ? (
           <Text size="sm" color="dimmed">
@@ -202,7 +238,9 @@ export function ConnectionFormFields({
         ) : (
           <Accordion variant="separated" multiple>
             {values.endpoints.map((endpoint, index) => {
-              const path = `endpoints.${index}`;
+              const { kind, ref } = endpointProvider(endpoint);
+              const path = `endpoints.${index}.${KIND_FIELD[kind]}`;
+              const base = `endpoints.${index}`;
 
               return (
                 <Accordion.Item key={index} value={String(index)}>
@@ -210,15 +248,15 @@ export function ConnectionFormFields({
                     <Text size="sm" weight={600}>
                       {endpoint.name || endpoint.key || 'New endpoint'}
                       <Text span color="dimmed" weight={400} ml="xs">
-                        {endpoint.target.type}
+                        {kind === 'target' ? ref.type : `${ref.type} source`}
                       </Text>
                     </Text>
                   </Accordion.Control>
                   <Accordion.Panel>
                     <Stack spacing="sm">
                       <Group align="flex-end" grow>
-                        <TextInput label="Key" required {...form.getInputProps(`${path}.key`)} />
-                        <TextInput label="Display name" {...form.getInputProps(`${path}.name`)} />
+                        <TextInput label="Key" required {...form.getInputProps(`${base}.key`)} />
+                        <TextInput label="Display name" {...form.getInputProps(`${base}.name`)} />
                         <Group position="right" style={{ flexGrow: 0 }}>
                           <ActionIcon
                             color="red"
@@ -232,18 +270,26 @@ export function ConnectionFormFields({
                           </ActionIcon>
                         </Group>
                       </Group>
+                      {kinds.length > 1 && (
+                        <SegmentedControl
+                          value={kind}
+                          onChange={(next) =>
+                            setKind(index, next === 'trigger' ? 'trigger' : 'target')
+                          }
+                          data={[
+                            { value: 'target', label: 'Target' },
+                            { value: 'trigger', label: 'Event source' },
+                          ]}
+                        />
+                      )}
                       <ProviderConfigForm
-                        label="Request"
-                        providers={targets}
-                        type={endpoint.target.type}
-                        config={endpoint.target.config}
-                        configIssues={issuesAt(errors, `${path}.target.config`)}
-                        onTypeChange={(type) =>
-                          form.setFieldValue(`${path}.target`, { type, config: {} })
-                        }
-                        onConfigChange={(config) =>
-                          form.setFieldValue(`${path}.target.config`, config)
-                        }
+                        label={kind === 'target' ? 'Request' : 'Event source'}
+                        providers={choices[kind]}
+                        type={ref.type}
+                        config={ref.config}
+                        configIssues={issuesAt(errors, `${path}.config`)}
+                        onTypeChange={(type) => form.setFieldValue(path, { type, config: {} })}
+                        onConfigChange={(config) => form.setFieldValue(`${path}.config`, config)}
                       />
                     </Stack>
                   </Accordion.Panel>
@@ -256,16 +302,11 @@ export function ConnectionFormFields({
           <Button
             variant="light"
             leftIcon={<IconPlus size={16} />}
-            disabled={targets.length === 0}
+            disabled={kinds.length === 0}
             onClick={() =>
               setEndpoints([
                 ...values.endpoints,
-                {
-                  key: '',
-                  name: '',
-                  description: '',
-                  target: { type: targets[0]?.type ?? '', config: {} },
-                },
+                blankEndpoint({ key: '', name: '', description: '' }, kinds[0] ?? 'target'),
               ])
             }
           >

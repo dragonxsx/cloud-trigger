@@ -193,7 +193,7 @@ export function natsFailure(error: unknown, signal: AbortSignal, durationMs: num
 export const natsConnection = defineConnection({
   type: 'nats',
   displayName: 'NATS servers',
-  description: 'Servers, credentials and TLS shared by NATS targets.',
+  description: 'Servers, credentials and TLS shared by NATS targets and JetStream consumers.',
   configSchema: NatsConnectionSettings,
   async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
     const resolved = await resolveConnection(config, secrets);

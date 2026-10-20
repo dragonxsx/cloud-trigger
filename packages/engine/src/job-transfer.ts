@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 
 import {
+  type ConnectionRepository,
   type UnitOfWork,
   nonAtomicUnitOfWork,
   type GroupId,
@@ -15,7 +16,7 @@ import {
 } from '@cloud-trigger/core';
 import { z } from 'zod';
 
-import { bindTrigger } from './config-validation.js';
+import { loadTrigger } from './config-validation.js';
 import type { JobService } from './job-service.js';
 
 export const ExportedJob = JobSpec.omit({ groupId: true }).extend({
@@ -54,6 +55,7 @@ export interface JobTransferDeps {
   readonly jobs: JobRepository;
   readonly groups?: GroupRepository | undefined;
   readonly registry: ProviderRegistry;
+  readonly connections?: ConnectionRepository | undefined;
   readonly service: JobService;
   readonly unitOfWork?: UnitOfWork | undefined;
 }
@@ -163,7 +165,7 @@ export class JobTransfer {
   }
 
   async #upstreamNames(job: Job): Promise<Record<string, string>> {
-    const bound = bindTrigger(this.deps.registry, job);
+    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
     const refs = bound.isOk() ? (bound.value.upstream?.() ?? []) : [];
     const names: Record<string, string> = {};
     for (const ref of refs) {

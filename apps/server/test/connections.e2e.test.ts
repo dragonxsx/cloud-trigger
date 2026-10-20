@@ -162,4 +162,80 @@ describe('connections API', () => {
       issues: [{ path: 'target.connection.key', message: 'No connection named "nope"' }],
     });
   });
+
+  it('runs an event-source trigger over a source endpoint', async () => {
+    const providers = await api.providers.list({ kind: 'trigger' });
+    const kafka = providers.find((p) => p.type === 'kafka');
+    expect(kafka?.connectionType).toBe('kafka');
+    expect(kafka?.connectionFields).toContain('brokers');
+
+    const events = {
+      key: 'events',
+      type: 'kafka',
+      config: {
+        brokers: ['kafka.invalid:9092'],
+        sasl: { mechanism: 'PLAIN', username: 'svc', password: 'hunter2' },
+      },
+      endpoints: [
+        { key: 'orders', source: { type: 'kafka', config: { topics: ['orders'] } } },
+        { key: 'publish', target: { type: 'kafka', config: { topic: 'orders' } } },
+      ],
+    };
+    const created = await api.connections.create(events);
+    expect(created.config).toMatchObject({ sasl: { password: '***' } });
+    expect(created.endpoints[0]).toMatchObject({
+      key: 'orders',
+      source: { type: 'kafka', config: { topics: ['orders'] } },
+    });
+
+    const job = await api.jobs.create({
+      name: 'on order',
+      enabled: false,
+      trigger: {
+        type: 'kafka',
+        connection: { key: 'events', endpoint: 'orders' },
+        config: { groupId: 'billing' },
+      },
+      target: { type: 'kafka', connection: { key: 'events', endpoint: 'publish' }, config: {} },
+    });
+    expect(await api.connections.usages({ key: 'events' })).toEqual([
+      { id: job.id, name: 'on order', enabled: false, endpoints: ['orders', 'publish'] },
+    ]);
+
+    const wrongKind = await api.jobs
+      .create({
+        name: 'wrong',
+        trigger: { type: 'kafka', connection: { key: 'events', endpoint: 'publish' }, config: {} },
+        target: { type: 'http', config: { url: `${target.url}/x` } },
+      })
+      .catch((error: unknown) => error);
+    expect(wrongKind instanceof ORPCError ? wrongKind.data : undefined).toEqual({
+      issues: [
+        {
+          path: 'trigger.connection.endpoint',
+          message: 'Endpoint "events/publish" is a target endpoint',
+        },
+      ],
+    });
+
+    const restored = await api.connections.update({
+      ...events,
+      config: created.config,
+      endpoints: created.endpoints,
+      expectedVersion: created.version,
+    });
+    expect(restored.version).toBe(2);
+    const breaking = await api.connections
+      .update({
+        ...events,
+        config: created.config,
+        endpoints: created.endpoints.slice(1),
+        expectedVersion: 2,
+      })
+      .catch(errorCode);
+    expect(breaking).toBe('INVALID_CONFIG');
+
+    await api.jobs.delete({ id: job.id });
+    expect(await api.connections.delete({ key: 'events' })).toEqual({ deleted: true });
+  });
 });

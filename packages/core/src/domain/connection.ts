@@ -16,13 +16,42 @@ export const ConnectionKey = slug('Connection').describe(
 );
 export const EndpointKey = slug('Endpoint').describe('Name of the endpoint within its connection.');
 
-export const Endpoint = z.object({
+const EndpointFields = {
   key: EndpointKey,
   name: z.string().trim().max(200).default(''),
   description: z.string().max(2_000).default(''),
-  target: ProviderRef.describe('A complete target config that runs over the connection.'),
-});
+};
+
+export const TargetEndpoint = z
+  .strictObject({
+    ...EndpointFields,
+    target: ProviderRef.describe('A complete target config that runs over the connection.'),
+  })
+  .meta({ title: 'Target' });
+
+export const SourceEndpoint = z
+  .strictObject({
+    ...EndpointFields,
+    source: ProviderRef.describe(
+      'A complete event-source trigger config that consumes over the connection.',
+    ),
+  })
+  .meta({ title: 'Event source' });
+
+export const Endpoint = z.union([TargetEndpoint, SourceEndpoint]);
 export type Endpoint = z.output<typeof Endpoint>;
+
+export type EndpointKind = 'target' | 'trigger';
+
+export const endpointProvider = (
+  endpoint: Endpoint,
+): { readonly kind: EndpointKind; readonly ref: ProviderRef } =>
+  'target' in endpoint
+    ? { kind: 'target', ref: endpoint.target }
+    : { kind: 'trigger', ref: endpoint.source };
+
+export const withEndpointProvider = (endpoint: Endpoint, ref: ProviderRef): Endpoint =>
+  'target' in endpoint ? { ...endpoint, target: ref } : { ...endpoint, source: ref };
 
 export const ConnectionSpec = z.object({
   key: ConnectionKey,
@@ -59,16 +88,16 @@ export const Connection = ConnectionSpec.extend({
 });
 export type Connection = z.output<typeof Connection>;
 
-export const TargetConnectionRef = z.object({
+export const ConnectionRef = z.object({
   key: ConnectionKey,
   endpoint: EndpointKey.optional().describe(
-    'Named endpoint of the connection. The target config then only overrides its fields (JSON merge patch).',
+    'Named endpoint of the connection. The config then only overrides its fields (JSON merge patch).',
   ),
 });
-export type TargetConnectionRef = z.output<typeof TargetConnectionRef>;
+export type ConnectionRef = z.output<typeof ConnectionRef>;
 
 export const TargetRef = ProviderRef.extend({
-  connection: TargetConnectionRef.optional().describe(
+  connection: ConnectionRef.optional().describe(
     'Saved connection that supplies the base address, credentials and defaults.',
   ),
 });

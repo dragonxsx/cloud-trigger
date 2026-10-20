@@ -194,13 +194,15 @@ describe('nats event source', () => {
   it('consumes through a durable consumer and acks only after emit succeeds', async () => {
     await publish({ servers: [env().server], subject: 'contract.source' }, 'source-1');
     const source = natsSource
-      .bind({
-        servers: [env().server],
-        stream: 'CONTRACT',
-        durable: 'source-test',
-        filterSubject: 'contract.source',
-        ackWaitMs: 1_000,
-      })
+      .bind(
+        {
+          stream: 'CONTRACT',
+          durable: 'source-test',
+          filterSubject: 'contract.source',
+          ackWaitMs: 1_000,
+        },
+        { connection: { key: 'bus', version: 1, config: { servers: [env().server] } } },
+      )
       ._unsafeUnwrap().source;
     if (!source) {
       throw new Error('nats source did not bind');

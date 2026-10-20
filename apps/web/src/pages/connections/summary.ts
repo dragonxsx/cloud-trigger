@@ -19,14 +19,23 @@ export function connectionAddress(connection: Pick<ConnectionDto, 'config'>): st
   return '—';
 }
 
-const LOCATION_FIELDS = ['url', 'queueUrl', 'topicArn', 'topic', 'subject', 'service'] as const;
+const LOCATION_FIELDS = [
+  'url',
+  'queueUrl',
+  'topicArn',
+  'topic',
+  'topics',
+  'subject',
+  'stream',
+  'service',
+] as const;
 
 export function endpointSummary(target: { type: string; config: unknown }): string {
   const config = isRecord(target.config) ? target.config : {};
   const method = config['method'];
-  const location = LOCATION_FIELDS.map((field) => config[field]).find(
-    (value) => typeof value === 'string',
-  );
+  const location = LOCATION_FIELDS.map((field) => config[field])
+    .map((value) => (Array.isArray(value) ? value.map(String).join(', ') : value))
+    .find((value) => typeof value === 'string');
   const where = typeof location === 'string' ? location : target.type;
 
   return typeof method === 'string' ? `${method} ${where}` : where;

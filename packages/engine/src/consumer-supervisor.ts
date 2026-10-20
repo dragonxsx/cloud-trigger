@@ -3,6 +3,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import {
   type BoundEventSource,
   type Clock,
+  type ConnectionCatalog,
+  type ConnectionRepository,
   type EventSourceLeases,
   type Job,
   type JobRepository,
@@ -13,6 +15,7 @@ import {
   isSchedulable,
 } from '@cloud-trigger/core';
 
+import { bindTrigger, loadConnections } from './config-validation.js';
 import type { EventIngestor } from './event-ingestor.js';
 import { PollingLoop } from './loop.js';
 
@@ -20,6 +23,7 @@ export interface ConsumerSupervisorDeps {
   readonly jobs: JobRepository;
   readonly eventSources: EventSourceLeases;
   readonly registry: ProviderRegistry;
+  readonly connections?: ConnectionRepository | undefined;
   readonly secrets: SecretResolver;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -35,13 +39,20 @@ export interface ConsumerSupervisorOptions {
 }
 
 interface Subscription {
-  readonly version: number;
+  readonly fingerprint: string;
   readonly exclusive: boolean;
   readonly controller: AbortController;
   readonly done: Promise<void>;
 }
 
 export const eventSourceLeaseKey = (jobId: string) => `source:${jobId}`;
+
+const subscriptionFingerprint = (job: Job, catalog: ConnectionCatalog): string => {
+  const key = job.trigger.connection?.key;
+  const connection = key === undefined ? undefined : catalog.get(key);
+
+  return `${job.version}:${connection?.version ?? 0}`;
+};
 
 export class ConsumerSupervisor {
   readonly #loop: PollingLoop;
@@ -78,9 +89,13 @@ export class ConsumerSupervisor {
 
   async tick(): Promise<void> {
     const jobs = (await this.deps.jobs.findEventSourced()).filter(isSchedulable);
+    const catalog = await loadConnections(
+      this.deps.connections,
+      jobs.flatMap((job) => (job.trigger.connection ? [job.trigger.connection] : [])),
+    );
     const wanted = new Set<string>();
     for (const job of jobs) {
-      const source = this.#sourceOf(job);
+      const source = this.#sourceOf(job, catalog);
       if (!source) {
         continue;
       }
@@ -88,14 +103,15 @@ export class ConsumerSupervisor {
         continue;
       }
       wanted.add(job.id);
+      const fingerprint = subscriptionFingerprint(job, catalog);
       const current = this.#subscriptions.get(job.id);
-      if (current?.version === job.version) {
+      if (current?.fingerprint === fingerprint) {
         continue;
       }
       if (current) {
         await this.#unsubscribe(job.id);
       }
-      this.#subscribe(job, source);
+      this.#subscribe(job, source, fingerprint);
     }
     for (const jobId of this.#subscriptions.keys()) {
       if (!wanted.has(jobId)) {
@@ -104,10 +120,8 @@ export class ConsumerSupervisor {
     }
   }
 
-  #sourceOf(job: Job): BoundEventSource | undefined {
-    const bound = this.deps.registry
-      .get('trigger', job.trigger.type)
-      .andThen((provider) => provider.bind(job.trigger.config));
+  #sourceOf(job: Job, catalog: ConnectionCatalog): BoundEventSource | undefined {
+    const bound = bindTrigger(this.deps.registry, job, catalog);
     if (bound.isErr()) {
       this.deps.logger.warn('Cannot bind event source', { jobId: job.id, err: bound.error });
 
@@ -126,16 +140,20 @@ export class ConsumerSupervisor {
     });
   }
 
-  #subscribe(job: Job, source: BoundEventSource): void {
+  #subscribe(job: Job, source: BoundEventSource, fingerprint: string): void {
     const controller = new AbortController();
     const done = this.#consume(job, source, controller.signal);
     this.#subscriptions.set(job.id, {
-      version: job.version,
+      fingerprint,
       exclusive: source.exclusive,
       controller,
       done,
     });
-    this.deps.logger.info('Event source subscribed', { jobId: job.id, type: job.trigger.type });
+    this.deps.logger.info('Event source subscribed', {
+      jobId: job.id,
+      type: job.trigger.type,
+      connection: job.trigger.connection?.key,
+    });
   }
 
   async #unsubscribe(jobId: string): Promise<void> {

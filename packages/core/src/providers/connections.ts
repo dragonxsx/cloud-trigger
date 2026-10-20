@@ -2,20 +2,38 @@ import { err, type Result } from 'neverthrow';
 
 import {
   type ConnectionCatalog,
-  type TargetConnectionRef,
+  type ConnectionRef,
+  type EndpointKind,
   type TargetRef,
+  endpointProvider,
   findEndpoint,
 } from '../domain/connection.js';
+import type { TriggerRef } from '../domain/job.js';
 import type { ConfigError, ConfigIssue } from '../shared/errors.js';
 import { mergePatch } from '../shared/merge-patch.js';
 import type { ProviderRegistry } from './registry.js';
-import type { BoundTarget } from './sdk.js';
+import type { BoundByKind, BoundTarget, BoundTrigger } from './sdk.js';
+
+export interface UsedConnection {
+  readonly key: string;
+  readonly endpoint: string | undefined;
+  readonly version: number;
+}
 
 export interface ResolvedTarget {
   readonly target: BoundTarget;
-  readonly connection:
-    | { readonly key: string; readonly endpoint: string | undefined; readonly version: number }
-    | undefined;
+  readonly connection: UsedConnection | undefined;
+}
+
+export interface ResolvedTrigger {
+  readonly trigger: BoundTrigger;
+  readonly connection: UsedConnection | undefined;
+}
+
+interface ConnectedRef {
+  readonly type: string;
+  readonly config?: unknown;
+  readonly connection?: ConnectionRef | undefined;
 }
 
 const nested = (prefix: string, issues: readonly ConfigIssue[]): ConfigIssue[] =>
@@ -24,20 +42,23 @@ const nested = (prefix: string, issues: readonly ConfigIssue[]): ConfigIssue[] =
     message: issue.message,
   }));
 
-const invalidTarget = (issues: readonly ConfigIssue[]): ConfigError => ({
-  code: 'invalid_config',
-  message: 'Invalid target configuration',
-  issues,
-});
+const ENDPOINT_NOUN: Record<EndpointKind, string> = { target: 'target', trigger: 'event source' };
 
-const fail = (path: string, message: string) => err(invalidTarget([{ path, message }]));
-
-export function resolveTarget(
+function resolveConnected<K extends EndpointKind>(
   registry: ProviderRegistry,
-  ref: TargetRef,
+  kind: K,
+  ref: ConnectedRef,
   connections: ConnectionCatalog,
-): Result<ResolvedTarget, ConfigError> {
-  const found = registry.get('target', ref.type);
+): Result<{ bound: BoundByKind[K]; connection: UsedConnection | undefined }, ConfigError> {
+  const subject = kind === 'target' ? 'Target' : 'Trigger';
+  const invalid = (issues: readonly ConfigIssue[]): ConfigError => ({
+    code: 'invalid_config',
+    message: `Invalid ${kind} configuration`,
+    issues,
+  });
+  const fail = (path: string, message: string) => err(invalid([{ path, message }]));
+
+  const found = registry.get(kind, ref.type);
   if (found.isErr()) {
     return fail('type', found.error.message);
   }
@@ -47,18 +68,18 @@ export function resolveTarget(
     if (provider.connectionRequired === true) {
       return fail(
         'connection',
-        `Target "${ref.type}" needs a "${provider.connectionType ?? ''}" connection`,
+        `${subject} "${ref.type}" needs a "${provider.connectionType ?? ''}" connection`,
       );
     }
 
     return provider
       .bind(ref.config, { connections })
-      .map((target) => ({ target, connection: undefined }))
-      .mapErr((e) => invalidTarget(nested('config', e.issues)));
+      .map((bound) => ({ bound, connection: undefined }))
+      .mapErr((e) => invalid(nested('config', e.issues)));
   }
 
   if (provider.connectionType === undefined) {
-    return fail('connection', `Target "${ref.type}" does not use connections`);
+    return fail('connection', `${subject} "${ref.type}" does not use connections`);
   }
   const connection = connections.get(use.key);
   if (!connection) {
@@ -67,7 +88,7 @@ export function resolveTarget(
   if (connection.type !== provider.connectionType) {
     return fail(
       'connection.key',
-      `Connection "${use.key}" is a "${connection.type}" connection, but target "${ref.type}" needs "${provider.connectionType}"`,
+      `Connection "${use.key}" is a "${connection.type}" connection, but ${kind} "${ref.type}" needs "${provider.connectionType}"`,
     );
   }
   const validConnection = registry
@@ -89,16 +110,20 @@ export function resolveTarget(
         `Connection "${use.key}" has no endpoint "${use.endpoint}"`,
       );
     }
-    if (endpoint.target.type !== ref.type) {
+    const saved = endpointProvider(endpoint);
+    if (saved.kind !== kind) {
       return fail(
-        'type',
-        `Endpoint "${use.key}/${use.endpoint}" is a "${endpoint.target.type}" target`,
+        'connection.endpoint',
+        `Endpoint "${use.key}/${use.endpoint}" is ${saved.kind === 'target' ? 'a' : 'an'} ${ENDPOINT_NOUN[saved.kind]} endpoint`,
       );
     }
-    config =
-      ref.config === undefined
-        ? endpoint.target.config
-        : mergePatch(endpoint.target.config, ref.config);
+    if (saved.ref.type !== ref.type) {
+      return fail(
+        'type',
+        `Endpoint "${use.key}/${use.endpoint}" is a "${saved.ref.type}" ${ENDPOINT_NOUN[kind]}`,
+      );
+    }
+    config = ref.config === undefined ? saved.ref.config : mergePatch(saved.ref.config, ref.config);
   }
 
   return provider
@@ -106,25 +131,54 @@ export function resolveTarget(
       connection: { key: connection.key, version: connection.version, config: connection.config },
       connections,
     })
-    .map((target) => ({
-      target,
+    .map((bound) => ({
+      bound,
       connection: { key: connection.key, endpoint: use.endpoint, version: connection.version },
     }))
-    .mapErr((e) => invalidTarget(nested('config', e.issues)));
+    .mapErr((e) => invalid(nested('config', e.issues)));
 }
 
-const refId = (ref: TargetConnectionRef) => `${ref.key}/${ref.endpoint ?? ''}`;
-
-export function targetConnectionRefs(
+export const resolveTarget = (
   registry: ProviderRegistry,
   ref: TargetRef,
-): TargetConnectionRef[] {
+  connections: ConnectionCatalog,
+): Result<ResolvedTarget, ConfigError> =>
+  resolveConnected(registry, 'target', ref, connections).map(({ bound, connection }) => ({
+    target: bound,
+    connection,
+  }));
+
+export const resolveTrigger = (
+  registry: ProviderRegistry,
+  ref: Pick<TriggerRef, 'type' | 'config' | 'connection'>,
+  connections: ConnectionCatalog,
+): Result<ResolvedTrigger, ConfigError> =>
+  resolveConnected(registry, 'trigger', ref, connections).map(({ bound, connection }) => ({
+    trigger: bound,
+    connection,
+  }));
+
+const refId = (ref: ConnectionRef) => `${ref.key}/${ref.endpoint ?? ''}`;
+
+const unique = (refs: readonly ConnectionRef[]): ConnectionRef[] => [
+  ...new Map(refs.map((r) => [refId(r), r])).values(),
+];
+
+export function targetConnectionRefs(registry: ProviderRegistry, ref: TargetRef): ConnectionRef[] {
   const own = ref.connection ? [ref.connection] : [];
   const children = registry
     .get('target', ref.type)
     .map((provider) => provider.connectionRefs?.(ref.config) ?? [])
     .unwrapOr([]);
-  const unique = new Map([...own, ...children].map((r) => [refId(r), r]));
 
-  return [...unique.values()];
+  return unique([...own, ...children]);
 }
+
+export const jobConnectionRefs = (
+  registry: ProviderRegistry,
+  spec: { readonly trigger: Pick<TriggerRef, 'connection'>; readonly target: TargetRef },
+): ConnectionRef[] =>
+  unique([
+    ...(spec.trigger.connection ? [spec.trigger.connection] : []),
+    ...targetConnectionRefs(registry, spec.target),
+  ]);

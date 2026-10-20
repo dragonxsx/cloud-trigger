@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import {
   type ConnectionCatalog,
-  type TargetConnectionRef,
+  type ConnectionRef,
   emptyConnectionCatalog,
 } from '../domain/connection.js';
 import type { RunLifecycleEvent } from '../domain/notification.js';
@@ -178,7 +178,7 @@ export interface BoundConnection {
   test(ctx: ConnectionTestContext): Promise<ConnectionTestResult>;
 }
 
-interface BoundByKind {
+export interface BoundByKind {
   trigger: BoundTrigger;
   input: BoundInput;
   target: BoundTarget;
@@ -213,7 +213,7 @@ export interface Provider<K extends ProviderKind = ProviderKind> {
   readonly connectionFields?: readonly string[] | undefined;
   jsonSchema(): JsonSchema;
   bind(rawConfig: unknown, env?: BindEnv): Result<BoundByKind[K], ConfigError>;
-  connectionRefs?(rawConfig: unknown): readonly TargetConnectionRef[];
+  connectionRefs?(rawConfig: unknown): readonly ConnectionRef[];
 }
 
 export type TriggerProvider = Provider<'trigger'>;
@@ -261,6 +261,19 @@ export interface EventSourceDefinition<S extends z.ZodType> extends BaseDefiniti
   describe(config: z.output<S>): string;
   lint?(config: z.output<S>, ctx: LintContext): readonly LintIssue[];
 }
+export interface ConnectedSubscribeContext<C> extends SubscribeContext {
+  readonly connection: Connected<C>;
+}
+export interface InlineConnectedEventSourceDefinition<
+  S extends z.ZodType,
+  C extends z.ZodObject,
+> extends BaseDefinition<S> {
+  readonly connection: ConnectionProvider<C>;
+  readonly exclusive: boolean;
+  subscribe(config: z.output<S>, ctx: ConnectedSubscribeContext<z.output<C>>): Promise<void>;
+  describe(config: z.output<S>): string;
+  lint?(config: z.output<S>, ctx: LintContext): readonly LintIssue[];
+}
 export interface InputDefinition<S extends z.ZodType> extends BaseDefinition<S> {
   resolve(config: z.output<S>, ctx: RunContext): Promise<Payload>;
 }
@@ -274,7 +287,7 @@ export interface TargetDefinition<S extends z.ZodType> extends BaseDefinition<S>
     config: z.output<S>,
     env: { readonly connections: ConnectionCatalog },
   ): readonly ConfigIssue[];
-  readonly connectionRefs?: (config: z.output<S>) => readonly TargetConnectionRef[];
+  readonly connectionRefs?: (config: z.output<S>) => readonly ConnectionRef[];
 }
 
 export interface ConnectedTargetExecution<C> extends TargetExecution {
@@ -389,16 +402,23 @@ export const defineEventTrigger = <S extends z.ZodType>(
     }),
   );
 
+const sourceTrigger = <S extends z.ZodType>(
+  def: Pick<EventSourceDefinition<S>, 'type' | 'describe' | 'lint'>,
+  config: z.output<S>,
+): BoundTrigger => ({
+  nextFireAt: () => null,
+  describe: () => def.describe(config),
+  lint: (ctx) => def.lint?.(config, ctx) ?? [],
+  matches: (event) => event.kind === 'message' && event.event.source === def.type,
+  upstream: () => [],
+});
+
 export const defineEventSource = <S extends z.ZodType>(
   def: EventSourceDefinition<S>,
 ): TriggerProvider =>
   makeProvider('trigger', def, (config) =>
     ok({
-      nextFireAt: () => null,
-      describe: () => def.describe(config),
-      lint: (ctx) => def.lint?.(config, ctx) ?? [],
-      matches: (event) => event.kind === 'message' && event.event.source === def.type,
-      upstream: () => [],
+      ...sourceTrigger(def, config),
       source: {
         exclusive: def.exclusive,
         subscribe: (ctx) => def.subscribe(config, ctx),
@@ -471,6 +491,50 @@ export const defineConnectedTarget = <S extends z.ZodType, C extends z.ZodType>(
 
 export const INLINE_CONNECTION_KEY = '';
 
+function bindInlineConnection<C extends z.ZodObject>(
+  provider: ConnectionProvider<C>,
+  rawConfig: unknown,
+  binding: ConnectionBinding | undefined,
+  subject: string,
+): Result<Connected<z.output<C>>, ConfigError> {
+  const schema = provider.configSchema;
+  const fields = Object.keys(schema.shape);
+  const raw = isRecord(rawConfig) ? rawConfig : {};
+  if (binding) {
+    const doubled = fields.filter((field) => raw[field] !== undefined);
+    if (doubled.length > 0) {
+      return err(
+        invalid(
+          subject,
+          doubled.map((field) => ({
+            path: field,
+            message: `Set on the "${binding.key}" connection instead`,
+          })),
+        ),
+      );
+    }
+  }
+  const source = binding
+    ? binding.config
+    : Object.fromEntries(fields.flatMap((field) => (field in raw ? [[field, raw[field]]] : [])));
+  const parsed = schema.safeParse(source);
+  if (!parsed.success) {
+    return err(configErrorFromZod(parsed.error, binding ? `connection "${binding.key}"` : subject));
+  }
+
+  return ok({
+    key: binding?.key ?? INLINE_CONNECTION_KEY,
+    version: binding?.version ?? 0,
+    config: parsed.data,
+  });
+}
+
+const inlineConnection = <C extends z.ZodObject>(provider: ConnectionProvider<C>) => ({
+  type: provider.type,
+  required: false,
+  fields: Object.keys(provider.configSchema.shape),
+});
+
 export const defineInlineConnectedTarget = <S extends z.ZodType, C extends z.ZodObject>(
   def: InlineConnectedTargetDefinition<S, C>,
 ): TargetProvider =>
@@ -478,52 +542,37 @@ export const defineInlineConnectedTarget = <S extends z.ZodType, C extends z.Zod
     'target',
     def,
     (config, env, rawConfig) => {
-      const subject = `target "${def.type}"`;
-      const schema = def.connection.configSchema;
-      const fields = Object.keys(schema.shape);
-      const raw = isRecord(rawConfig) ? rawConfig : {};
-      const binding = env.connection;
-      if (binding) {
-        const doubled = fields.filter((field) => raw[field] !== undefined);
-        if (doubled.length > 0) {
-          return err(
-            invalid(
-              subject,
-              doubled.map((field) => ({
-                path: field,
-                message: `Set on the "${binding.key}" connection instead`,
-              })),
-            ),
-          );
-        }
-      }
-      const source = binding
-        ? binding.config
-        : Object.fromEntries(
-            fields.flatMap((field) => (field in raw ? [[field, raw[field]]] : [])),
-          );
-      const parsed = schema.safeParse(source);
-      if (!parsed.success) {
-        return err(
-          configErrorFromZod(parsed.error, binding ? `connection "${binding.key}"` : subject),
-        );
-      }
-      const connection: Connected<z.output<C>> = {
-        key: binding?.key ?? INLINE_CONNECTION_KEY,
-        version: binding?.version ?? 0,
-        config: parsed.data,
-      };
       const connections = env.connections ?? emptyConnectionCatalog;
 
-      return ok({
+      return bindInlineConnection(
+        def.connection,
+        rawConfig,
+        env.connection,
+        `target "${def.type}"`,
+      ).map((connection) => ({
         execute: (request) => def.execute(config, { ...request, connection, connections }),
-      });
+      }));
     },
-    {
-      type: def.connection.type,
-      required: false,
-      fields: Object.keys(def.connection.configSchema.shape),
-    },
+    inlineConnection(def.connection),
+  );
+
+export const defineInlineConnectedEventSource = <S extends z.ZodType, C extends z.ZodObject>(
+  def: InlineConnectedEventSourceDefinition<S, C>,
+): TriggerProvider =>
+  makeProvider(
+    'trigger',
+    def,
+    (config, env, rawConfig) =>
+      bindInlineConnection(def.connection, rawConfig, env.connection, `trigger "${def.type}"`).map(
+        (connection): BoundTrigger => ({
+          ...sourceTrigger(def, config),
+          source: {
+            exclusive: def.exclusive,
+            subscribe: (ctx) => def.subscribe(config, { ...ctx, connection }),
+          },
+        }),
+      ),
+    inlineConnection(def.connection),
   );
 
 export const defineNotifier = <S extends z.ZodType>(def: NotifierDefinition<S>): NotifierProvider =>

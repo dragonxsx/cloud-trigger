@@ -17,10 +17,10 @@ import { IconAlertCircle, IconInfoCircle } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo } from 'react';
 
+import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicker';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
-import { TargetPicker } from '../../components/TargetPicker';
 import { type JobCreateInput, type JobDto, type ProviderDto, client } from '../../lib/api';
 import { type ConfigIssueDto, configIssues, errorMessage } from '../../lib/errors';
 import { dateTime } from '../../lib/format';
@@ -239,16 +239,16 @@ export function JobFormFields({ form }: { form: JobForm }) {
 
       <SimpleGrid cols={2} spacing="lg" breakpoints={[{ maxWidth: 'md', cols: 1 }]}>
         <Section title="When it runs">
-          <ProviderConfigForm
-            label="Trigger"
+          <ConnectedProviderPicker
+            kind="trigger"
             providers={byKind.trigger}
-            type={values.trigger.type}
-            config={values.trigger.config}
+            value={values.trigger}
             configIssues={configIssuesFor(errors, 'trigger')}
-            onTypeChange={(type) =>
-              form.setFieldValue('trigger', { ...values.trigger, type, config: {} })
+            connectionError={fieldError(errors, 'trigger.connection.key')}
+            endpointError={fieldError(errors, 'trigger.connection.endpoint')}
+            onChange={(trigger) =>
+              form.setFieldValue('trigger', { ...trigger, jitterMs: values.trigger.jitterMs })
             }
-            onConfigChange={(config) => form.setFieldValue('trigger.config', config)}
           />
           <NumberInput
             label="Random delay (ms)"
@@ -282,7 +282,8 @@ export function JobFormFields({ form }: { form: JobForm }) {
         title="Where it goes"
         hint="Pick a saved connection to reuse its address and credentials, or reference secrets as {{secret:NAME}} instead of pasting them."
       >
-        <TargetPicker
+        <ConnectedProviderPicker
+          kind="target"
           providers={byKind.target}
           value={values.target}
           configIssues={configIssuesFor(errors, 'target')}

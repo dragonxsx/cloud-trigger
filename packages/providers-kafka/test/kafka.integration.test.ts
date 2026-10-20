@@ -219,14 +219,12 @@ describe('kafka event source', () => {
       signal: AbortSignal.timeout(30_000),
     });
 
-    const source = kafkaSource
-      .bind({
-        brokers: [env().broker],
-        topics: [topic],
-        fromBeginning: true,
-        groupId: `g-${topic}`,
-      })
-      ._unsafeUnwrap().source;
+    const sourceConfig = { topics: [topic], fromBeginning: true, groupId: `g-${topic}` };
+    const connection = { key: 'events', version: 1, config: { brokers: [env().broker] } };
+    const doubled = kafkaSource.bind({ ...sourceConfig, brokers: ['x:1'] }, { connection });
+    expect(doubled.isErr() && doubled.error.issues.map((i) => i.path)).toEqual(['brokers']);
+    expect(kafkaSource.bind(sourceConfig).isErr()).toBe(true);
+    const source = kafkaSource.bind(sourceConfig, { connection })._unsafeUnwrap().source;
     if (!source) {
       throw new Error('kafka source did not bind');
     }

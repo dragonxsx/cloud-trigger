@@ -1,11 +1,16 @@
-import { defineEventSource } from '@cloud-trigger/core';
+import { defineInlineConnectedEventSource } from '@cloud-trigger/core';
 import { AckPolicy, type JsMsg, jetstream, jetstreamManager } from '@nats-io/jetstream';
 import { z } from 'zod';
 
-import { NatsConnectionFields, connectionFor, resolveConnection } from './nats-target.js';
+import {
+  NatsConnectionSettings,
+  connectionFor,
+  natsConnection,
+  resolveConnection,
+} from './nats-target.js';
 
 export const NatsSourceConfig = z.object({
-  ...NatsConnectionFields,
+  ...NatsConnectionSettings.partial().shape,
   stream: z.string().min(1).describe('JetStream stream to consume from.'),
   durable: z
     .string()
@@ -25,20 +30,21 @@ const headersOf = (message: JsMsg): Record<string, string> =>
     (message.headers?.keys() ?? []).map((key) => [key, message.headers?.get(key) ?? '']),
   );
 
-export const natsSource = defineEventSource({
+export const natsSource = defineInlineConnectedEventSource({
   type: 'nats',
   displayName: 'NATS JetStream',
   description:
     'Runs once per JetStream message through a durable consumer. Messages are acked after the run is queued; the stream sequence is the deduplication id.',
   configSchema: NatsSourceConfig,
+  connection: natsConnection,
   exclusive: false,
   describe: (config) => `On JetStream message from ${config.stream}`,
-  async subscribe(config, { signal, secrets, jobId, emit }) {
-    const connection = await resolveConnection(config, secrets);
-    if (connection.isErr()) {
-      throw new Error(connection.error.message);
+  async subscribe(config, { signal, secrets, jobId, emit, connection }) {
+    const resolved = await resolveConnection(connection.config, secrets);
+    if (resolved.isErr()) {
+      throw new Error(resolved.error.message);
     }
-    const nc = await connectionFor(connection.value);
+    const nc = await connectionFor(resolved.value);
     const durable = config.durable ?? `cloud-trigger-${jobId}`;
     const manager = await jetstreamManager(nc);
     await manager.consumers.add(config.stream, {

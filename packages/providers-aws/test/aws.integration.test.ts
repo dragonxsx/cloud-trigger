@@ -293,12 +293,10 @@ describe('sqs event source', () => {
       }),
     );
 
-    const failing = sqsSource.bind({
-      queueUrl,
-      ...connection(),
-      waitTimeSeconds: 1,
-      visibilityTimeoutSeconds: 1,
-    });
+    const failing = sqsSource.bind(
+      { queueUrl, waitTimeSeconds: 1, visibilityTimeoutSeconds: 1 },
+      { connection: { key: 'aws', version: 1, config: connection() } },
+    );
     await expect(
       failing._unsafeUnwrap().source?.subscribe({
         signal: AbortSignal.timeout(10_000),

@@ -1,4 +1,4 @@
-import { isRecord } from '@cloud-trigger/core';
+import { type EndpointKind, endpointProvider, isRecord } from '@cloud-trigger/core';
 import { Select, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
@@ -8,22 +8,51 @@ import { listAllConnections } from '../lib/connections';
 import type { ConfigIssueDto } from '../lib/errors';
 import { ProviderConfigForm } from './ProviderConfigForm';
 
-export interface TargetConnectionValue {
+export interface ConnectionValue {
   readonly key: string;
   readonly endpoint?: string | undefined;
 }
 
-export interface TargetValue {
+export interface ConnectedValue {
   readonly type: string;
   readonly config?: unknown;
-  readonly connection?: TargetConnectionValue | undefined;
+  readonly connection?: ConnectionValue | undefined;
 }
 
-export interface TargetChange {
+export interface ConnectedChange {
   type: string;
   config: unknown;
-  connection?: TargetConnectionValue;
+  connection?: ConnectionValue;
 }
+
+const COPY: Record<
+  EndpointKind,
+  {
+    label: string;
+    connection: string;
+    none: string;
+    endpoint: string;
+    endpointNone: string;
+    saved: string;
+  }
+> = {
+  target: {
+    label: 'Target',
+    connection: 'A saved API or broker with its address and credentials.',
+    none: 'None: enter the full address below',
+    endpoint: 'A request saved on the connection.',
+    endpointNone: 'None: configure the request below',
+    saved: 'Runs',
+  },
+  trigger: {
+    label: 'Trigger',
+    connection: 'A saved broker or account the consumer connects with.',
+    none: 'None: enter the broker settings below',
+    endpoint: 'A source (queue, topic or stream) saved on the connection.',
+    endpointNone: 'None: configure the source below',
+    saved: 'Consumes',
+  },
+};
 
 const PATCH_DROPPED = new Set(['required', 'default']);
 
@@ -72,19 +101,21 @@ export function forConnection(provider: ProviderDto): ProviderDto {
 const change = (
   type: string,
   config: unknown,
-  connection: TargetConnectionValue | undefined,
-): TargetChange => ({ type, config, ...(connection && { connection }) });
+  connection: ConnectionValue | undefined,
+): ConnectedChange => ({ type, config, ...(connection && { connection }) });
 
 interface Props {
+  readonly kind: EndpointKind;
   readonly providers: readonly ProviderDto[];
-  readonly value: TargetValue;
+  readonly value: ConnectedValue;
   readonly configIssues: readonly ConfigIssueDto[];
   readonly connectionError?: string | undefined;
   readonly endpointError?: string | undefined;
-  readonly onChange: (next: TargetChange) => void;
+  readonly onChange: (next: ConnectedChange) => void;
 }
 
-export function TargetPicker({
+export function ConnectedProviderPicker({
+  kind,
   providers,
   value,
   configIssues,
@@ -103,13 +134,27 @@ export function TargetPicker({
     return (connections.data ?? []).filter((c) => types.has(c.type));
   }, [connections.data, providers]);
   const connection: ConnectionDto | undefined = usable.find((c) => c.key === value.connection?.key);
-  const endpointKey = value.connection?.endpoint;
-  const endpoint = connection?.endpoints.find((e) => e.key === endpointKey);
+  const endpoints = useMemo(
+    () =>
+      (connection?.endpoints ?? []).flatMap((e) => {
+        const saved = endpointProvider(e);
 
-  const targets = useMemo(() => {
+        return saved.kind === kind ? [{ key: e.key, name: e.name, ref: saved.ref }] : [];
+      }),
+    [connection, kind],
+  );
+  const endpointKey = value.connection?.endpoint;
+  const endpoint = endpoints.find((e) => e.key === endpointKey);
+  const copy = COPY[kind];
+  const connectable =
+    kind === 'target' ||
+    value.connection !== undefined ||
+    providers.some((p) => p.type === value.type && p.connectionType !== undefined);
+
+  const choices = useMemo(() => {
     if (endpoint) {
       return providers
-        .filter((p) => p.type === endpoint.target.type)
+        .filter((p) => p.type === endpoint.ref.type)
         .map((p) => asOverrides(forConnection(p)));
     }
     if (value.connection) {
@@ -143,53 +188,52 @@ export function TargetPicker({
     if (!connection) {
       return;
     }
-    const picked = connection.endpoints.find((e) => e.key === key);
+    const picked = endpoints.find((e) => e.key === key);
     onChange(
       picked
-        ? change(picked.target.type, {}, { key: connection.key, endpoint: picked.key })
+        ? change(picked.ref.type, {}, { key: connection.key, endpoint: picked.key })
         : change(value.type, {}, { key: connection.key }),
     );
   };
 
   return (
     <Stack spacing="sm">
-      <SimpleGrid cols={2} breakpoints={[{ maxWidth: 'sm', cols: 1 }]}>
-        <Select
-          label="Connection"
-          description="A saved API or broker with its address and credentials."
-          placeholder="None: enter the full address below"
-          clearable
-          searchable
-          nothingFound="No connections yet"
-          data={usable.map((c) => ({ value: c.key, label: c.name || c.key, group: c.type }))}
-          value={value.connection?.key ?? null}
-          error={connectionError}
-          onChange={pickConnection}
-        />
-        <Select
-          label="Endpoint"
-          description="A request saved on the connection."
-          placeholder={connection ? 'None: configure the request below' : 'Pick a connection first'}
-          clearable
-          disabled={!connection || connection.endpoints.length === 0}
-          data={(connection?.endpoints ?? []).map((e) => ({
-            value: e.key,
-            label: e.name || e.key,
-          }))}
-          value={endpointKey ?? null}
-          error={endpointError}
-          onChange={pickEndpoint}
-        />
-      </SimpleGrid>
+      {connectable && (
+        <SimpleGrid cols={2} breakpoints={[{ maxWidth: 'sm', cols: 1 }]}>
+          <Select
+            label="Connection"
+            description={copy.connection}
+            placeholder={copy.none}
+            clearable
+            searchable
+            nothingFound="No connections yet"
+            data={usable.map((c) => ({ value: c.key, label: c.name || c.key, group: c.type }))}
+            value={value.connection?.key ?? null}
+            error={connectionError}
+            onChange={pickConnection}
+          />
+          <Select
+            label="Endpoint"
+            description={copy.endpoint}
+            placeholder={connection ? copy.endpointNone : 'Pick a connection first'}
+            clearable
+            disabled={!connection || endpoints.length === 0}
+            data={endpoints.map((e) => ({ value: e.key, label: e.name || e.key }))}
+            value={endpointKey ?? null}
+            error={endpointError}
+            onChange={pickEndpoint}
+          />
+        </SimpleGrid>
+      )}
       {endpoint && (
         <Text size="sm" color="dimmed">
-          Runs {connection?.key}/{endpoint.key} as saved. Fields set below override it for this job
-          only.
+          {copy.saved} {connection?.key}/{endpoint.key} as saved. Fields set below override it for
+          this job only.
         </Text>
       )}
       <ProviderConfigForm
-        label="Target"
-        providers={targets}
+        label={copy.label}
+        providers={choices}
         type={value.type}
         config={value.config}
         configIssues={configIssues}

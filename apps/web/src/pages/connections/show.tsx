@@ -1,3 +1,4 @@
+import { endpointProvider } from '@cloud-trigger/core';
 import { Anchor, Badge, Code, SimpleGrid, Stack, Table, Text } from '@mantine/core';
 import { useShow } from '@refinedev/core';
 import { Show } from '@refinedev/mantine';
@@ -65,32 +66,38 @@ export function ConnectionShow() {
             <Text weight={600}>Endpoints</Text>
             {connection.endpoints.length === 0 ? (
               <Text size="sm" color="dimmed">
-                No endpoints. Jobs configure the request themselves.
+                No endpoints. Jobs configure the request or source themselves.
               </Text>
             ) : (
               <Table className="ct-table" verticalSpacing="xs" fontSize="sm">
                 <thead>
                   <tr>
                     <th>Endpoint</th>
-                    <th>Request</th>
+                    <th>Kind</th>
+                    <th>Request or source</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {connection.endpoints.map((endpoint) => (
-                    <tr key={endpoint.key}>
-                      <td>
-                        <Text size="sm" weight={600}>
-                          {endpoint.name || endpoint.key}
-                        </Text>
-                        <Text size="xs" color="dimmed" ff="monospace">
-                          {connection.key}/{endpoint.key}
-                        </Text>
-                      </td>
-                      <td>
-                        <Code>{endpointSummary(endpoint.target)}</Code>
-                      </td>
-                    </tr>
-                  ))}
+                  {connection.endpoints.map((endpoint) => {
+                    const { kind, ref } = endpointProvider(endpoint);
+
+                    return (
+                      <tr key={endpoint.key}>
+                        <td>
+                          <Text size="sm" weight={600}>
+                            {endpoint.name || endpoint.key}
+                          </Text>
+                          <Text size="xs" color="dimmed" ff="monospace">
+                            {connection.key}/{endpoint.key}
+                          </Text>
+                        </td>
+                        <td>{kind === 'target' ? 'Target' : 'Event source'}</td>
+                        <td>
+                          <Code>{endpointSummary(ref)}</Code>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </Table>
             )}
@@ -101,7 +108,7 @@ export function ConnectionShow() {
             {(usages.data ?? []).length === 0 ? (
               <Text size="sm" color="dimmed">
                 No jobs use this connection yet. Pick it in a job&apos;s &ldquo;Where it goes&rdquo;
-                section.
+                section, or in &ldquo;When it runs&rdquo; for a queue or topic consumer.
               </Text>
             ) : (
               <Table className="ct-table" verticalSpacing="xs" fontSize="sm">

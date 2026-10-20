@@ -4,31 +4,24 @@ import {
   ReceiveMessageCommand,
   SQSClient,
 } from '@aws-sdk/client-sqs';
-import { defineEventSource } from '@cloud-trigger/core';
+import { defineInlineConnectedEventSource } from '@cloud-trigger/core';
 import { z } from 'zod';
 
-import {
-  AwsConnection,
-  PAIRED_CREDENTIALS,
-  clientCache,
-  hasPairedCredentials,
-  resolveClientConfig,
-} from '../shared.js';
+import { awsConnection } from '../connection.js';
+import { AwsConnection, clientCache, resolveClientConfig } from '../shared.js';
 
-export const SqsSourceConfig = z
-  .object({
-    queueUrl: z.url(),
-    ...AwsConnection,
-    waitTimeSeconds: z.int().min(0).max(20).default(20).describe('Long-poll wait per receive.'),
-    maxMessages: z.int().min(1).max(10).default(10),
-    visibilityTimeoutSeconds: z
-      .int()
-      .min(0)
-      .max(43_200)
-      .optional()
-      .describe('How long a message stays hidden while its run is being queued.'),
-  })
-  .refine(hasPairedCredentials, PAIRED_CREDENTIALS);
+export const SqsSourceConfig = z.object({
+  queueUrl: z.url(),
+  ...AwsConnection,
+  waitTimeSeconds: z.int().min(0).max(20).default(20).describe('Long-poll wait per receive.'),
+  maxMessages: z.int().min(1).max(10).default(10),
+  visibilityTimeoutSeconds: z
+    .int()
+    .min(0)
+    .max(43_200)
+    .optional()
+    .describe('How long a message stays hidden while its run is being queued.'),
+});
 
 const sqsClient = clientCache((config) => new SQSClient({ ...config, maxAttempts: 3 }));
 
@@ -43,17 +36,18 @@ const headersOf = (message: Message): Record<string, string> => ({
   }),
 });
 
-export const sqsSource = defineEventSource({
+export const sqsSource = defineInlineConnectedEventSource({
   type: 'sqs',
   displayName: 'Amazon SQS queue',
   description:
     'Runs once per message. A message is deleted only after its run is queued, so delivery is at least once and deduplicated by message id.',
   configSchema: SqsSourceConfig,
+  connection: awsConnection,
   exclusive: true,
   describe: (config) =>
     `On SQS message from ${config.queueUrl.split('/').at(-1) ?? config.queueUrl}`,
-  async subscribe(config, { signal, secrets, emit }) {
-    const clientConfig = await resolveClientConfig(config, secrets);
+  async subscribe(config, { signal, secrets, emit, connection }) {
+    const clientConfig = await resolveClientConfig(connection.config, secrets);
     if (clientConfig.isErr()) {
       throw new Error(clientConfig.error.message);
     }

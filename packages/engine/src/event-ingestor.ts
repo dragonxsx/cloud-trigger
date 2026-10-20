@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import {
+  type ConnectionRepository,
   type BoundTrigger,
   type Clock,
   type DomainError,
@@ -26,12 +27,14 @@ import {
   ok,
 } from '@cloud-trigger/core';
 
+import { loadTrigger } from './config-validation.js';
 import { PolicyResolver } from './policies.js';
 
 export interface EventIngestorDeps {
   readonly jobs: JobRepository;
   readonly runs: RunRepository;
   readonly registry: ProviderRegistry;
+  readonly connections?: ConnectionRepository | undefined;
   readonly secrets: SecretResolver;
   readonly clock: Clock;
   readonly logger: Logger;
@@ -106,10 +109,8 @@ export class EventIngestor {
     return ok({ runId: inserted.value.id, duplicate: false });
   }
 
-  #bindTrigger(job: Job): BoundTrigger | undefined {
-    const bound = this.deps.registry
-      .get('trigger', job.trigger.type)
-      .andThen((provider) => provider.bind(job.trigger.config));
+  async #bindTrigger(job: Job): Promise<BoundTrigger | undefined> {
+    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
 
     return bound.isOk() ? bound.value : undefined;
   }
@@ -120,7 +121,7 @@ export class EventIngestor {
   ): Promise<Result<Ingested, WebhookError>> {
     const notFound: NotFoundError = { code: 'not_found', message: 'No webhook at this address' };
     const job = await this.deps.jobs.get(jobId);
-    const trigger = job && this.#bindTrigger(job);
+    const trigger = job && (await this.#bindTrigger(job));
     if (!job || !trigger?.inbound) {
       return err(notFound);
     }

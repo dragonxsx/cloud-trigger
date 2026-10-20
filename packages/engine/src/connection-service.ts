@@ -25,11 +25,13 @@ import {
   newConnectionId,
   notFound,
   ok,
+  endpointProvider,
   resolveTarget,
+  resolveTrigger,
   toError,
 } from '@cloud-trigger/core';
 
-import { loadConnections } from './config-validation.js';
+import { bindJob, loadConnections } from './config-validation.js';
 
 export interface ConnectionServiceDeps {
   readonly connections: ConnectionRepository;
@@ -95,20 +97,26 @@ export class ConnectionService {
     });
     const catalog = connectionCatalog([draft]);
     const issues = spec.endpoints.flatMap((endpoint, index) => {
-      const resolved = resolveTarget(
-        this.deps.registry,
-        { ...endpoint.target, connection: { key: spec.key } },
-        catalog,
-      );
+      const { kind, ref } = endpointProvider(endpoint);
+      const field = kind === 'target' ? 'target' : 'source';
+      const connection = { key: spec.key };
+      const resolved =
+        kind === 'target'
+          ? resolveTarget(this.deps.registry, { ...ref, connection }, catalog).map(() => [])
+          : resolveTrigger(this.deps.registry, { ...ref, connection }, catalog).map(
+              ({ trigger }) =>
+                trigger.source
+                  ? []
+                  : [{ path: 'type', message: `Trigger "${ref.type}" is not an event source` }],
+            );
+      const found = resolved.isOk() ? resolved.value : resolved.error.issues;
 
-      return resolved.isOk()
-        ? []
-        : resolved.error.issues.map((issue) => ({
-            path: issue.path.startsWith('connection')
-              ? `endpoints.${index}.target.type`
-              : `endpoints.${index}.target.${issue.path}`,
-            message: issue.message,
-          }));
+      return found.map((issue) => ({
+        path: issue.path.startsWith('connection')
+          ? `endpoints.${index}.${field}.type`
+          : `endpoints.${index}.${field}.${issue.path}`,
+        message: issue.message,
+      }));
     });
 
     return issues.length === 0 ? ok(spec) : err(invalid(issues));
@@ -204,13 +212,15 @@ export class ConnectionService {
     for (const job of jobs) {
       const loaded = await loadConnections(this.deps.connections, job.connectionRefs);
       const catalog = new Map(loaded).set(next.key, next);
-      const resolved = resolveTarget(this.deps.registry, job.target, catalog);
+      const resolved = bindJob(this.deps.registry, job, catalog);
       if (resolved.isErr()) {
         issues.push(
-          ...resolved.error.issues.map((issue) => ({
-            path: 'endpoints',
-            message: `Job "${job.name}" would break: target.${issue.path}: ${issue.message}`,
-          })),
+          ...resolved.error.issues
+            .filter((issue) => issue.path.startsWith('trigger') || issue.path.startsWith('target'))
+            .map((issue) => ({
+              path: 'endpoints',
+              message: `Job "${job.name}" would break: ${issue.path}: ${issue.message}`,
+            })),
         );
       }
     }

@@ -50,7 +50,7 @@ export type KafkaConnection = z.output<typeof KafkaConnectionConfig>;
 export const kafkaConnection = defineConnection({
   type: 'kafka',
   displayName: 'Kafka cluster',
-  description: 'Brokers, SASL and TLS shared by Kafka targets.',
+  description: 'Brokers, SASL and TLS shared by Kafka targets and topic consumers.',
   configSchema: KafkaConnectionConfig,
   async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
     const options = await resolveConnection(config, secrets);

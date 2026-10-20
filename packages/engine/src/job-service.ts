@@ -39,10 +39,10 @@ import {
   newRunId,
   ok,
   successDeadlineAfter,
-  targetConnectionRefs,
+  jobConnectionRefs,
 } from '@cloud-trigger/core';
 
-import { bindJob, bindTrigger, loadConnections } from './config-validation.js';
+import { bindJob, loadConnections, loadTrigger } from './config-validation.js';
 import { DecisionRecorder } from './decisions.js';
 import { type Explanation, explain } from './explain.js';
 import { upcomingFireTimes } from './fire-plan.js';
@@ -120,7 +120,7 @@ export class JobService {
     const decisions = this.deps.decisions
       ? await this.deps.decisions.listRecent(id, { before: before ?? now, limit: 20 })
       : [];
-    const bound = bindTrigger(this.deps.registry, job);
+    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
     const wouldFireAt = bound.isOk()
       ? bound.value.nextFireAt({
           after: now,
@@ -228,7 +228,7 @@ export class JobService {
     if (!parsed.success) {
       return err(configErrorFromZod(parsed.error));
     }
-    const connectionRefs = targetConnectionRefs(this.deps.registry, parsed.data.target);
+    const connectionRefs = jobConnectionRefs(this.deps.registry, parsed.data);
     const connections = await loadConnections(this.deps.connections, connectionRefs);
     const now = this.deps.clock.now();
 
@@ -400,7 +400,7 @@ export class JobService {
     if (!job) {
       return err(notFound('Job', id));
     }
-    const bound = bindTrigger(this.deps.registry, job);
+    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
     if (bound.isErr()) {
       return err(bound.error);
     }
@@ -488,7 +488,7 @@ export class JobService {
     if (p.to.getTime() <= p.from.getTime()) {
       return err(invalidBackfill('to', 'Must be after "from"'));
     }
-    const bound = bindTrigger(this.deps.registry, job);
+    const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
     if (bound.isErr()) {
       return err(bound.error);
     }
@@ -558,7 +558,7 @@ export class JobService {
         cursor,
       });
       for (const job of page.items.filter((j) => j.pausedReason === null)) {
-        const bound = bindTrigger(this.deps.registry, job);
+        const bound = await loadTrigger(this.deps.registry, this.deps.connections, job);
         if (bound.isErr() || bound.value.matches) {
           continue;
         }

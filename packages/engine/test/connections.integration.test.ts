@@ -1,16 +1,27 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import {
   type Clock,
   type JobId,
   type Persistence,
   ProviderRegistry,
+  defineConnection,
+  defineInlineConnectedEventSource,
   mapSecretResolver,
   silentLogger,
 } from '@cloud-trigger/core';
 import { builtinProviders, createFanoutTarget } from '@cloud-trigger/providers-builtin';
 import { type TestHttpServer, startTestHttpServer } from '@cloud-trigger/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
-import { ConnectionService, JobService, Worker } from '../src/index.js';
+import {
+  ConnectionService,
+  ConsumerSupervisor,
+  EventIngestor,
+  JobService,
+  Worker,
+} from '../src/index.js';
 import { type TestDatabase, startTestDatabase } from './databases.js';
 
 let database: TestDatabase;
@@ -20,6 +31,30 @@ let server: TestHttpServer;
 const clock: Clock = { now: () => new Date('2026-03-01T00:00:00.000Z') };
 const registry = new ProviderRegistry().use(builtinProviders);
 registry.register(createFanoutTarget(registry));
+
+const broker = defineConnection({
+  type: 'broker',
+  displayName: 'Broker',
+  configSchema: z.object({ url: z.url() }),
+});
+const subscriptions: string[] = [];
+const tail = defineInlineConnectedEventSource({
+  type: 'tail',
+  displayName: 'Tail',
+  connection: broker,
+  configSchema: z.object({
+    ...broker.configSchema.partial().shape,
+    topic: z.string().min(1),
+    group: z.string().default('main'),
+  }),
+  exclusive: false,
+  describe: (config) => `On ${config.topic}`,
+  async subscribe(config, { signal, connection }) {
+    subscriptions.push(`${connection.config.url}/${config.topic}#${config.group}`);
+    await sleep(60_000, undefined, { signal }).catch(() => undefined);
+  },
+});
+registry.register(broker, tail);
 const secrets = mapSecretResolver({ BILLING_TOKEN: 'tok' });
 
 beforeAll(async () => {
@@ -36,6 +71,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  subscriptions.length = 0;
   await database.clear([
     'jobs',
     'job_tags',
@@ -58,6 +94,19 @@ const worker = () =>
       leaseMs: 30_000,
       bufferedRequeueDelayMs: 1_000,
     },
+  );
+
+const consumers = () =>
+  new ConsumerSupervisor(
+    {
+      ...db,
+      registry,
+      secrets,
+      clock,
+      logger: silentLogger,
+      ingestor: new EventIngestor({ ...db, registry, secrets, clock, logger: silentLogger }),
+    },
+    { ownerId: 'c1', intervalMs: 50, leaseMs: 1_000, restartDelayMs: 20 },
   );
 
 const billing = (baseUrl: string, endpoints: unknown[] = [charge]) => ({
@@ -209,5 +258,106 @@ describe('connections', () => {
     expect(tested._unsafeUnwrap()._unsafeUnwrap().message).toMatch(/HTTP 200/);
     const rejected = await connections().test({ type: 'http', config: { baseUrl: server.url } });
     expect(rejected._unsafeUnwrap()._unsafeUnwrapErr().message).toMatch(/rejected/);
+  });
+
+  describe('event sources', () => {
+    const events = (endpoints: unknown[] = [orders]) => ({
+      key: 'events',
+      type: 'broker',
+      config: { url: 'https://broker.test' },
+      endpoints,
+    });
+    const orders = { key: 'orders', source: { type: 'tail', config: { topic: 'orders' } } };
+    const ordersJob = {
+      name: 'on order',
+      trigger: {
+        type: 'tail',
+        connection: { key: 'events', endpoint: 'orders' },
+        config: { group: 'billing' },
+      },
+      target: { type: 'http', connection: { key: 'billing' }, config: { url: '/orders' } },
+    };
+    it('subscribes over the connection and resubscribes when it changes', async () => {
+      (await connections().create(billing(server.url)))._unsafeUnwrap();
+      const created = (await connections().create(events()))._unsafeUnwrap();
+      const job = (await jobs().create(ordersJob))._unsafeUnwrap();
+      expect(job.connectionRefs).toEqual([
+        { key: 'events', endpoint: 'orders' },
+        { key: 'billing' },
+      ]);
+      expect(job.eventSource).toBe('tail');
+
+      const consumer = consumers();
+      try {
+        await consumer.tick();
+        await consumer.tick();
+        expect(subscriptions).toEqual(['https://broker.test/orders#billing']);
+
+        (
+          await connections().update(
+            'events',
+            { ...events(), config: { url: 'https://broker-2.test' } },
+            created.version,
+          )
+        )._unsafeUnwrap();
+        await consumer.tick();
+        expect(subscriptions).toEqual([
+          'https://broker.test/orders#billing',
+          'https://broker-2.test/orders#billing',
+        ]);
+      } finally {
+        await consumer.stop();
+      }
+    });
+
+    it('validates source endpoints against the connection', async () => {
+      const invalid = await connections().create(
+        events([
+          { key: 'bad', source: { type: 'tail', config: {} } },
+          { key: 'cron', source: { type: 'manual', config: {} } },
+          {
+            key: 'inline',
+            source: { type: 'tail', config: { topic: 't', url: 'https://x.test' } },
+          },
+        ]),
+      );
+      expect(invalid._unsafeUnwrapErr()).toMatchObject({
+        code: 'invalid_config',
+        issues: [
+          { path: 'endpoints.0.source.config.topic' },
+          { path: 'endpoints.1.source.type' },
+          { path: 'endpoints.2.source.config.url' },
+        ],
+      });
+    });
+
+    it('rejects a target endpoint as a trigger and protects used source endpoints', async () => {
+      (await connections().create(billing(server.url)))._unsafeUnwrap();
+      const created = (await connections().create(events()))._unsafeUnwrap();
+      const wrongKind = await jobs().create({
+        ...ordersJob,
+        trigger: { type: 'tail', connection: { key: 'billing', endpoint: 'charge' }, config: {} },
+      });
+      expect(wrongKind._unsafeUnwrapErr().issues.map((i) => i.path)).toEqual([
+        'trigger.connection.key',
+      ]);
+      const job = (await jobs().create(ordersJob))._unsafeUnwrap();
+
+      const broken = await connections().update('events', events([]), created.version);
+      expect(broken._unsafeUnwrapErr()).toMatchObject({
+        issues: [
+          {
+            path: 'endpoints',
+            message:
+              'Job "on order" would break: trigger.connection.endpoint: Connection "events" has no endpoint "orders"',
+          },
+        ],
+      });
+      expect((await connections().delete('events'))._unsafeUnwrapErr()).toMatchObject({
+        code: 'connection_in_use',
+        jobIds: [job.id],
+      });
+      expect((await jobs().resume(job.id)).isOk()).toBe(true);
+    });
   });
 });

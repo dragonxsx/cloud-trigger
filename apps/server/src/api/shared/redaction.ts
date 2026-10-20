@@ -10,6 +10,8 @@ import {
   type WorkflowNode,
   type WorkflowRun,
   type WorkflowSpec,
+  endpointProvider,
+  withEndpointProvider,
   type JsonSchema,
   type NotificationDelivery,
   type ProviderKind,
@@ -174,10 +176,11 @@ export class JobRedactor {
     return {
       ...connection,
       config: this.#redactRef('connection', connection),
-      endpoints: connection.endpoints.map((endpoint) => ({
-        ...endpoint,
-        target: { ...endpoint.target, config: this.#redactRef('target', endpoint.target) },
-      })),
+      endpoints: connection.endpoints.map((endpoint) => {
+        const { kind, ref } = endpointProvider(endpoint);
+
+        return withEndpointProvider(endpoint, { ...ref, config: this.#redactRef(kind, ref) });
+      }),
     };
   }
 
@@ -186,20 +189,15 @@ export class JobRedactor {
       ...next,
       config: this.restoreConnectionConfig(next, previous),
       endpoints: next.endpoints.map((endpoint) => {
-        const before = previous.endpoints.find((candidate) => candidate.key === endpoint.key);
+        const { kind, ref } = endpointProvider(endpoint);
+        const found = previous.endpoints.find((candidate) => candidate.key === endpoint.key);
+        const before = found && endpointProvider(found);
 
-        return before && before.target.type === endpoint.target.type
-          ? {
-              ...endpoint,
-              target: {
-                ...endpoint.target,
-                config: restoreRedacted(
-                  this.#schema('target', endpoint.target.type),
-                  endpoint.target.config,
-                  before.target.config,
-                ),
-              },
-            }
+        return before && before.kind === kind && before.ref.type === ref.type
+          ? withEndpointProvider(endpoint, {
+              ...ref,
+              config: restoreRedacted(this.#schema(kind, ref.type), ref.config, before.ref.config),
+            })
           : endpoint;
       }),
     };

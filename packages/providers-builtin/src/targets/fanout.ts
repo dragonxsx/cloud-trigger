@@ -4,7 +4,7 @@ import {
   type FanoutChild,
   type JsonSchema,
   type ProviderRegistry,
-  TargetConnectionRef,
+  ConnectionRef,
   type TargetProvider,
   type TargetResult,
   abortedResult,
@@ -20,7 +20,7 @@ const MAX_CHILDREN = 20;
 const ChildRef = z.object({
   type: z.string().min(1),
   name: z.string().max(100).optional(),
-  connection: TargetConnectionRef.optional(),
+  connection: ConnectionRef.optional(),
   config: z.unknown(),
 });
 
@@ -73,7 +73,7 @@ const childSchemas = (registry: ProviderRegistry): JsonSchema[] =>
         type: { type: 'string', const: provider.type, default: provider.type },
         name: { type: 'string', maxLength: 100, description: 'Label shown in run details.' },
         ...(provider.connectionType !== undefined && {
-          connection: z.toJSONSchema(TargetConnectionRef, { io: 'input' }),
+          connection: z.toJSONSchema(ConnectionRef, { io: 'input' }),
         }),
         config: provider.jsonSchema(),
       },

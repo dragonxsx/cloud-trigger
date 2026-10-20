@@ -10,14 +10,22 @@ import {
 import { ConnectionId } from '../domain/ids.js';
 import type { TargetResult } from '../domain/target-result.js';
 import { mapSecretResolver } from '../shared/secret-resolver.js';
-import { resolveTarget, targetConnectionRefs } from './connections.js';
+import {
+  jobConnectionRefs,
+  resolveTarget,
+  resolveTrigger,
+  targetConnectionRefs,
+} from './connections.js';
 import { ProviderRegistry } from './registry.js';
 import {
+  type SourceMessage,
   type TargetRequest,
   defineConnectedTarget,
   defineConnection,
+  defineInlineConnectedEventSource,
   defineInlineConnectedTarget,
   defineTarget,
+  defineTrigger,
   secret,
 } from './sdk.js';
 
@@ -59,7 +67,35 @@ const plain = defineTarget({
   execute: async (): Promise<TargetResult> => ({ outcome: 'success', durationMs: 0 }),
 });
 
-const registry = new ProviderRegistry().register(api, call, plain);
+const poll = defineInlineConnectedEventSource({
+  type: 'poll',
+  displayName: 'Poll',
+  connection: api,
+  configSchema: z.object({
+    ...api.configSchema.partial().shape,
+    feed: z.string(),
+    batch: z.int().default(10),
+  }),
+  exclusive: true,
+  describe: (config) => `On ${config.feed}`,
+  async subscribe(config, { emit, connection }) {
+    await emit({
+      id: `${connection.key}@${connection.version}`,
+      body: `${connection.config.baseUrl}${config.feed}?batch=${config.batch}`,
+      headers: {},
+    });
+  },
+});
+
+const tick = defineTrigger({
+  type: 'tick',
+  displayName: 'Tick',
+  configSchema: z.object({}),
+  nextFireAt: () => null,
+  describe: () => 'Never',
+});
+
+const registry = new ProviderRegistry().register(api, call, plain, poll, tick);
 
 const billing: Connection = {
   id: ConnectionId.parse('01890a5d-ac96-774b-bcce-b302099a8057'),
@@ -77,6 +113,12 @@ const billing: Connection = {
         type: 'call',
         config: { method: 'POST', path: '/charges', headers: { a: '1', b: '2' } },
       },
+    },
+    {
+      key: 'invoices',
+      name: '',
+      description: '',
+      source: { type: 'poll', config: { feed: '/invoices', batch: 5 } },
     },
   ],
   version: 3,
@@ -206,6 +248,138 @@ describe('resolveTarget', () => {
   });
 });
 
+const received = async (resolved: ReturnType<typeof resolveTrigger>) => {
+  const messages: SourceMessage[] = [];
+  await resolved._unsafeUnwrap().trigger.source?.subscribe({
+    signal: AbortSignal.timeout(1_000),
+    secrets: mapSecretResolver({}),
+    jobId: 'j',
+    emit: async (message) => {
+      messages.push(message);
+    },
+  });
+
+  return messages.map(({ id, body }) => ({ id, body }));
+};
+
+const triggerIssues = (ref: Parameters<typeof resolveTrigger>[1]) => {
+  const result = resolveTrigger(registry, ref, catalog);
+
+  return result.isErr() ? result.error.issues : [];
+};
+
+describe('resolveTrigger', () => {
+  it('consumes over a saved connection', async () => {
+    const resolved = resolveTrigger(
+      registry,
+      { type: 'poll', connection: { key: 'billing' }, config: { feed: '/events' } },
+      catalog,
+    );
+    expect(resolved._unsafeUnwrap().connection).toEqual({
+      key: 'billing',
+      endpoint: undefined,
+      version: 3,
+    });
+    expect(await received(resolved)).toEqual([
+      { id: 'billing@3', body: 'https://billing.test/v1/events?batch=10' },
+    ]);
+  });
+
+  it('runs a source endpoint with the trigger config as a merge patch', async () => {
+    expect(
+      await received(
+        resolveTrigger(
+          registry,
+          {
+            type: 'poll',
+            connection: { key: 'billing', endpoint: 'invoices' },
+            config: { batch: 50 },
+          },
+          catalog,
+        ),
+      ),
+    ).toEqual([{ id: 'billing@3', body: 'https://billing.test/v1/invoices?batch=50' }]);
+  });
+
+  it('keeps inline sources working without a connection', async () => {
+    expect(
+      await received(
+        resolveTrigger(
+          registry,
+          { type: 'poll', config: { feed: '/x', baseUrl: 'https://inline.test' } },
+          catalog,
+        ),
+      ),
+    ).toEqual([{ id: '@0', body: 'https://inline.test/x?batch=10' }]);
+  });
+
+  it('reports each reference problem at its path', () => {
+    expect(
+      triggerIssues({
+        type: 'poll',
+        connection: { key: 'billing' },
+        config: { feed: '/x', baseUrl: 'https://other.test' },
+      }),
+    ).toEqual([{ path: 'config.baseUrl', message: 'Set on the "billing" connection instead' }]);
+    expect(
+      triggerIssues({
+        type: 'poll',
+        connection: { key: 'billing', endpoint: 'charge' },
+        config: {},
+      }),
+    ).toEqual([
+      { path: 'connection.endpoint', message: 'Endpoint "billing/charge" is a target endpoint' },
+    ]);
+    expect(
+      triggerIssues({
+        type: 'call',
+        connection: { key: 'billing', endpoint: 'invoices' },
+        config: {},
+      }),
+    ).toEqual([{ path: 'type', message: 'No trigger provider registered for type "call"' }]);
+    expect(triggerIssues({ type: 'poll', connection: { key: 'nope' }, config: {} })).toEqual([
+      { path: 'connection.key', message: 'No connection named "nope"' },
+    ]);
+    expect(triggerIssues({ type: 'tick', connection: { key: 'billing' }, config: {} })).toEqual([
+      { path: 'connection', message: 'Trigger "tick" does not use connections' },
+    ]);
+    expect(
+      triggerIssues({ type: 'poll', config: { feed: '/x' } }).map((issue) => issue.path),
+    ).toEqual(['config.baseUrl']);
+  });
+
+  it('rejects a target endpoint used as a source', () => {
+    const result = resolveTarget(
+      registry,
+      { type: 'call', connection: { key: 'billing', endpoint: 'invoices' }, config: undefined },
+      catalog,
+    );
+    expect(result.isErr() ? result.error.issues : []).toEqual([
+      {
+        path: 'connection.endpoint',
+        message: 'Endpoint "billing/invoices" is an event source endpoint',
+      },
+    ]);
+  });
+});
+
+describe('jobConnectionRefs', () => {
+  it('merges the trigger and target references', () => {
+    expect(
+      jobConnectionRefs(registry, {
+        trigger: { connection: { key: 'billing', endpoint: 'invoices' } },
+        target: { type: 'call', connection: { key: 'billing' }, config: {} },
+      }),
+    ).toEqual([{ key: 'billing', endpoint: 'invoices' }, { key: 'billing' }]);
+    expect(
+      jobConnectionRefs(registry, {
+        trigger: { connection: { key: 'billing' } },
+        target: { type: 'call', connection: { key: 'billing' }, config: {} },
+      }),
+    ).toEqual([{ key: 'billing' }]);
+  });
+});
+
 describe('targetConnectionRefs', () => {
   it('collects the own reference and the ones a provider reports', () => {
     const fan = defineTarget({
@@ -245,5 +419,12 @@ describe('ProviderRegistry.list', () => {
 
     expect(listed.find((p) => p.type === 'inline')?.connectionFields).toEqual(['baseUrl', 'token']);
     expect(listed.find((p) => p.type === 'call')?.connectionFields).toBeUndefined();
+  });
+
+  it('lists the connection of an inline-connected event source', () => {
+    expect(registry.list('trigger').find((p) => p.type === 'poll')).toMatchObject({
+      connectionType: 'api',
+      connectionFields: ['baseUrl', 'token'],
+    });
   });
 });

@@ -1,6 +1,6 @@
 import type { Result } from 'neverthrow';
 
-import type { TargetConnectionRef } from '../domain/connection.js';
+import type { ConnectionRef } from '../domain/connection.js';
 import type { GroupId, JobId } from '../domain/ids.js';
 import type { Job, JobSpec, ScheduleState } from '../domain/job.js';
 import type { PendingRun } from '../domain/run.js';
@@ -19,7 +19,7 @@ export interface JobUpdate {
   readonly spec: JobSpec;
   readonly updatedAt: Date;
   readonly upstreamJobIds?: readonly JobId[] | undefined;
-  readonly connectionRefs?: readonly TargetConnectionRef[] | undefined;
+  readonly connectionRefs?: readonly ConnectionRef[] | undefined;
   readonly eventSource?: string | null | undefined;
   /** Applied only while the stored schedule still matches `basedOn`. */
   readonly reschedule?:
@@ -50,7 +50,7 @@ export interface JobRepository {
   /** Atomically increments `consecutiveFailures` and pauses the job once it reaches `pauseAfter`. */
   recordFailure(id: JobId, p: { pauseAfter?: number | undefined }): Promise<void>;
   findDependants(jobId: JobId): Promise<readonly Job[]>;
-  /** Jobs whose target uses the connection, or one of its endpoints when `endpoint` is given. */
+  /** Jobs whose trigger or target uses the connection, or one of its endpoints when `endpoint` is given. */
   findByConnection(key: string, endpoint?: string): Promise<readonly Job[]>;
   /** Jobs whose trigger is a long-lived event source, enabled or not. */
   findEventSourced(): Promise<readonly Job[]>;

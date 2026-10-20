@@ -11,13 +11,15 @@ import {
   type ProviderRef,
   type ProviderRegistry,
   type ResolvedTarget,
+  type ResolvedTrigger,
   type Result,
-  type TargetConnectionRef,
+  type ConnectionRef,
   connectionCatalog,
   emptyConnectionCatalog,
   err,
   ok,
   resolveTarget,
+  resolveTrigger,
 } from '@cloud-trigger/core';
 
 export interface BoundJob {
@@ -56,10 +58,21 @@ function bindRef<K extends ProviderKind>(
     );
 }
 
+export const resolveJobTrigger = (
+  registry: ProviderRegistry,
+  spec: Pick<JobSpec, 'trigger'>,
+  connections: ConnectionCatalog,
+): Result<ResolvedTrigger, ConfigError> =>
+  resolveTrigger(registry, spec.trigger, connections).mapErr((e) =>
+    invalidJob(prefixed('trigger', e.issues)),
+  );
+
 export const bindTrigger = (
   registry: ProviderRegistry,
   spec: Pick<JobSpec, 'trigger'>,
-): Result<BoundTrigger, ConfigError> => bindRef(registry, 'trigger', spec.trigger, 'trigger');
+  connections: ConnectionCatalog,
+): Result<BoundTrigger, ConfigError> =>
+  resolveJobTrigger(registry, spec, connections).map(({ trigger }) => trigger);
 
 export function bindJob(
   registry: ProviderRegistry,
@@ -76,7 +89,7 @@ export function bindJob(
     return undefined;
   };
 
-  const trigger = collect(bindTrigger(registry, spec));
+  const trigger = collect(resolveJobTrigger(registry, spec, connections));
   const input = collect(bindRef(registry, 'input', spec.input, 'input'));
   const target = collect(
     resolveTarget(registry, spec.target, connections).mapErr((e) =>
@@ -89,7 +102,7 @@ export function bindJob(
 
   if (trigger && input && target && issues.length === 0) {
     return ok({
-      trigger,
+      trigger: trigger.trigger,
       input,
       target: target.target,
       connection: target.connection,
@@ -102,7 +115,7 @@ export function bindJob(
 
 export async function loadConnections(
   repository: ConnectionRepository | undefined,
-  refs: readonly TargetConnectionRef[],
+  refs: readonly ConnectionRef[],
 ): Promise<ConnectionCatalog> {
   const keys = [...new Set(refs.map((ref) => ref.key))];
   if (!repository || keys.length === 0) {
@@ -110,4 +123,14 @@ export async function loadConnections(
   }
 
   return connectionCatalog(await repository.getMany(keys));
+}
+
+export async function loadTrigger(
+  registry: ProviderRegistry,
+  repository: ConnectionRepository | undefined,
+  spec: Pick<JobSpec, 'trigger'>,
+): Promise<Result<BoundTrigger, ConfigError>> {
+  const refs = spec.trigger.connection ? [spec.trigger.connection] : [];
+
+  return bindTrigger(registry, spec, await loadConnections(repository, refs));
 }
