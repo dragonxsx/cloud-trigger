@@ -166,12 +166,22 @@ function HeaderActions() {
 }
 
 export function App() {
-  const preferred = useColorScheme();
-  const [colorScheme, setColorScheme] = useLocalStorage<'light' | 'dark'>({
-    key: 'cloud-trigger.color-scheme',
-    defaultValue: preferred,
+  const system = useColorScheme(undefined, { getInitialValueInEffect: false });
+  const [override, setOverride, clearOverride] = useLocalStorage<'light' | 'dark' | undefined>({
+    key: 'cloud-trigger.theme-override',
+    defaultValue: undefined,
+    getInitialValueInEffect: false,
+    deserialize: (raw) => (raw === '"light"' ? 'light' : raw === '"dark"' ? 'dark' : undefined),
   });
-  const toggle = () => setColorScheme(colorScheme === 'dark' ? 'light' : 'dark');
+  const colorScheme = override ?? system;
+  const toggle = () => {
+    const next = colorScheme === 'dark' ? 'light' : 'dark';
+    if (next === system) {
+      clearOverride();
+    } else {
+      setOverride(next);
+    }
+  };
   useEffect(() => {
     document.documentElement.dataset['theme'] = colorScheme;
   }, [colorScheme]);
