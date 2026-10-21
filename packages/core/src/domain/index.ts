@@ -15,3 +15,4 @@ export * from './workflow.js';
 export * from './workflow-run.js';
 export * from './auth.js';
 export * from './endpoint-import.js';
+export { slugKey } from './slug.js';

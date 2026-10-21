@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sindresorhus/slugify": "3.0.1",
     "defu": "6.1.7",
     "neverthrow": "8.2.0",
     "safe-stable-stringify": "3.0.0",

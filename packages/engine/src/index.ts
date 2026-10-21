@@ -25,3 +25,4 @@ export * from './worker.js';
 export * from './workflow-monitor.js';
 export * from './workflow-runtime.js';
 export * from './workflow-service.js';
+export * from './connection-extractor.js';

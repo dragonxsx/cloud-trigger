@@ -1,4 +1,5 @@
 import {
+  BASE_URL_OPTION,
   type Connected,
   type ConnectionTestResult,
   Result,
@@ -222,6 +223,7 @@ export const grpcConnection = defineConnection({
   displayName: 'gRPC server',
   description: 'Address, TLS and metadata shared by gRPC targets.',
   configSchema: GrpcConnectionConfig,
+  address: (config) => config.address,
   async test(config, { secrets, signal }): Promise<ConnectionTestResult> {
     const key =
       config.tls.key === undefined ? okAsync(undefined) : interpolate(secrets, config.tls.key);
@@ -260,6 +262,8 @@ const channelOf = (
         secretMetadata: config.secretMetadata,
       };
 
+const CHANNEL_FIELDS = new Set(['address', 'tls', 'secretMetadata']);
+
 export const grpcTarget = defineConnectedTarget({
   type: 'grpc',
   displayName: 'gRPC call',
@@ -276,6 +280,27 @@ export const grpcTarget = defineConnectedTarget({
         ? []
         : [{ path: field, message: `Set on the "${connection.key}" connection instead` }],
     );
+  },
+  extractConnection: (config, raw, { baseUrl }) => {
+    if (baseUrl !== undefined) {
+      return err([{ path: BASE_URL_OPTION, message: 'Only HTTP connections take a base URL' }]);
+    }
+    if (config.address === undefined) {
+      return err([{ path: 'address', message: 'Required' }]);
+    }
+    const rest = Object.entries(raw).filter(([field]) => !CHANNEL_FIELDS.has(field));
+
+    return ok({
+      connection: {
+        address: config.address,
+        ...(raw['tls'] !== undefined && { tls: raw['tls'] }),
+        ...(Object.keys(config.secretMetadata).length > 0 && {
+          secretMetadata: config.secretMetadata,
+        }),
+      },
+      config: Object.fromEntries(rest),
+      suggestedName: config.address.replace(/:\d+$/, ''),
+    });
   },
   async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();

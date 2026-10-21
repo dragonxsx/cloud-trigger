@@ -1,4 +1,4 @@
-import { JobService, JobTransfer } from '@cloud-trigger/engine';
+import { ConnectionExtractor, JobService, JobTransfer } from '@cloud-trigger/engine';
 import { Module } from '@nestjs/common';
 
 import { factoryProvider } from '../../common/tokens.js';
@@ -13,9 +13,18 @@ import { JobsRouter, jobsHandlers } from './jobs.router.js';
   providers: [
     factoryProvider(
       JobsRouter,
-      [ORPC_API, PERSISTENCE, JobService, JobTransfer, JobRedactor],
-      (api, persistence, jobService, jobTransfer, redactor) =>
-        new JobsRouter(jobsHandlers({ api, persistence, jobService, jobTransfer, redactor })),
+      [ORPC_API, PERSISTENCE, JobService, JobTransfer, ConnectionExtractor, JobRedactor],
+      (api, persistence, jobService, jobTransfer, connectionExtractor, redactor) =>
+        new JobsRouter(
+          jobsHandlers({
+            api,
+            persistence,
+            jobService,
+            jobTransfer,
+            connectionExtractor,
+            redactor,
+          }),
+        ),
     ),
   ],
   exports: [JobsRouter],

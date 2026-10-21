@@ -15,7 +15,12 @@ import { parse } from 'graphql';
 import { request } from 'undici';
 import { z } from 'zod';
 
-import { httpConnection, prepareRequest, urlIssues } from '../connections/http.js';
+import {
+  httpConnection,
+  prepareRequest,
+  splitHttpConnection,
+  urlIssues,
+} from '../connections/http.js';
 import { templateScope } from '../inputs/template.js';
 import { dispatcherFor, errorCode, flattenHeaders, readLimited } from '../shared/http-client.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
@@ -122,6 +127,7 @@ export const graphqlTarget = defineConnectedTarget({
   configSchema: GraphqlTargetConfig,
   connection: httpConnection,
   check: (config, connection) => urlIssues(config.url, connection),
+  extractConnection: (config, raw, { baseUrl }) => splitHttpConnection(config, raw, baseUrl),
   async execute(config, { payload, ctx, signal, connection }): Promise<TargetResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;

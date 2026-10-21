@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { assertNever } from '../shared/assert-never.js';
 import { mergePatch } from '../shared/merge-patch.js';
 import { EnvironmentKey } from './environment.js';
 import { ConnectionId } from './ids.js';
@@ -63,6 +64,23 @@ export const withEndpointProvider = (endpoint: Endpoint, ref: ProviderRef): Endp
   }
 
   return 'source' in endpoint ? { ...endpoint, source: ref } : { ...endpoint, notifier: ref };
+};
+
+export const newEndpoint = (
+  kind: EndpointKind,
+  fields: { readonly key: string; readonly name: string; readonly description: string },
+  ref: ProviderRef,
+): Endpoint => {
+  switch (kind) {
+    case 'target':
+      return { ...fields, target: ref };
+    case 'trigger':
+      return { ...fields, source: ref };
+    case 'notifier':
+      return { ...fields, notifier: ref };
+    default:
+      return assertNever(kind);
+  }
 };
 
 const uniqueBy =

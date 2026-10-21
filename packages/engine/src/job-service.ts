@@ -7,6 +7,7 @@ import {
   type ConfigError,
   type ConfigIssue,
   type ConflictError,
+  type Connection,
   type DecisionLog,
   type DomainError,
   type EnvironmentRepository,
@@ -33,6 +34,8 @@ import {
   type WorkflowId,
   cancelPendingRun,
   configErrorFromZod,
+  connectionCatalog,
+  inEnvironment,
   createJob,
   err,
   newJobId,
@@ -252,14 +255,15 @@ export class JobService {
     raw: unknown,
     jobId: string = 'preview',
     count = 5,
+    drafts: readonly Connection[] = [],
   ): Promise<Result<{ spec: JobSpec; preview: SchedulePreview }, ConfigError>> {
-    return (await this.#validate(raw, jobId, count)).map(({ spec, preview }) => ({
+    return (await this.#validate(raw, jobId, count, drafts)).map(({ spec, preview }) => ({
       spec,
       preview,
     }));
   }
 
-  async #validate(raw: unknown, jobId: string, count: number) {
+  async #validate(raw: unknown, jobId: string, count: number, drafts: readonly Connection[] = []) {
     const parsed = JobSpec.safeParse(raw);
     if (!parsed.success) {
       return err(configErrorFromZod(parsed.error));
@@ -282,7 +286,11 @@ export class JobService {
       });
     }
     const connectionRefs = jobConnectionRefs(this.deps.registry, parsed.data);
-    const connections = await loadConnections(this.deps.connections, connectionRefs, environment);
+    const loaded = await loadConnections(this.deps.connections, connectionRefs, environment);
+    const connections = new Map([
+      ...loaded,
+      ...inEnvironment(connectionCatalog(drafts), environment),
+    ]);
     const now = this.deps.clock.now();
 
     return bindJob(this.deps.registry, parsed.data, connections).map(({ trigger }) => ({

@@ -183,6 +183,34 @@ describe('grpc target', () => {
     });
   });
 
+  it('extracts the channel onto a connection and answers the same', async () => {
+    const config = inline('Say', {
+      metadata: { 'x-team': 'billing' },
+      secretMetadata: { authorization: 'Bearer {{secret:TOKEN}}' },
+    });
+    const split = grpcTarget.extractConnection?.(config, {})._unsafeUnwrap();
+    expect(split?.connection).toEqual({
+      address,
+      secretMetadata: { authorization: 'Bearer {{secret:TOKEN}}' },
+    });
+    expect(split?.config).not.toHaveProperty('address');
+    const connected = grpcTarget
+      .bind(split?.config, { connection: { key: 'echo', version: 1, config: split?.connection } })
+      ._unsafeUnwrap()
+      .execute({
+        payload: {
+          body: '{"text":"hi","count":"42"}',
+          contentType: 'application/json',
+          attributes: {},
+        },
+        ctx: contractRunContext({ TOKEN: 's3cr3t' }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    const [before, after] = await Promise.all([call(config), connected]);
+    expect(after.response?.body).toBe(before.response?.body);
+    expect(grpcTarget.extractConnection?.(config, { baseUrl: 'https://x' }).isErr()).toBe(true);
+  });
+
   it('tests a connection by waiting for the channel', async () => {
     const ctx = {
       secrets: mapSecretResolver({}),

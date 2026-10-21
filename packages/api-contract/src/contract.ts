@@ -46,6 +46,8 @@ import {
   AnalyticsSummary,
   BackfillInput,
   BackfillResult,
+  ExtractConnectionInput,
+  ExtractConnectionResult,
   ConfigIssue,
   ConnectionKeyParam,
   ConnectionListQuery,
@@ -200,6 +202,14 @@ const jobs = {
     })
     .input(BackfillInput)
     .output(BackfillResult),
+  extractConnection: write
+    .route({
+      method: 'POST',
+      path: '/jobs/{id}/extract-connection',
+      summary: 'Move an inline target, trigger or notifier config onto a new connection',
+    })
+    .input(ExtractConnectionInput)
+    .output(ExtractConnectionResult),
   explain: base
     .route({
       method: 'GET',

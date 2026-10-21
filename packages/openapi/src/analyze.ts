@@ -11,11 +11,11 @@ import {
   isRecord,
   ok,
   operationKey,
+  slugKey,
   uniqueEndpointKey,
 } from '@cloud-trigger/core';
 import { HttpTargetConfig, pathParamNames } from '@cloud-trigger/providers-builtin';
 import { upgrade } from '@scalar/openapi-parser';
-import { kebabCase } from 'change-case';
 import type { JSONSchema7 } from 'json-schema';
 import { sample } from 'openapi-sampler';
 import { parse as parseYaml } from 'yaml';
@@ -39,7 +39,6 @@ import {
 export const MAX_SPEC_BYTES = 5_000_000;
 export const MAX_OPERATIONS = 2_000;
 const MAX_WARNINGS = 200;
-const KEY_LENGTH = 63;
 const SAMPLE_DEPTH = 6;
 const SCHEMA_NESTING = SAMPLE_DEPTH * 4;
 const MAX_SCHEMA_NODES = 10_000;
@@ -108,13 +107,6 @@ const versionOf = (raw: Record<string, unknown>): string | undefined => {
 
   return typeof version === 'string' ? version : undefined;
 };
-
-const toKey = (text: string): string =>
-  kebabCase(text)
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^[-_]+/, '')
-    .slice(0, KEY_LENGTH)
-    .replace(/[-_]+$/, '') || 'endpoint';
 
 const joinPath = (prefix: string, path: string): string => {
   const head = prefix.trim().replace(/\/+$/, '');
@@ -457,7 +449,10 @@ function operationsOf(ctx: Context, document: OpenApiDocument, servers: readonly
         continue;
       }
       const methodPath = `${method.toUpperCase()} ${path}`;
-      const key = uniqueEndpointKey(toKey(keySource(ctx.options, operation, methodPath)), taken);
+      const key = uniqueEndpointKey(
+        slugKey(keySource(ctx.options, operation, methodPath), 'endpoint'),
+        taken,
+      );
       taken.add(key);
       operations.push({
         operationKey: operationKey(method, valid.data.url),

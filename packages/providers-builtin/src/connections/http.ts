@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import {
+  BASE_URL_OPTION,
   type Connected,
   type ConfigIssue,
+  type ConnectionSplit,
+  type Result,
   type ConnectionTestResult,
   type SecretResolver,
   ResultAsync,
@@ -21,6 +24,7 @@ import { z } from 'zod';
 
 import { dispatcherFor, errorCode } from '../shared/http-client.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
+import { pathParamNames } from '../shared/path-params.js';
 import { SigningConfig } from '../shared/signing.js';
 
 const ABSOLUTE_HTTP = /^https?:\/\//;
@@ -144,6 +148,140 @@ export const urlIssues = (
         },
       ];
 };
+
+const SPLIT_URL = /^(https?:\/\/[^/?#]*)(.*)$/s;
+
+export interface SplitUrl {
+  readonly baseUrl: string;
+  readonly path: string;
+  readonly host: string;
+  readonly warnings: readonly ConfigIssue[];
+}
+
+const hostOf = (authority: string): string =>
+  authority
+    .replace(/^https?:\/\//, '')
+    .replace(/^[^@]*@/, '')
+    .replace(/:\d+$/, '');
+
+export function splitHttpUrl(
+  url: string,
+  baseUrl?: string,
+): Result<SplitUrl, readonly ConfigIssue[]> {
+  const match = SPLIT_URL.exec(url);
+  const authority = match?.[1];
+  if (authority === undefined) {
+    return err([{ path: 'url', message: 'Only a literal http:// or https:// URL can be split' }]);
+  }
+  if (pathParamNames(authority).length > 0) {
+    return err([{ path: 'url', message: 'The host cannot contain {name} path parameters' }]);
+  }
+  if (url.includes('#')) {
+    return err([{ path: 'url', message: 'Remove the #fragment first' }]);
+  }
+  const base = baseUrl ?? authority;
+  if (base.includes('?')) {
+    return err([{ path: BASE_URL_OPTION, message: 'Cannot contain a query string' }]);
+  }
+  const rest = url.slice(base.length);
+  if (!url.startsWith(base) || !(rest === '' || /^[/?]/.test(rest) || base.endsWith('/'))) {
+    return err([{ path: BASE_URL_OPTION, message: `Must be a prefix of ${url}` }]);
+  }
+  if (base.length < authority.length) {
+    return err([{ path: BASE_URL_OPTION, message: 'Must include the whole host' }]);
+  }
+  if (pathParamNames(base).length > 0) {
+    return err([
+      {
+        path: BASE_URL_OPTION,
+        message: 'Cannot contain {name} path parameters; keep them in the endpoint URL',
+      },
+    ]);
+  }
+  const basePath = base.slice(authority.length);
+  if (basePath.endsWith('//')) {
+    return err([{ path: BASE_URL_OPTION, message: 'Cannot end with repeated slashes' }]);
+  }
+  const path = base.endsWith('/') && rest !== '' && !rest.startsWith('?') ? `/${rest}` : rest;
+  const [pathname = '', search = ''] = path.split(/\?(.*)/s);
+  if (pathname === '/' && basePath !== '' && basePath !== '/') {
+    return err([
+      { path: BASE_URL_OPTION, message: 'The trailing slash after the base URL would be dropped' },
+    ]);
+  }
+  if (pathname.startsWith('//')) {
+    return err([
+      {
+        path: BASE_URL_OPTION,
+        message: 'The repeated slashes after the base URL would be collapsed',
+      },
+    ]);
+  }
+  const reencoded = new URLSearchParams(search).toString() !== search;
+
+  return ok({
+    baseUrl: base,
+    path,
+    host: hostOf(authority),
+    warnings: reencoded
+      ? [{ path: 'url', message: 'The query string will be sent re-encoded' }]
+      : [],
+  });
+}
+
+export function moveHttpCredentials(config: {
+  readonly headers: Readonly<Record<string, string>>;
+  readonly secretHeaders: Readonly<Record<string, string>>;
+}): {
+  readonly connectionHeaders: Record<string, string>;
+  readonly headers: Record<string, string>;
+} {
+  const secretNames = new Set(Object.keys(config.secretHeaders).map((name) => name.toLowerCase()));
+  const entries = Object.entries(config.headers);
+
+  return {
+    connectionHeaders: Object.fromEntries(
+      entries.filter(([name]) => secretNames.has(name.toLowerCase())),
+    ),
+    headers: Object.fromEntries(entries.filter(([name]) => !secretNames.has(name.toLowerCase()))),
+  };
+}
+
+const MOVED = new Set(['url', 'headers', 'secretHeaders', 'signing']);
+
+export function splitHttpConnection(
+  config: {
+    readonly url: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly secretHeaders: Readonly<Record<string, string>>;
+  },
+  raw: Readonly<Record<string, unknown>>,
+  baseUrl: string | undefined,
+): Result<ConnectionSplit, readonly ConfigIssue[]> {
+  return splitHttpUrl(config.url, baseUrl).map((split) => {
+    const { connectionHeaders, headers } = moveHttpCredentials(config);
+    const { signing } = raw;
+    const rest = Object.fromEntries(Object.entries(raw).filter(([field]) => !MOVED.has(field)));
+
+    return {
+      connection: {
+        baseUrl: split.baseUrl,
+        ...(Object.keys(connectionHeaders).length > 0 && { headers: connectionHeaders }),
+        ...(Object.keys(config.secretHeaders).length > 0 && {
+          secretHeaders: config.secretHeaders,
+        }),
+        ...(signing !== undefined && { signing }),
+      },
+      config: {
+        ...rest,
+        url: split.path,
+        ...(Object.keys(headers).length > 0 && { headers }),
+      },
+      suggestedName: split.host,
+      warnings: split.warnings,
+    };
+  });
+}
 
 interface CachedToken {
   readonly token: string;
@@ -340,6 +478,7 @@ export const httpConnection = defineConnection({
   displayName: 'HTTP API',
   description: 'A REST or GraphQL API: base URL, credentials and headers shared by its endpoints.',
   configSchema: HttpConnectionConfig,
+  address: (config) => config.baseUrl.replace(/\/+$/, ''),
   async test(config, { secrets, signal, now }): Promise<ConnectionTestResult> {
     const prepared = await prepareConnection({ key: 'test', version: 0, config }, secrets, {
       now,

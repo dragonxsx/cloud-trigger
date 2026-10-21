@@ -2,6 +2,7 @@ import { ProviderRegistry } from '@cloud-trigger/core';
 import {
   AnalyticsListener,
   ChainListener,
+  ConnectionExtractor,
   ConnectionService,
   EnvironmentService,
   EventIngestor,
@@ -77,6 +78,12 @@ export const RUN_LISTENERS = token<readonly RunLifecycleListener[]>('RUN_LISTENE
         new ConnectionService({ ...persistence, registry, secrets, clock }),
     ),
     factoryProvider(
+      ConnectionExtractor,
+      [PERSISTENCE, ProviderRegistry, CLOCK, JobService, ConnectionService],
+      (persistence, registry, clock, jobService, connectionService) =>
+        new ConnectionExtractor({ ...persistence, registry, clock, jobService, connectionService }),
+    ),
+    factoryProvider(
       EnvironmentService,
       [PERSISTENCE, CLOCK],
       (persistence, clock) => new EnvironmentService({ ...persistence, clock }),
@@ -113,6 +120,7 @@ export const RUN_LISTENERS = token<readonly RunLifecycleListener[]>('RUN_LISTENE
     WorkflowService,
     GroupService,
     ConnectionService,
+    ConnectionExtractor,
     EnvironmentService,
     JobTransfer,
     EventIngestor,

@@ -11,7 +11,12 @@ import {
 import { request } from 'undici';
 import { z } from 'zod';
 
-import { httpConnection, prepareRequest, urlIssues } from '../connections/http.js';
+import {
+  httpConnection,
+  prepareRequest,
+  splitHttpConnection,
+  urlIssues,
+} from '../connections/http.js';
 import { interpolate, interpolateValues } from '../shared/interpolate.js';
 import { SigningConfig, signatureHeaders } from '../shared/signing.js';
 import { eventScope, failure, isRetryableStatus } from './event-scope.js';
@@ -41,6 +46,7 @@ export const webhookNotifier = defineConnectedNotifier({
   configSchema: WebhookNotifierConfig,
   connection: httpConnection,
   check: (config, connection) => urlIssues(config.url, connection),
+  extractConnection: (config, raw, { baseUrl }) => splitHttpConnection(config, raw, baseUrl),
   async notify(config, event, ctx): Promise<NotifyResult> {
     const resolved = await ResultAsync.combine([
       interpolate(ctx.secrets, config.url),

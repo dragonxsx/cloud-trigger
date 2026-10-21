@@ -10,6 +10,7 @@ import {
   Environment,
   EnvironmentKey,
   EnvironmentSpec,
+  ExtractSlot,
   Password,
   Scope,
   User,
@@ -72,6 +73,40 @@ export const BackfillResult = z.object({
   created: z.array(RunId),
   duplicates: z.int().min(0).describe('Fire times already backfilled earlier; not inserted again.'),
   truncated: z.boolean().describe('More fire times exist in the range than maxRuns.'),
+});
+export const ExtractConnectionInput = z.object({
+  id: JobId,
+  slot: ExtractSlot.describe('The inline config to move onto a new connection.'),
+  key: ConnectionKey.optional().describe(
+    'Key of the new connection; derived from the host when unset.',
+  ),
+  name: z.string().trim().max(200).optional(),
+  endpoint: EndpointKey.optional().describe(
+    'Key of the endpoint; derived from the job name when unset.',
+  ),
+  baseUrl: z
+    .string()
+    .regex(/^https?:\/\//, 'Must start with http:// or https://')
+    .optional()
+    .describe('HTTP connections only: a prefix of the URL to keep on the connection.'),
+  expectedVersion: z.int().min(1),
+  dryRun: z.boolean().default(true).describe('Return the draft without saving anything.'),
+});
+export const ExtractConnectionResult = z.object({
+  dryRun: z.boolean(),
+  connection: Connection,
+  endpoint: EndpointKey,
+  job: Job,
+  similar: z
+    .array(
+      z.object({
+        key: ConnectionKey,
+        name: z.string(),
+        match: z.enum(['identical', 'same_address']),
+      }),
+    )
+    .describe('Existing connections the job could use instead.'),
+  warnings: z.array(ConfigIssue),
 });
 export const ExplainQuery = z.object({
   id: JobId,
@@ -157,13 +192,17 @@ export const ProviderInfo = z.object({
   connectionType: z
     .string()
     .optional()
-    .describe('For targets and event sources: the connection type they can run over.'),
+    .describe('For targets, event sources and notifiers: the connection type they can run over.'),
   connectionFields: z
     .array(z.string())
     .optional()
     .describe(
-      'For targets and event sources: fields the connection owns. Omit them when a connection is set.',
+      'For targets, event sources and notifiers: fields the connection owns. Omit them when a connection is set.',
     ),
+  extractsConnection: z
+    .boolean()
+    .default(false)
+    .describe('An inline config of this provider can be extracted into a new connection.'),
 });
 
 export const ConnectionKeyParam = z.object({ key: ConnectionKey });

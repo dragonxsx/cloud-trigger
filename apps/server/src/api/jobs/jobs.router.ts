@@ -1,5 +1,5 @@
 import type { Persistence } from '@cloud-trigger/core';
-import type { JobService, JobTransfer } from '@cloud-trigger/engine';
+import type { ConnectionExtractor, JobService, JobTransfer } from '@cloud-trigger/engine';
 
 import { type Api, type ErrorFactories, toApiError } from '../shared/api.js';
 import type { JobRedactor } from '../shared/redaction.js';
@@ -10,6 +10,7 @@ export interface JobsRouterDeps {
   readonly persistence: Persistence;
   readonly jobService: JobService;
   readonly jobTransfer: JobTransfer;
+  readonly connectionExtractor: ConnectionExtractor;
   readonly redactor: JobRedactor;
 }
 
@@ -18,6 +19,7 @@ export const jobsHandlers = ({
   persistence,
   jobService,
   jobTransfer,
+  connectionExtractor,
   redactor,
 }: JobsRouterDeps) => {
   const jobs = api.jobs;
@@ -79,6 +81,22 @@ export const jobsHandlers = ({
         ...result.value,
         fireTimes: [...result.value.fireTimes],
         created: [...result.value.created],
+      };
+    }),
+
+    extractConnection: jobs.extractConnection.handler(async ({ input, errors }) => {
+      const result = await connectionExtractor.extract(input);
+      if (result.isErr()) {
+        throw toApiError(errors, result.error);
+      }
+      const { connection, job, similar, warnings } = result.value;
+
+      return {
+        ...result.value,
+        connection: redactor.redactConnection(connection),
+        job: redact(job),
+        similar: [...similar],
+        warnings: [...warnings],
       };
     }),
 

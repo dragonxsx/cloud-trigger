@@ -116,6 +116,7 @@ const WRITE_ACTIONS = new Set([
   'replay',
   'acknowledge',
   'backfill',
+  'extract',
 ]);
 const ADMIN_ACTIONS = new Set(['import', 'export']);
 const ADMIN_RESOURCES = new Set(['settings', 'users', 'api-keys', 'auth-settings']);

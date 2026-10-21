@@ -40,6 +40,7 @@ export type RunDto = Out<ApiClient['runs']['get']>;
 export type ProviderDto = Out<ApiClient['providers']['list']>[number];
 export type SchedulePreviewDto = Out<ApiClient['jobs']['validate']>;
 export type JobCreateInput = Parameters<ApiClient['jobs']['create']>[0];
+export type ExtractSlotDto = Parameters<ApiClient['jobs']['extractConnection']>[0]['slot'];
 export type RunStatusDto = RunDto['status'];
 export type GroupDto = Out<ApiClient['groups']['get']>;
 export type ConnectionDto = Out<ApiClient['connections']['get']>;

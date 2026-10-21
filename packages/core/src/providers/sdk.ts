@@ -203,6 +203,37 @@ export interface BindEnv {
   readonly connections?: ConnectionCatalog | undefined;
 }
 
+export const BASE_URL_OPTION = '@baseUrl';
+
+export interface ExtractOptions {
+  readonly baseUrl?: string | undefined;
+}
+
+export interface ConnectionSplit {
+  readonly connection: Readonly<Record<string, unknown>>;
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly suggestedName?: string | undefined;
+  readonly warnings?: readonly ConfigIssue[] | undefined;
+}
+
+export interface ExtractedConnection {
+  readonly connection: Readonly<Record<string, unknown>>;
+  readonly config: Readonly<Record<string, unknown>>;
+  readonly suggestedName: string | undefined;
+  readonly warnings: readonly ConfigIssue[];
+}
+
+export type ConnectionExtractor = (
+  rawConfig: unknown,
+  options: ExtractOptions,
+) => Result<ExtractedConnection, ConfigError>;
+
+type SplitConnection<S extends z.ZodType> = (
+  config: z.output<S>,
+  raw: Readonly<Record<string, unknown>>,
+  options: ExtractOptions,
+) => Result<ConnectionSplit, readonly ConfigIssue[]>;
+
 export interface Provider<K extends ProviderKind = ProviderKind> {
   readonly kind: K;
   readonly type: string;
@@ -214,6 +245,8 @@ export interface Provider<K extends ProviderKind = ProviderKind> {
   jsonSchema(): JsonSchema;
   bind(rawConfig: unknown, env?: BindEnv): Result<BoundByKind[K], ConfigError>;
   connectionRefs?(rawConfig: unknown): readonly ConnectionRef[];
+  readonly extractConnection?: ConnectionExtractor | undefined;
+  readonly address?: ((rawConfig: unknown) => string | undefined) | undefined;
 }
 
 export type TriggerProvider = Provider<'trigger'>;
@@ -307,6 +340,7 @@ export interface ConnectedTargetDefinition<
     config: z.output<S>,
     connection: Connected<z.output<C>> | undefined,
   ): readonly ConfigIssue[];
+  readonly extractConnection?: SplitConnection<S>;
 }
 
 export interface InlineConnectedTargetExecution<C> extends TargetExecution {
@@ -345,6 +379,7 @@ export interface ConnectedNotifierDefinition<
     config: z.output<S>,
     connection: Connected<z.output<C>> | undefined,
   ): readonly ConfigIssue[];
+  readonly extractConnection?: SplitConnection<S>;
 }
 
 export interface InlineConnectedNotifyContext<C> extends NotifyContext {
@@ -363,6 +398,7 @@ export interface InlineConnectedNotifierDefinition<
 }
 export interface ConnectionDefinition<S extends z.ZodType> extends BaseDefinition<S> {
   test?(config: z.output<S>, ctx: ConnectionTestContext): Promise<ConnectionTestResult>;
+  readonly address?: (config: z.output<S>) => string;
 }
 
 const invalid = (subject: string, issues: readonly ConfigIssue[]): ConfigError => ({
@@ -370,6 +406,28 @@ const invalid = (subject: string, issues: readonly ConfigIssue[]): ConfigError =
   message: `Invalid configuration for ${subject}`,
   issues,
 });
+
+function extractor<S extends z.ZodType>(
+  subject: string,
+  schema: S,
+  split: SplitConnection<S>,
+): ConnectionExtractor {
+  return (rawConfig, options) => {
+    const parsed = schema.safeParse(rawConfig);
+    if (!parsed.success) {
+      return err(configErrorFromZod(parsed.error, subject));
+    }
+
+    return split(parsed.data, isRecord(rawConfig) ? rawConfig : {}, options)
+      .map((s) => ({
+        connection: s.connection,
+        config: s.config,
+        suggestedName: s.suggestedName,
+        warnings: s.warnings ?? [],
+      }))
+      .mapErr((issues) => invalid(subject, issues));
+  };
+}
 
 function makeProvider<K extends ProviderKind, S extends z.ZodType>(
   kind: K,
@@ -383,6 +441,7 @@ function makeProvider<K extends ProviderKind, S extends z.ZodType>(
     readonly type: string;
     readonly required: boolean;
     readonly fields?: readonly string[];
+    readonly split?: SplitConnection<S> | undefined;
   },
 ): Provider<K> {
   const subject = `${kind} "${def.type}"`;
@@ -394,6 +453,9 @@ function makeProvider<K extends ProviderKind, S extends z.ZodType>(
     description: def.description ?? '',
     ...(connection && { connectionType: connection.type, connectionRequired: connection.required }),
     ...(connection?.fields && { connectionFields: connection.fields }),
+    ...(connection?.split && {
+      extractConnection: extractor(subject, def.configSchema, connection.split),
+    }),
     jsonSchema: () => z.toJSONSchema(def.configSchema, { io: 'input', unrepresentable: 'any' }),
     bind(rawConfig, env = {}) {
       if (env.connection && !connection) {
@@ -536,7 +598,11 @@ export const defineConnectedTarget = <S extends z.ZodType, C extends z.ZodType>(
         }),
       );
     },
-    { type: def.connection.type, required: def.connectionRequired === true },
+    {
+      type: def.connection.type,
+      required: def.connectionRequired === true,
+      split: def.extractConnection,
+    },
   );
 
 export const INLINE_CONNECTION_KEY = '';
@@ -579,11 +645,29 @@ function bindInlineConnection<C extends z.ZodObject>(
   });
 }
 
-const inlineConnection = <C extends z.ZodObject>(provider: ConnectionProvider<C>) => ({
-  type: provider.type,
-  required: false,
-  fields: Object.keys(provider.configSchema.shape),
-});
+const splitInline =
+  (fields: readonly string[]) =>
+  (
+    _config: unknown,
+    raw: Readonly<Record<string, unknown>>,
+    options: ExtractOptions,
+  ): Result<ConnectionSplit, readonly ConfigIssue[]> => {
+    if (options.baseUrl !== undefined) {
+      return err([{ path: BASE_URL_OPTION, message: 'Only HTTP connections take a base URL' }]);
+    }
+    const entries = Object.entries(raw);
+
+    return ok({
+      connection: Object.fromEntries(entries.filter(([field]) => fields.includes(field))),
+      config: Object.fromEntries(entries.filter(([field]) => !fields.includes(field))),
+    });
+  };
+
+const inlineConnection = <C extends z.ZodObject>(provider: ConnectionProvider<C>) => {
+  const fields = Object.keys(provider.configSchema.shape);
+
+  return { type: provider.type, required: false, fields, split: splitInline(fields) };
+};
 
 export const defineInlineConnectedTarget = <S extends z.ZodType, C extends z.ZodObject>(
   def: InlineConnectedTargetDefinition<S, C>,
@@ -642,7 +726,11 @@ export const defineConnectedNotifier = <S extends z.ZodType, C extends z.ZodType
           notify: (event, ctx) => def.notify(config, event, { ...ctx, connection }),
         }),
       ),
-    { type: def.connection.type, required: def.connectionRequired === true },
+    {
+      type: def.connection.type,
+      required: def.connectionRequired === true,
+      split: def.extractConnection,
+    },
   );
 
 export const defineInlineConnectedNotifier = <S extends z.ZodType, C extends z.ZodObject>(
@@ -662,13 +750,24 @@ export const defineInlineConnectedNotifier = <S extends z.ZodType, C extends z.Z
 
 export const defineConnection = <S extends z.ZodType>(
   def: ConnectionDefinition<S>,
-): ConnectionProvider<S> => ({
-  ...makeProvider('connection', def, (config) =>
-    ok({
-      test: (ctx) =>
-        def.test?.(config, ctx) ??
-        Promise.resolve<ConnectionTestResult>(ok({ message: 'Configuration is valid' })),
+): ConnectionProvider<S> => {
+  const { address } = def;
+
+  return {
+    ...makeProvider('connection', def, (config) =>
+      ok({
+        test: (ctx) =>
+          def.test?.(config, ctx) ??
+          Promise.resolve<ConnectionTestResult>(ok({ message: 'Configuration is valid' })),
+      }),
+    ),
+    configSchema: def.configSchema,
+    ...(address && {
+      address: (rawConfig: unknown) => {
+        const parsed = def.configSchema.safeParse(rawConfig);
+
+        return parsed.success ? address(parsed.data) : undefined;
+      },
     }),
-  ),
-  configSchema: def.configSchema,
-});
+  };
+};

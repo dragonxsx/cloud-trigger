@@ -11,6 +11,7 @@ export interface ProviderInfo {
   readonly configSchema: JsonSchema;
   readonly connectionType?: string | undefined;
   readonly connectionFields?: string[] | undefined;
+  readonly extractsConnection: boolean;
 }
 
 export interface ProviderPlugin {
@@ -104,6 +105,7 @@ export class ProviderRegistry {
         configSchema: p.jsonSchema(),
         ...(p.connectionType !== undefined && { connectionType: p.connectionType }),
         ...(p.connectionFields !== undefined && { connectionFields: [...p.connectionFields] }),
+        extractsConnection: p.extractConnection !== undefined,
       })),
     );
   }

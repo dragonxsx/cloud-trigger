@@ -1,4 +1,10 @@
-import { type EndpointKind, assertNever, endpointProvider, isRecord } from '@cloud-trigger/core';
+import {
+  type EndpointKind,
+  assertNever,
+  endpointProvider,
+  isRecord,
+  slugKey,
+} from '@cloud-trigger/core';
 import {
   Accordion,
   ActionIcon,
@@ -22,7 +28,6 @@ import {
   IconTrash,
 } from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { kebabCase } from 'change-case';
 import { type ReactNode, useMemo, useState } from 'react';
 
 import { forConnection } from '../../components/ConnectedProviderPicker';
@@ -129,13 +134,6 @@ const movePatches = (overlays: OverlayValues[], from: string, to: string | null)
     ),
   }));
 
-const connectionKeyFrom = (title: string): string =>
-  kebabCase(title)
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^[-_]+/, '')
-    .slice(0, 63)
-    .replace(/[-_]+$/, '');
-
 const issuesAt = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
   Object.entries(errors).flatMap(([path, message]) =>
     path.startsWith(prefix) && typeof message === 'string'
@@ -241,7 +239,7 @@ export function ConnectionFormFields({
       });
     }
     if (!editing && values.key === '' && result.title !== '') {
-      form.setFieldValue('key', connectionKeyFrom(result.title));
+      form.setFieldValue('key', slugKey(result.title, ''));
     }
     if (values.name === '' && result.title !== '') {
       form.setFieldValue('name', result.title);

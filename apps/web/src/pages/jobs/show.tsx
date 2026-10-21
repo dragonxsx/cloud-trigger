@@ -8,6 +8,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { BackfillDialog } from '../../components/BackfillDialog';
 import { RunsOverTimeChart } from '../../components/charts';
 import { ExplainPanel } from '../../components/ExplainPanel';
+import { ExtractConnectionDialog } from '../../components/ExtractConnectionDialog';
 import { GroupChip } from '../../components/GroupChip';
 import { JobDependencies } from '../../components/JobDependencies';
 import { RunsTable } from '../../components/RunsTable';
@@ -202,6 +203,11 @@ export function JobShow() {
             {job.upstreamJobIds.length === 0 && (
               <CanAccess resource="jobs" action="backfill">
                 <BackfillDialog job={job} />
+              </CanAccess>
+            )}
+            {job.workflowId === null && (
+              <CanAccess resource="jobs" action="extract">
+                <ExtractConnectionDialog job={job} />
               </CanAccess>
             )}
             <BadgeButton job={job} />
