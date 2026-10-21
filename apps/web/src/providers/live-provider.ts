@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import { z } from 'zod';
 
 import { client } from '../lib/api';
+import { isClientError } from '../lib/errors';
 
 type Callback = (event: LiveEvent) => void;
 
@@ -167,6 +168,7 @@ export function createSharedRunStreamLiveProvider(): LiveProvider {
             context: {
               retry: Number.POSITIVE_INFINITY,
               retryDelay: RETRY_DELAY_MS,
+              shouldRetry: ({ error }) => !isClientError(error),
               onRetry: () => {
                 announce('reconnecting');
 
@@ -183,10 +185,12 @@ export function createSharedRunStreamLiveProvider(): LiveProvider {
         for await (const run of runs) {
           publish({ type: 'run', runId: run.id, jobId: run.jobId });
         }
-      } catch {
-        if (signal.aborted) {
+      } catch (error) {
+        if (signal.aborted || isClientError(error)) {
           break;
         }
+      }
+      if (!signal.aborted) {
         announce('reconnecting');
         await sleep(RETRY_DELAY_MS, signal);
       }
@@ -206,6 +210,9 @@ export function createSharedRunStreamLiveProvider(): LiveProvider {
         await stream(controller.signal);
       } finally {
         leading = false;
+        if (leadership === controller) {
+          leadership = undefined;
+        }
         announce('paused');
       }
     };

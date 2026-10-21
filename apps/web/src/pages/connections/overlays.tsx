@@ -9,7 +9,8 @@ import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import type { ProviderDto } from '../../lib/api';
 import { environmentLabel, useEnvironments } from '../../lib/environments';
 import type { ConfigIssueDto } from '../../lib/errors';
-import { countValues, fieldCount, hasValue } from './summary';
+import { countOf } from '../../lib/format';
+import { countValues, hasValue, overriddenFields, overrideLabel } from './summary';
 
 export interface EndpointOverlayValues {
   key: string;
@@ -48,13 +49,6 @@ const withEndpointPatch = (
     ? [...rest, next]
     : overlay.endpoints.map((patch, i) => (i === index ? next : patch));
 };
-
-const overriddenFields = (overlay: OverlayValues): number =>
-  countValues(overlay.config) +
-  overlay.endpoints.reduce((total, patch) => total + countValues(patch.config), 0);
-
-const overrideLabel = (count: number, none: string): string =>
-  count === 0 ? none : `${fieldCount(count)} overridden`;
 
 const itemValue = (overlay: OverlayValues, index: number): string =>
   overlay.environment === '' ? `new-${String(index)}` : overlay.environment;
@@ -185,7 +179,7 @@ export function OverlaysSection({
     }
     void confirmAction({
       title: `Remove the ${labelOf(overlay.environment)} overlay?`,
-      message: `Its ${fieldCount(count)} of overrides are removed from the form. Jobs in this environment use the base config once you save the connection.`,
+      message: `Its ${countOf(count, 'field')} of overrides are removed from the form. Jobs in this environment use the base config once you save the connection.`,
       confirmLabel: 'Remove overlay',
       onConfirm: drop,
     });

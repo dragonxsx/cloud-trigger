@@ -17,17 +17,18 @@ import {
 } from '@mantine/core';
 import type { FormErrors, UseFormReturnType } from '@mantine/form';
 import { hideNotification, showNotification } from '@mantine/notifications';
+import { useList } from '@refinedev/core';
 import { IconPlus, IconTrash } from '@tabler/icons-react';
-import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useMemo, useState } from 'react';
 
 import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicker';
 import { EnvironmentSelect } from '../../components/EnvironmentSelect';
-import { countOf } from '../../components/page-chrome';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { WorkflowGraph } from '../../components/WorkflowGraph';
-import { type ProviderDto, type WorkflowSpecDto, client } from '../../lib/api';
+import type { JobDto, ProviderDto, WorkflowSpecDto } from '../../lib/api';
 import { configIssuesFor, fieldError } from '../../lib/errors';
+import { countOf } from '../../lib/format';
+import { useProviders } from '../../lib/providers';
 
 type FormNode = WorkflowSpecDto['nodes'][number];
 type EdgeOutcome = 'succeeded' | 'failed' | 'any';
@@ -461,15 +462,11 @@ const focusStep = (index: number) => {
 };
 
 export function WorkflowFormFields({ form }: { form: WorkflowForm }) {
-  const providers = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list({}),
-    staleTime: 300_000,
-  });
-  const jobs = useQuery({
-    queryKey: ['jobs', 'all'],
-    queryFn: () => client.jobs.list({ limit: 200 }),
-    staleTime: 30_000,
+  const providers = useProviders();
+  const jobs = useList<JobDto>({
+    resource: 'jobs',
+    pagination: { mode: 'off' },
+    queryOptions: { staleTime: 30_000 },
   });
   const byKind = useMemo(() => {
     const all = providers.data ?? [];
@@ -480,7 +477,7 @@ export function WorkflowFormFields({ form }: { form: WorkflowForm }) {
       schedule: all.filter((p) => p.kind === 'trigger' && TIME_TRIGGERS.has(p.type)),
     };
   }, [providers.data]);
-  const jobOptions = (jobs.data?.items ?? [])
+  const jobOptions = jobs.result.data
     .filter((job) => job.workflowId === null)
     .map((job) => ({ value: job.id, label: job.name }));
   const { values } = form;

@@ -24,10 +24,10 @@ export const isUnauthorized = (error: unknown): boolean =>
 const HttpErrorShape = z.object({
   message: z.string(),
   statusCode: z.number(),
-  errors: z.record(z.string(), z.unknown()).optional(),
+  errors: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.boolean()])).optional(),
 });
 
-const fieldLabel = (path: string): string => {
+export const fieldLabel = (path: string): string => {
   const last = path.split('.').findLast((segment) => !/^\d+$/.test(segment)) ?? path;
 
   return last === '' ? 'This form' : sentenceCase(last);
@@ -124,10 +124,9 @@ export function toHttpError(
   }
   const shaped = HttpErrorShape.safeParse(error);
   if (shaped.success) {
-    return {
-      message: shaped.data.message,
-      statusCode: shaped.data.statusCode,
-    };
+    const { message, statusCode, errors } = shaped.data;
+
+    return errors === undefined ? { message, statusCode } : { message, statusCode, errors };
   }
   if (error instanceof TypeError) {
     return {
@@ -154,11 +153,14 @@ export const isForbidden = (error: unknown): boolean => {
   return status === 401 || status === 403;
 };
 
-export const shouldRetryQuery = (failureCount: number, error: unknown): boolean => {
+export const isClientError = (error: unknown): boolean => {
   const status = errorStatus(error);
 
-  return failureCount < 2 && !(status >= 400 && status < 500);
+  return status >= 400 && status < 500;
 };
+
+export const shouldRetryQuery = (failureCount: number, error: unknown): boolean =>
+  failureCount < 2 && !isClientError(error);
 
 export const notifyError = (title: string, error: unknown): void => {
   showNotification({ color: 'red', title, message: errorMessage(error) });

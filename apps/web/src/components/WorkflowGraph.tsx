@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css';
 import { useMemo } from 'react';
 
 import type { NodeStatusDto } from '../lib/api';
+import { countOf } from '../lib/format';
 
 interface GraphNode {
   readonly key: string;
@@ -137,7 +138,7 @@ export function graphSummary(
   const order = edges.map(
     (edge) => `${edge.to} runs after ${edge.from} ${EDGE_STYLE[edge.on].verb}`,
   );
-  const count = nodes.length === 1 ? '1 step' : `${String(nodes.length)} steps`;
+  const count = countOf(nodes.length, 'step');
 
   return [`Workflow graph with ${count}: ${steps.join(', ')}.`, ...order.map((s) => `${s}.`)].join(
     ' ',

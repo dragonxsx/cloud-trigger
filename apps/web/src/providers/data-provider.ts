@@ -1,6 +1,13 @@
 import {
+  ApiKeyIdParam,
   ConnectionListQuery,
+  CreateApiKeyInput,
+  CreateUserInput,
+  EnvironmentKeyParam,
   RunListQuery,
+  UpdateEnvironmentInput,
+  UpdateUserInput,
+  UserIdParam,
   UpdateConnectionInput,
   UpdateGroupInput,
   UpdateJobInput,
@@ -10,6 +17,7 @@ import {
 import {
   ConnectionKey,
   ConnectionSpec,
+  EnvironmentSpec,
   GroupId,
   GroupSpec,
   JobId,
@@ -19,6 +27,7 @@ import {
   WorkflowRunId,
   WorkflowSpec,
 } from '@cloud-trigger/core';
+import { ORPCError } from '@orpc/client';
 import type { BaseRecord, CrudFilter, DataProvider } from '@refinedev/core';
 import { z } from 'zod';
 
@@ -30,6 +39,26 @@ interface ListParams {
   offset: number;
   filters: Record<string, unknown>;
   signal: AbortSignal | undefined;
+}
+
+const MAX_PAGE_SIZE = 200;
+
+async function listAll(
+  source: ResourceAdapter,
+  params: Pick<ListParams, 'filters' | 'signal'>,
+): Promise<{ data: readonly BaseRecord[]; total: number }> {
+  const data: BaseRecord[] = [];
+  let total = 0;
+  do {
+    const page = await source.list({ ...params, limit: MAX_PAGE_SIZE, offset: data.length });
+    data.push(...page.data);
+    total = page.total;
+    if (page.data.length === 0) {
+      break;
+    }
+  } while (data.length < total);
+
+  return { data, total };
 }
 
 const withSignal = (signal: AbortSignal | undefined) => (signal ? { signal } : {});
@@ -211,6 +240,87 @@ const workflowRuns: ResourceAdapter = {
   getOne: (id) => client.workflowRuns.get({ id: WorkflowRunId.parse(id) }),
 };
 
+const SearchFilters = z.object({ search: z.string().optional() });
+
+const withId = (variables: unknown, id: Record<string, string>) => ({
+  ...z.record(z.string(), z.unknown()).parse(variables),
+  ...id,
+});
+
+const users: ResourceAdapter = {
+  list: async ({ limit, offset, filters, signal }) => {
+    const page = await client.users.list(
+      { limit, offset, ...SearchFilters.parse(filters) },
+      withSignal(signal),
+    );
+
+    return { data: page.items, total: page.total };
+  },
+  getOne: (id) => client.users.get(UserIdParam.parse({ id })),
+  create: (variables) => client.users.create(CreateUserInput.parse(variables)),
+  update: (id, variables) => client.users.update(UpdateUserInput.parse(withId(variables, { id }))),
+  deleteOne: async (id) => {
+    await client.users.delete(UserIdParam.parse({ id }));
+
+    return { id };
+  },
+};
+
+const apiKeys: ResourceAdapter = {
+  list: async ({ signal }) => {
+    const keys = await client.apiKeys.list({}, withSignal(signal));
+
+    return { data: keys, total: keys.length };
+  },
+  getOne: async (id) => {
+    const found = (await client.apiKeys.list({})).find((key) => key.id === id);
+    if (!found) {
+      throw new ORPCError('NOT_FOUND', { message: 'API key not found' });
+    }
+
+    return found;
+  },
+  create: (variables) => client.apiKeys.create(CreateApiKeyInput.parse(variables)),
+  deleteOne: async (id) => {
+    await client.apiKeys.revoke(ApiKeyIdParam.parse({ id }));
+
+    return { id };
+  },
+};
+
+const environments: ResourceAdapter = {
+  list: async ({ limit, offset, filters, signal }) => {
+    const page = await client.environments.list(
+      { limit, offset, ...SearchFilters.parse(filters) },
+      withSignal(signal),
+    );
+
+    return { data: page.items.map((e) => ({ ...e, id: e.key })), total: page.total };
+  },
+  getOne: async (key) => {
+    const environment = await client.environments.get(EnvironmentKeyParam.parse({ key }));
+
+    return { ...environment, id: environment.key };
+  },
+  create: async (variables) => {
+    const created = await client.environments.create(EnvironmentSpec.parse(variables));
+
+    return { ...created, id: created.key };
+  },
+  update: async (key, variables) => {
+    const updated = await client.environments.update(
+      UpdateEnvironmentInput.parse(withId(variables, { key })),
+    );
+
+    return { ...updated, id: updated.key };
+  },
+  deleteOne: async (key) => {
+    await client.environments.delete(EnvironmentKeyParam.parse({ key }));
+
+    return { id: key };
+  },
+};
+
 const RESOURCES: Readonly<Record<string, ResourceAdapter>> = {
   jobs,
   runs,
@@ -218,6 +328,9 @@ const RESOURCES: Readonly<Record<string, ResourceAdapter>> = {
   connections,
   workflows,
   'workflow-runs': workflowRuns,
+  users,
+  'api-keys': apiKeys,
+  environments,
 };
 
 function adapter(resource: string): ResourceAdapter {
@@ -272,19 +385,27 @@ export const dataProvider: DataProvider = {
     call(async () => {
       const pageSize = pagination?.pageSize ?? 20;
       const currentPage = pagination?.currentPage ?? 1;
-      const off = pagination?.mode === 'off';
-      const { data, total } = await adapter(resource).list({
-        limit: off ? 200 : pageSize,
-        offset: off ? 0 : (currentPage - 1) * pageSize,
-        filters: filterObject(filters),
-        signal: signalOf(meta),
-      });
+      const source = adapter(resource);
+      const params = { filters: filterObject(filters), signal: signalOf(meta) };
+      const { data, total } =
+        pagination?.mode === 'off'
+          ? await listAll(source, params)
+          : await source.list({ ...params, limit: pageSize, offset: (currentPage - 1) * pageSize });
 
       return { data: asCallerType([...data]), total };
     }),
 
   getOne: ({ resource, id }) =>
     call(async () => ({ data: asCallerType(await adapter(resource).getOne(String(id))) }), true),
+
+  getMany: ({ resource, ids }) =>
+    call(async () => {
+      const source = adapter(resource);
+
+      return {
+        data: asCallerType(await Promise.all(ids.map((id) => source.getOne(String(id))))),
+      };
+    }, true),
 
   create: ({ resource, variables }) =>
     call(async () => ({

@@ -10,9 +10,10 @@ import {
   Text,
   Title,
 } from '@mantine/core';
+import { useGo, useInvalidateAuthStore } from '@refinedev/core';
 import { IconAlertCircle } from '@tabler/icons-react';
-import { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router';
 
 import { AuthShell, BrandMark } from '../components/Brand';
 import { errorMessage } from '../lib/errors';
@@ -51,19 +52,26 @@ function SignInFailed({ detail }: { detail: string }) {
 }
 
 export function AuthCallback() {
-  const navigate = useNavigate();
+  const go = useGo();
+  const invalidateAuth = useInvalidateAuthStore();
   const [failure, setFailure] = useState<string | null>(null);
+  const started = useRef(false);
   useEffect(() => {
+    if (started.current) {
+      return;
+    }
+    started.current = true;
     const finish = async () => {
       try {
         await completeSignIn();
-        await navigate('/', { replace: true });
+        await invalidateAuth();
+        go({ to: '/', type: 'replace' });
       } catch (error: unknown) {
         setFailure(errorMessage(error));
       }
     };
     void finish();
-  }, [navigate]);
+  }, [go, invalidateAuth]);
 
   return (
     <AuthShell>

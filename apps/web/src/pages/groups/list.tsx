@@ -1,11 +1,10 @@
-import { ActionIcon, Pagination, ScrollArea, Stack, Table, Text } from '@mantine/core';
-import { CanAccess, useTable } from '@refinedev/core';
-import { List } from '@refinedev/mantine';
-import { IconPencil } from '@tabler/icons-react';
-import { Link } from 'react-router';
+import { Pagination, ScrollArea, Stack, Table, Text } from '@mantine/core';
+import { useTable } from '@refinedev/core';
+import { EditButton, List } from '@refinedev/mantine';
 
 import { GroupChip } from '../../components/GroupChip';
-import { PageHeading } from '../../components/page-chrome';
+import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
+import { LoadError } from '../../components/PageState';
 import type { GroupDto } from '../../lib/api';
 
 export const rateLimitSummary = (group: Pick<GroupDto, 'rateLimit'>): string => {
@@ -29,9 +28,15 @@ export function GroupList() {
   const groups = tableQuery.data?.data ?? [];
 
   return (
-    <List title={<PageHeading>Groups</PageHeading>}>
+    <List title={<PageHeading>Groups</PageHeading>} breadcrumb={pageBreadcrumb}>
       <Stack spacing="md">
-        {groups.length === 0 && !tableQuery.isLoading ? (
+        {tableQuery.isError ? (
+          <LoadError
+            error={tableQuery.error}
+            what="groups"
+            onRetry={() => void tableQuery.refetch()}
+          />
+        ) : groups.length === 0 && !tableQuery.isLoading ? (
           <Text color="dimmed" p="lg" align="center">
             No groups yet. Groups share default policies, notifications and rate limits across jobs.
           </Text>
@@ -67,18 +72,15 @@ export function GroupList() {
                       <Text size="sm">{group.defaultNotifications.length}</Text>
                     </td>
                     <td>
-                      <CanAccess resource="groups" action="edit">
-                        <ActionIcon
-                          component={Link}
-                          to={`/groups/edit/${group.id}`}
-                          variant="subtle"
-                          size="lg"
-                          aria-label={`Edit ${group.name}`}
-                          title={`Edit ${group.name}`}
-                        >
-                          <IconPencil size={18} />
-                        </ActionIcon>
-                      </CanAccess>
+                      <EditButton
+                        hideText
+                        resource="groups"
+                        recordItemId={group.id}
+                        accessControl={{ hideIfUnauthorized: true }}
+                        variant="subtle"
+                        size="lg"
+                        aria-label={`Edit ${group.name}`}
+                      />
                     </td>
                   </tr>
                 ))}

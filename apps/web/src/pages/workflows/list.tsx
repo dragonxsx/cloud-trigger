@@ -1,22 +1,12 @@
-import {
-  ActionIcon,
-  Anchor,
-  Badge,
-  Group,
-  Pagination,
-  ScrollArea,
-  Stack,
-  Table,
-  Text,
-} from '@mantine/core';
-import { CanAccess, useTable } from '@refinedev/core';
-import { List } from '@refinedev/mantine';
-import { IconPencil } from '@tabler/icons-react';
+import { Anchor, Badge, Group, Pagination, ScrollArea, Stack, Table, Text } from '@mantine/core';
+import { useNavigation, useTable } from '@refinedev/core';
+import { EditButton, List } from '@refinedev/mantine';
 import { Link } from 'react-router';
 
-import { PageHeading, countOf } from '../../components/page-chrome';
+import { PageHeading } from '../../components/page-chrome';
+import { LoadError } from '../../components/PageState';
 import type { WorkflowDto } from '../../lib/api';
-import { fromNow } from '../../lib/format';
+import { countOf, fromNow } from '../../lib/format';
 import { triggerSummary } from '../../lib/job-summary';
 
 const stepsSummary = (workflow: Pick<WorkflowDto, 'nodes'>): string => {
@@ -31,12 +21,19 @@ export function WorkflowList() {
     resource: 'workflows',
     pagination: { pageSize: 50 },
   });
+  const { showUrl } = useNavigation();
   const workflows = tableQuery.data?.data ?? [];
 
   return (
     <List title={<PageHeading>Workflows</PageHeading>}>
       <Stack spacing="md">
-        {workflows.length === 0 && !tableQuery.isLoading ? (
+        {tableQuery.isError ? (
+          <LoadError
+            error={tableQuery.error}
+            what="workflows"
+            onRetry={() => void tableQuery.refetch()}
+          />
+        ) : workflows.length === 0 && !tableQuery.isLoading ? (
           <Text color="dimmed" p="lg" align="center">
             No workflows yet. A workflow runs jobs in order, with branches on failure and approval
             gates.
@@ -62,7 +59,7 @@ export function WorkflowList() {
                       <Group spacing="xs" noWrap>
                         <Anchor
                           component={Link}
-                          to={`/workflows/show/${workflow.id}`}
+                          to={showUrl('workflows', workflow.id)}
                           size="sm"
                           weight={500}
                         >
@@ -89,18 +86,14 @@ export function WorkflowList() {
                       <Text size="sm">{fromNow(workflow.nextFireAt)}</Text>
                     </td>
                     <td>
-                      <CanAccess resource="workflows" action="edit">
-                        <ActionIcon
-                          component={Link}
-                          to={`/workflows/edit/${workflow.id}`}
-                          variant="subtle"
-                          size="lg"
-                          aria-label={`Edit ${workflow.name}`}
-                          title={`Edit ${workflow.name}`}
-                        >
-                          <IconPencil size={18} />
-                        </ActionIcon>
-                      </CanAccess>
+                      <EditButton
+                        resource="workflows"
+                        recordItemId={workflow.id}
+                        hideText
+                        variant="subtle"
+                        size="lg"
+                        aria-label={`Edit ${workflow.name}`}
+                      />
                     </td>
                   </tr>
                 ))}

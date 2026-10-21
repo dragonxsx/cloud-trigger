@@ -1,14 +1,20 @@
-import { useQuery } from '@tanstack/react-query';
+import { useList } from '@refinedev/core';
 import { useMemo } from 'react';
 
-import { type GroupDto, client } from './api';
+import type { GroupDto } from './api';
 
-export function useGroupsById(): ReadonlyMap<string, GroupDto> {
-  const groups = useQuery({
-    queryKey: ['groups', 'all'],
-    queryFn: () => client.groups.list({ limit: 200 }),
-    staleTime: 60_000,
+export function useGroups(): { groups: readonly GroupDto[]; isLoading: boolean } {
+  const { result, query } = useList<GroupDto>({
+    resource: 'groups',
+    pagination: { mode: 'off' },
+    queryOptions: { staleTime: 60_000 },
   });
 
-  return useMemo(() => new Map((groups.data?.items ?? []).map((g) => [g.id, g])), [groups.data]);
+  return { groups: result.data, isLoading: query.isLoading };
+}
+
+export function useGroupsById(): ReadonlyMap<string, GroupDto> {
+  const { groups } = useGroups();
+
+  return useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
 }

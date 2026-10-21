@@ -3,9 +3,11 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Center,
   Group,
   Loader,
   Modal,
+  Pagination,
   ScrollArea,
   Stack,
   Switch,
@@ -15,29 +17,58 @@ import {
   Tooltip,
 } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
-import { showNotification } from '@mantine/notifications';
-import { List } from '@refinedev/mantine';
+import {
+  type HttpError,
+  getDefaultFilter,
+  useDelete,
+  useInvalidate,
+  useNotification,
+  useTable,
+} from '@refinedev/core';
+import { List, type UseModalFormReturnType, useModalForm } from '@refinedev/mantine';
 import { IconKey, IconPencil, IconPlus, IconSearch, IconTrash } from '@tabler/icons-react';
-import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { z } from 'zod';
 
 import { confirmAction } from '../../components/confirm';
-import { NewPasswordFields, passwordValid, MIN_PASSWORD } from '../../components/NewPasswordFields';
+import {
+  MIN_PASSWORD,
+  NewPasswordFields,
+  passwordError,
+  passwordValid,
+} from '../../components/NewPasswordFields';
 import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
 import { LoadError } from '../../components/PageState';
 import { ScopeBadge, ScopeLevel } from '../../components/SignInMethods';
 import { useIdentity } from '../../lib/access';
 import { type UserDto, client } from '../../lib/api';
-import { configIssues, errorMessage, focusFirstInvalidField } from '../../lib/errors';
+import { configIssues, errorMessage, fieldError, focusFirstInvalidField } from '../../lib/errors';
 import { fromNow } from '../../lib/format';
+import { unfieldedError } from './form-errors';
 
-const USERS_KEY = ['users'];
+interface CreateUserValues {
+  username: string;
+  password: string;
+  scopes: Scope[];
+}
 
-type Dialog =
-  | { kind: 'create' }
-  | { kind: 'edit'; user: UserDto }
-  | { kind: 'password'; user: UserDto }
-  | null;
+interface EditUserValues {
+  scopes: Scope[];
+  disabled: boolean;
+  version: number;
+}
+
+interface UserUpdate {
+  scopes: Scope[];
+  disabled: boolean;
+  expectedVersion: number;
+}
+
+type CreateUserForm = UseModalFormReturnType<UserDto, HttpError, CreateUserValues>;
+type EditUserForm = UseModalFormReturnType<UserDto, HttpError, EditUserValues, UserUpdate>;
+
+const SearchValue = z.string().catch('');
 
 const failureText = (error: unknown) => {
   const issues = configIssues(error);
@@ -48,34 +79,41 @@ const failureText = (error: unknown) => {
 const isSelf = (user: UserDto, identityId: string | undefined): boolean =>
   identityId === `user:${user.username}`;
 
-function CreateUserForm({ onDone }: { onDone: (username: string) => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [scopes, setScopes] = useState<Scope[]>(['read']);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+const accessChange = (user: UserDto, disabled: boolean): string => {
+  if (disabled === user.disabled) {
+    return `${user.username}'s access was updated`;
+  }
+
+  return disabled ? `${user.username} can no longer sign in` : `${user.username} can sign in again`;
+};
+
+function FormError({ message }: { message: string | null }) {
+  if (message === null) {
+    return null;
+  }
+
+  return (
+    <Text size="sm" color="red" role="alert">
+      {message}
+    </Text>
+  );
+}
+
+function CreateUserFields({ form, onClose }: { form: CreateUserForm; onClose: () => void }) {
   const [submitted, setSubmitted] = useState(false);
-  const usernameError = submitted && username.trim() === '' ? 'Enter a username' : undefined;
+  const { onFinish, formLoading, mutation } = form.refineCore;
 
   return (
     <form
       noValidate
       onSubmit={(e) => {
-        e.preventDefault();
         setSubmitted(true);
-        if (username.trim() === '' || !passwordValid(password)) {
-          focusFirstInvalidField(e.currentTarget);
-
-          return;
-        }
-        setSaving(true);
-        setError(null);
-        const name = username.trim();
-        client.users
-          .create({ username: name, password, scopes })
-          .then(() => onDone(name))
-          .catch((failure: unknown) => setError(failureText(failure)))
-          .finally(() => setSaving(false));
+        form.onSubmit(
+          (values) => {
+            void onFinish(values).then(onClose, () => focusFirstInvalidField());
+          },
+          () => focusFirstInvalidField(),
+        )(e);
       }}
     >
       <Stack spacing="sm">
@@ -83,26 +121,25 @@ function CreateUserForm({ onDone }: { onDone: (username: string) => void }) {
           label="Username"
           autoComplete="off"
           data-autofocus
-          value={username}
-          onChange={(e) => setUsername(e.currentTarget.value)}
-          {...(usernameError === undefined ? {} : { error: usernameError })}
+          {...form.getInputProps('username')}
           withAsterisk
         />
         <NewPasswordFields
           label="Initial password"
           description={`At least ${MIN_PASSWORD} characters. Share it with the user securely.`}
-          password={password}
-          onPasswordChange={setPassword}
+          password={form.values.password}
+          onPasswordChange={(password) => form.setFieldValue('password', password)}
           submitted={submitted}
         />
-        <ScopeLevel label="Access" value={scopes} onChange={setScopes} />
-        {error && (
-          <Text size="sm" color="red" role="alert">
-            {error}
-          </Text>
-        )}
+        <ScopeLevel
+          label="Access"
+          value={form.values.scopes}
+          onChange={(scopes) => form.setFieldValue('scopes', scopes)}
+          error={fieldError(form.errors, 'scopes')}
+        />
+        <FormError message={unfieldedError(mutation.error, ['username', 'scopes'])} />
         <Group position="right">
-          <Button type="submit" loading={saving}>
+          <Button type="submit" loading={formLoading}>
             Create user
           </Button>
         </Group>
@@ -111,75 +148,79 @@ function CreateUserForm({ onDone }: { onDone: (username: string) => void }) {
   );
 }
 
-function EditUserForm({
-  user,
+function EditUserFields({
+  form,
   self,
-  onDone,
+  onClose,
 }: {
-  user: UserDto;
+  form: EditUserForm;
   self: boolean;
-  onDone: (user: UserDto, change: string) => void;
+  onClose: () => void;
 }) {
-  const [scopes, setScopes] = useState<Scope[]>(user.scopes);
-  const [canSignIn, setCanSignIn] = useState(!user.disabled);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const change =
-    canSignIn === user.disabled
-      ? canSignIn
-        ? `${user.username} can sign in again`
-        : `${user.username} can no longer sign in`
-      : `${user.username}'s access was updated`;
+  const { onFinish, formLoading, mutation, query } = form.refineCore;
+  const canSignIn = !form.values.disabled;
+
+  if (query?.isLoading === true) {
+    return (
+      <Center py="lg">
+        <Loader size="sm" />
+      </Center>
+    );
+  }
 
   return (
-    <Stack spacing="sm">
-      <ScopeLevel label="Access" value={scopes} onChange={setScopes} />
-      <Switch
-        label="Can sign in"
-        description={
-          self
-            ? "You can't turn off your own account."
-            : 'Turning this off ends their sessions and blocks new sign-ins.'
-        }
-        checked={canSignIn}
-        disabled={self && canSignIn}
-        onChange={(e) => setCanSignIn(e.currentTarget.checked)}
-      />
-      {error && (
-        <Text size="sm" color="red" role="alert">
-          {error}
-        </Text>
-      )}
-      <Group position="right">
-        <Button
-          loading={saving}
-          onClick={() => {
-            setSaving(true);
-            setError(null);
-            client.users
-              .update({
-                id: user.id,
-                expectedVersion: user.version,
-                scopes,
-                disabled: !canSignIn,
-              })
-              .then(() => onDone(user, change))
-              .catch((failure: unknown) => setError(failureText(failure)))
-              .finally(() => setSaving(false));
-          }}
-        >
-          Save
-        </Button>
-      </Group>
-    </Stack>
+    <form
+      noValidate
+      onSubmit={form.onSubmit((values) => {
+        void onFinish(values).then(onClose, () => focusFirstInvalidField());
+      })}
+    >
+      <Stack spacing="sm">
+        <ScopeLevel
+          label="Access"
+          value={form.values.scopes}
+          onChange={(scopes) => form.setFieldValue('scopes', scopes)}
+          error={fieldError(form.errors, 'scopes')}
+        />
+        <Switch
+          label="Can sign in"
+          description={
+            self
+              ? "You can't turn off your own account."
+              : 'Turning this off ends their sessions and blocks new sign-ins.'
+          }
+          checked={canSignIn}
+          disabled={self && canSignIn}
+          onChange={(e) => form.setFieldValue('disabled', !e.currentTarget.checked)}
+        />
+        <FormError message={unfieldedError(mutation.error, ['scopes'])} />
+        <Group position="right">
+          <Button type="submit" loading={formLoading}>
+            Save
+          </Button>
+        </Group>
+      </Stack>
+    </form>
   );
 }
 
-function ResetPasswordForm({ user, onDone }: { user: UserDto; onDone: (user: UserDto) => void }) {
+function ResetPasswordForm({ user, onDone }: { user: UserDto; onDone: () => void }) {
+  const { open } = useNotification();
+  const invalidate = useInvalidate();
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const reset = useMutation({
+    mutationFn: (next: string) => client.users.resetPassword({ id: user.id, password: next }),
+    onSuccess: () => {
+      open?.({
+        type: 'success',
+        message: 'Password set',
+        description: `${user.username} was signed out and must use the new password.`,
+      });
+      void invalidate({ resource: 'users', invalidates: ['list'] });
+      onDone();
+    },
+  });
 
   return (
     <form
@@ -192,13 +233,7 @@ function ResetPasswordForm({ user, onDone }: { user: UserDto; onDone: (user: Use
 
           return;
         }
-        setSaving(true);
-        setError(null);
-        client.users
-          .resetPassword({ id: user.id, password })
-          .then(() => onDone(user))
-          .catch((failure: unknown) => setError(failureText(failure)))
-          .finally(() => setSaving(false));
+        reset.mutate(password);
       }}
     >
       <Stack spacing="sm">
@@ -210,13 +245,9 @@ function ResetPasswordForm({ user, onDone }: { user: UserDto; onDone: (user: Use
           onPasswordChange={setPassword}
           submitted={submitted}
         />
-        {error && (
-          <Text size="sm" color="red" role="alert">
-            {error}
-          </Text>
-        )}
+        <FormError message={reset.error ? failureText(reset.error) : null} />
         <Group position="right">
-          <Button type="submit" loading={saving}>
+          <Button type="submit" loading={reset.isPending}>
             Set password
           </Button>
         </Group>
@@ -269,47 +300,125 @@ function UserActions({
   );
 }
 
-export function UserList() {
-  const queryClient = useQueryClient();
-  const { identity } = useIdentity();
-  const [search, setSearch] = useState('');
-  const [debounced] = useDebouncedValue(search.trim(), 250);
-  const [dialog, setDialog] = useState<Dialog>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const users = useQuery({
-    queryKey: [...USERS_KEY, debounced],
-    queryFn: () =>
-      client.users.list({ limit: 200, ...(debounced !== '' && { search: debounced }) }),
-    placeholderData: keepPreviousData,
+function useCreateUserForm(): CreateUserForm {
+  return useModalForm<UserDto, HttpError, CreateUserValues>({
+    initialValues: { username: '', password: '', scopes: ['read'] },
+    validate: {
+      username: (value) => (value.trim() === '' ? 'Enter a username' : null),
+      password: (value) => passwordError(value, true) ?? null,
+    },
+    transformValues: (values) => ({ ...values, username: values.username.trim() }),
+    refineCoreProps: {
+      resource: 'users',
+      action: 'create',
+      redirect: false,
+      warnWhenUnsavedChanges: false,
+      errorNotification: false,
+      successNotification: (data) => ({
+        type: 'success',
+        message: 'User created',
+        description: `${data?.data.username ?? 'The user'} can now sign in.`,
+      }),
+    },
   });
-  const done = (title: string, message: string) => {
-    setDialog(null);
-    showNotification({ color: 'teal', title, message });
-    void queryClient.invalidateQueries({ queryKey: USERS_KEY });
+}
+
+function useEditUserForm(before: UserDto | null): EditUserForm {
+  return useModalForm<UserDto, HttpError, EditUserValues, UserUpdate>({
+    initialValues: { scopes: [], disabled: false, version: 0 },
+    transformValues: ({ scopes, disabled, version }) => ({
+      scopes,
+      disabled,
+      expectedVersion: version,
+    }),
+    refineCoreProps: {
+      resource: 'users',
+      action: 'edit',
+      redirect: false,
+      warnWhenUnsavedChanges: false,
+      errorNotification: false,
+      successNotification: (data) => {
+        const saved = data?.data;
+
+        return saved === undefined
+          ? false
+          : {
+              type: 'success',
+              message: `${saved.username} updated`,
+              description: accessChange(before ?? saved, saved.disabled),
+            };
+      },
+    },
+  });
+}
+
+export function UserList() {
+  const { identity } = useIdentity();
+  const { tableQuery, currentPage, setCurrentPage, pageCount, filters, setFilters } =
+    useTable<UserDto>({
+      resource: 'users',
+      pagination: { pageSize: 50 },
+    });
+  const appliedSearch = SearchValue.parse(getDefaultFilter('search', filters, 'contains'));
+  const [draft, setDraft] = useState({ base: appliedSearch, value: appliedSearch });
+  const search = draft.base === appliedSearch ? draft.value : appliedSearch;
+  const [debounced] = useDebouncedValue(search.trim(), 250);
+  useEffect(() => {
+    setFilters(
+      [{ field: 'search', operator: 'contains', value: debounced || undefined }],
+      'replace',
+    );
+  }, [debounced, setFilters]);
+  const createForm = useCreateUserForm();
+  const [editing, setEditing] = useState<UserDto | null>(null);
+  const editForm = useEditUserForm(editing);
+  const [passwordFor, setPasswordFor] = useState<UserDto | null>(null);
+  const { mutate: deleteUser, mutation: deletion } = useDelete<UserDto>();
+  const changeSearch = (value: string) => {
+    setDraft({ base: appliedSearch, value });
+    setCurrentPage(1);
   };
-  const remove = async (user: UserDto) => {
-    setDeleting(user.id);
-    try {
-      await client.users.delete({ id: user.id });
-      done('User deleted', `${user.username} can no longer sign in.`);
-    } catch (error: unknown) {
-      showNotification({
-        color: 'red',
-        title: `Couldn't delete ${user.username}`,
-        message: failureText(error),
-      });
-    } finally {
-      setDeleting(null);
-    }
+  const clearSearch = () => {
+    setDraft({ base: '', value: '' });
+    setFilters([{ field: 'search', operator: 'contains', value: undefined }], 'replace');
+    setCurrentPage(1);
   };
-  const items = users.data?.items ?? [];
+  const closeCreate = () => {
+    createForm.modal.close();
+    createForm.refineCore.mutation.reset();
+  };
+  const openEdit = (user: UserDto) => {
+    setEditing(user);
+    editForm.modal.show(user.id);
+  };
+  const closeEdit = () => {
+    editForm.modal.close();
+    editForm.refineCore.mutation.reset();
+  };
+  const remove = (user: UserDto) =>
+    deleteUser({
+      resource: 'users',
+      id: user.id,
+      mutationMode: 'pessimistic',
+      successNotification: {
+        type: 'success',
+        message: 'User deleted',
+        description: `${user.username} can no longer sign in.`,
+      },
+      errorNotification: (error) => ({
+        type: 'error',
+        message: `Couldn't delete ${user.username}`,
+        description: error?.message ?? 'Something went wrong',
+      }),
+    });
+  const items = tableQuery.data?.data ?? [];
 
   return (
     <List
       title={<PageHeading>Users</PageHeading>}
       breadcrumb={pageBreadcrumb}
       headerButtons={
-        <Button leftIcon={<IconPlus size={16} />} onClick={() => setDialog({ kind: 'create' })}>
+        <Button leftIcon={<IconPlus size={16} />} onClick={() => createForm.modal.show()}>
           Add user
         </Button>
       }
@@ -321,12 +430,16 @@ export function UserList() {
           type="search"
           maw={320}
           icon={<IconSearch size={16} />}
-          rightSection={users.isFetching ? <Loader size="xs" /> : null}
+          rightSection={tableQuery.isFetching ? <Loader size="xs" /> : null}
           value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
+          onChange={(e) => changeSearch(e.currentTarget.value)}
         />
-        {users.error ? (
-          <LoadError error={users.error} what="users" onRetry={() => void users.refetch()} />
+        {tableQuery.isError ? (
+          <LoadError
+            error={tableQuery.error}
+            what="users"
+            onRetry={() => void tableQuery.refetch()}
+          />
         ) : (
           <ScrollArea>
             <Table highlightOnHover verticalSpacing="xs" className="ct-table" miw={640}>
@@ -376,9 +489,9 @@ export function UserList() {
                         <UserActions
                           user={user}
                           self={self}
-                          deleting={deleting === user.id}
-                          onEdit={() => setDialog({ kind: 'edit', user })}
-                          onPassword={() => setDialog({ kind: 'password', user })}
+                          deleting={deletion.isPending && deletion.variables?.id === user.id}
+                          onEdit={() => openEdit(user)}
+                          onPassword={() => setPasswordFor(user)}
                           onDelete={() =>
                             void confirmAction({
                               title: `Delete ${user.username}?`,
@@ -395,13 +508,13 @@ export function UserList() {
                 })}
               </tbody>
             </Table>
-            {users.isSuccess && items.length === 0 && (
+            {tableQuery.isSuccess && items.length === 0 && (
               <Stack align="center" spacing="xs" p="lg">
                 <Text color="dimmed" align="center">
-                  {debounced === '' ? 'No users yet.' : `No users match “${debounced}”.`}
+                  {appliedSearch === '' ? 'No users yet.' : `No users match “${appliedSearch}”.`}
                 </Text>
-                {debounced !== '' && (
-                  <Button size="xs" variant="default" onClick={() => setSearch('')}>
+                {appliedSearch !== '' && (
+                  <Button size="xs" variant="default" onClick={clearSearch}>
                     Clear search
                   </Button>
                 )}
@@ -409,39 +522,36 @@ export function UserList() {
             )}
           </ScrollArea>
         )}
+        {pageCount > 1 && (
+          <Pagination
+            page={currentPage}
+            total={pageCount}
+            onChange={setCurrentPage}
+            position="right"
+          />
+        )}
       </Stack>
+      <Modal opened={createForm.modal.visible} onClose={closeCreate} title="Add user">
+        <CreateUserFields form={createForm} onClose={closeCreate} />
+      </Modal>
       <Modal
-        opened={dialog !== null}
-        onClose={() => setDialog(null)}
-        title={
-          dialog?.kind === 'create'
-            ? 'Add user'
-            : dialog?.kind === 'edit'
-              ? `Edit ${dialog.user.username}`
-              : dialog?.kind === 'password'
-                ? `Set password for ${dialog.user.username}`
-                : ''
-        }
+        opened={editForm.modal.visible}
+        onClose={closeEdit}
+        title={editing ? `Edit ${editing.username}` : 'Edit user'}
       >
-        {dialog?.kind === 'create' && (
-          <CreateUserForm
-            onDone={(username) => done('User created', `${username} can now sign in.`)}
-          />
-        )}
-        {dialog?.kind === 'edit' && (
-          <EditUserForm
-            user={dialog.user}
-            self={isSelf(dialog.user, identity?.id)}
-            onDone={(user, change) => done(`${user.username} updated`, change)}
-          />
-        )}
-        {dialog?.kind === 'password' && (
-          <ResetPasswordForm
-            user={dialog.user}
-            onDone={(user) =>
-              done('Password set', `${user.username} was signed out and must use the new password.`)
-            }
-          />
+        <EditUserFields
+          form={editForm}
+          self={editing !== null && isSelf(editing, identity?.id)}
+          onClose={closeEdit}
+        />
+      </Modal>
+      <Modal
+        opened={passwordFor !== null}
+        onClose={() => setPasswordFor(null)}
+        title={passwordFor ? `Set password for ${passwordFor.username}` : ''}
+      >
+        {passwordFor && (
+          <ResetPasswordForm user={passwordFor} onDone={() => setPasswordFor(null)} />
         )}
       </Modal>
     </List>

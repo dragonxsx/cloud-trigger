@@ -12,9 +12,6 @@ export const backIcon = (
   </>
 );
 
-export const countOf = (count: number, one: string, many = `${one}s`): string =>
-  `${String(count)} ${count === 1 ? one : many}`;
-
 export const pageBreadcrumb = <Breadcrumb showHome={false} />;
 
 export function PageHeading({ children }: { children: ReactNode }) {

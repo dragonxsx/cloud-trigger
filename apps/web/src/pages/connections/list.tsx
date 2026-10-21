@@ -1,5 +1,4 @@
 import {
-  ActionIcon,
   Anchor,
   Badge,
   Code,
@@ -10,12 +9,11 @@ import {
   Table,
   Text,
 } from '@mantine/core';
-import { useCan, useTable } from '@refinedev/core';
-import { List } from '@refinedev/mantine';
-import { IconChevronRight, IconPencil } from '@tabler/icons-react';
+import { useNavigation, useTable } from '@refinedev/core';
+import { EditButton, List, ShowButton } from '@refinedev/mantine';
 import { Link } from 'react-router';
 
-import { PageHeading } from '../../components/page-chrome';
+import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
 import { LoadError } from '../../components/PageState';
 import type { ConnectionDto } from '../../lib/api';
 import { connectionAddress } from './summary';
@@ -26,10 +24,10 @@ export function ConnectionList() {
     pagination: { pageSize: 50 },
   });
   const connections = tableQuery.data?.data ?? [];
-  const canEdit = useCan({ resource: 'connections', action: 'edit' }).data?.can === true;
+  const { showUrl } = useNavigation();
 
   return (
-    <List title={<PageHeading>Connections</PageHeading>}>
+    <List title={<PageHeading>Connections</PageHeading>} breadcrumb={pageBreadcrumb}>
       <Stack spacing="md">
         {tableQuery.isError ? (
           <LoadError
@@ -60,7 +58,7 @@ export function ConnectionList() {
                     <td>
                       <Anchor
                         component={Link}
-                        to={`/connections/show/${connection.key}`}
+                        to={showUrl('connections', connection.key)}
                         size="sm"
                         weight={600}
                       >
@@ -85,26 +83,23 @@ export function ConnectionList() {
                     </td>
                     <td>
                       <Group spacing={4} noWrap position="right">
-                        {canEdit && (
-                          <ActionIcon
-                            component={Link}
-                            to={`/connections/edit/${connection.key}`}
-                            size="lg"
-                            variant="subtle"
-                            aria-label={`Edit ${connection.name || connection.key}`}
-                          >
-                            <IconPencil size={18} />
-                          </ActionIcon>
-                        )}
-                        <ActionIcon
-                          component={Link}
-                          to={`/connections/show/${connection.key}`}
+                        <EditButton
+                          hideText
+                          resource="connections"
+                          recordItemId={connection.key}
+                          accessControl={{ hideIfUnauthorized: true }}
+                          size="lg"
+                          variant="subtle"
+                          aria-label={`Edit ${connection.name || connection.key}`}
+                        />
+                        <ShowButton
+                          hideText
+                          resource="connections"
+                          recordItemId={connection.key}
                           size="lg"
                           variant="subtle"
                           aria-label={`Open ${connection.name || connection.key}`}
-                        >
-                          <IconChevronRight size={18} />
-                        </ActionIcon>
+                        />
                       </Group>
                     </td>
                   </tr>

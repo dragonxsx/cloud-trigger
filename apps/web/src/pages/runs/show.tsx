@@ -17,13 +17,19 @@ import {
   Timeline,
   Tooltip,
 } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { CanAccess, useInvalidate, useOne, useShow } from '@refinedev/core';
+import {
+  CanAccess,
+  useInvalidate,
+  useNavigation,
+  useNotification,
+  useOne,
+  useShow,
+} from '@refinedev/core';
 import { Show } from '@refinedev/mantine';
 import { IconCheck, IconCopy, IconPlayerStop, IconRepeat } from '@tabler/icons-react';
 import { useMutation } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link } from 'react-router';
 
 import { confirmAction } from '../../components/confirm';
 import { PageHeading, backIcon } from '../../components/page-chrome';
@@ -236,20 +242,21 @@ function InboundEvent({ event }: { event: RunEventDto }) {
 
 function RunActions({ run }: { run: RunDto }) {
   const invalidate = useInvalidate();
-  const navigate = useNavigate();
+  const { show } = useNavigation();
+  const { open } = useNotification();
   const cancel = useMutation({
     mutationFn: () => client.runs.cancel({ id: run.id }),
     onSuccess: async () => {
-      showNotification({ color: 'green', message: 'Cancellation requested' });
+      open?.({ type: 'success', message: 'Cancellation requested' });
       await invalidate({ resource: 'runs', invalidates: ['detail', 'list'], id: run.id });
     },
     onError: (e) => notifyError('Could not cancel the run', e),
   });
   const replay = useMutation({
     mutationFn: () => client.runs.replay({ id: run.id }),
-    onSuccess: async (next) => {
-      showNotification({ color: 'green', message: 'Replay queued' });
-      await navigate(`/runs/show/${next.id}`);
+    onSuccess: (next) => {
+      open?.({ type: 'success', message: 'Replay queued' });
+      show('runs', next.id);
     },
     onError: (e) => notifyError('Could not replay the run', e),
   });
@@ -292,6 +299,10 @@ function RunActions({ run }: { run: RunDto }) {
   );
 }
 
+function RunHeaderButtons({ run }: { run: RunDto | undefined }) {
+  return run ? <RunActions run={run} /> : null;
+}
+
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <Stack spacing={2} sx={{ minWidth: 0 }}>
@@ -312,6 +323,7 @@ const finishedAt = (run: RunDto): string | undefined =>
 const runTitle = (run: RunDto): string => `${run.jobName} · ${dateTime(run.scheduledAt)}`;
 
 export function RunShow() {
+  const { listUrl, showUrl } = useNavigation();
   const { query } = useShow<RunDto>({
     resource: 'runs',
     liveMode: 'auto',
@@ -349,10 +361,10 @@ export function RunShow() {
       title={<PageHeading>{run ? runTitle(run) : 'Run'}</PageHeading>}
       canEdit={false}
       canDelete={false}
-      headerButtons={run ? <RunActions run={run} /> : <></>}
+      headerButtons={<RunHeaderButtons run={run} />}
       breadcrumb={
         <Breadcrumbs>
-          <Anchor component={Link} to="/runs" size="sm">
+          <Anchor component={Link} to={listUrl('runs')} size="sm">
             Runs
           </Anchor>
           <Text size="sm" color="dimmed">
@@ -382,7 +394,7 @@ export function RunShow() {
                 </Group>
               </Fact>
               <Fact label="Job">
-                <Anchor component={Link} to={`/jobs/show/${run.jobId}`} size="sm">
+                <Anchor component={Link} to={showUrl('jobs', run.jobId)} size="sm">
                   {run.jobName}
                 </Anchor>
               </Fact>

@@ -14,10 +14,11 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
+import { useGo, useInvalidateAuthStore } from '@refinedev/core';
 import { IconAlertTriangle, IconCheck, IconCopy, IconRefresh } from '@tabler/icons-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate } from 'react-router';
 
 import { AuthShell, BrandMark, useFocusOnMount } from '../../components/Brand';
 import { NewPasswordFields, passwordValid } from '../../components/NewPasswordFields';
@@ -393,11 +394,14 @@ function AdminStep({
   );
 }
 
+const SETUP_STATUS_KEY = ['setup', 'status'] as const;
+
 export function SetupWizard() {
-  const navigate = useNavigate();
+  const go = useGo();
   const queryClient = useQueryClient();
+  const invalidateAuthStore = useInvalidateAuthStore();
   const status = useQuery({
-    queryKey: ['setup', 'status'],
+    queryKey: SETUP_STATUS_KEY,
     queryFn: () => client.setup.status({}),
   });
   const [token, setToken] = useState<string | null>(() => setupToken.get());
@@ -461,8 +465,11 @@ export function SetupWizard() {
       setupToken.set(null);
       startPasswordSession(session);
       resetAuthConfig();
-      await queryClient.invalidateQueries();
-      await navigate('/', { replace: true });
+      await Promise.all([
+        invalidateAuthStore(),
+        queryClient.invalidateQueries({ queryKey: SETUP_STATUS_KEY }),
+      ]);
+      go({ to: '/', type: 'replace' });
     } catch (error: unknown) {
       setFinishing(false);
       setFailure({

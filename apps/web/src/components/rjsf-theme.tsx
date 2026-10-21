@@ -15,6 +15,7 @@ import {
   TextInput,
   Textarea,
 } from '@mantine/core';
+import { useList } from '@refinedev/core';
 import {
   type ArrayFieldItemTemplateProps,
   type ArrayFieldTemplateProps,
@@ -28,13 +29,12 @@ import {
   getUiOptions,
 } from '@rjsf/utils';
 import { IconChevronDown, IconChevronRight, IconPlus, IconTrash } from '@tabler/icons-react';
-import { useQuery } from '@tanstack/react-query';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
 import { createContext, useContext, useState } from 'react';
 import { z } from 'zod';
 
-import { client } from '../lib/api';
+import type { JobDto } from '../lib/api';
 
 const ACRONYMS = new Set(['url', 'http', 'id', 'json', 'api', 'tls', 'smtp', 'hmac']);
 const humanizeWord = (word: string): string => {
@@ -281,10 +281,10 @@ function TimeZoneWidget(p: WidgetProps) {
 }
 
 function JobWidget(p: WidgetProps) {
-  const jobs = useQuery({
-    queryKey: ['jobs', 'picker'],
-    queryFn: () => client.jobs.list({ limit: 200 }),
-    staleTime: 30_000,
+  const jobs = useList<JobDto>({
+    resource: 'jobs',
+    pagination: { mode: 'off' },
+    queryOptions: { staleTime: 30_000 },
   });
 
   return (
@@ -292,7 +292,7 @@ function JobWidget(p: WidgetProps) {
       {...common(p)}
       searchable
       nothingFound="No matching job"
-      data={(jobs.data?.items ?? []).map((j) => ({ value: j.id, label: j.name }))}
+      data={jobs.result.data.map((j) => ({ value: j.id, label: j.name }))}
       value={typeof p.value === 'string' ? p.value : null}
       onChange={(v) => p.onChange(v ?? undefined)}
     />

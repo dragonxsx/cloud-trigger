@@ -10,14 +10,14 @@ import {
 } from '@mantine/core';
 import type { FormErrors, UseFormReturnType } from '@mantine/form';
 import { IconColorPicker } from '@tabler/icons-react';
-import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
 import { EnvironmentSelect } from '../../components/EnvironmentSelect';
 import { GROUP_SWATCHES } from '../../components/GroupChip';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
-import { type GroupDto, client } from '../../lib/api';
+import type { GroupDto, client } from '../../lib/api';
+import { useProviders } from '../../lib/providers';
 
 type GroupSpecDto = Parameters<typeof client.groups.create>[0];
 
@@ -102,11 +102,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
 }
 
 export function GroupFormFields({ form }: { form: GroupForm }) {
-  const providers = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list({}),
-    staleTime: 300_000,
-  });
+  const providers = useProviders();
   const notifiers = (providers.data ?? []).filter((p) => p.kind === 'notifier');
   const { values, errors } = form;
   const perSecond = values.rateLimit?.perSecond;

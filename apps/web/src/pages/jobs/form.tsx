@@ -35,6 +35,8 @@ import {
   fieldError,
 } from '../../lib/errors';
 import { dateTime, dateTimeWithLocal } from '../../lib/format';
+import { useGroups } from '../../lib/groups';
+import { useProviders } from '../../lib/providers';
 
 export type JobFormValues = Pick<
   JobDto,
@@ -266,11 +268,7 @@ export const triggerZone = (trigger: Pick<JobDto, 'trigger'>['trigger']): string
 };
 
 export function JobFormFields({ form }: { form: JobForm }) {
-  const providers = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list({}),
-    staleTime: 300_000,
-  });
+  const providers = useProviders();
   const byKind = useMemo(() => {
     const all = providers.data ?? [];
     const of = (kind: ProviderDto['kind']) => all.filter((p) => p.kind === kind);
@@ -282,13 +280,9 @@ export function JobFormFields({ form }: { form: JobForm }) {
       notifier: of('notifier'),
     };
   }, [providers.data]);
-  const groups = useQuery({
-    queryKey: ['groups', 'all'],
-    queryFn: () => client.groups.list({ limit: 200 }),
-    staleTime: 60_000,
-  });
+  const { groups } = useGroups();
   const { values, errors } = form;
-  const group = groups.data?.items.find((g) => g.id === values.groupId);
+  const group = groups.find((g) => g.id === values.groupId);
   const groupEnvironment = group?.environment ?? null;
   const spec = useMemo(() => toSpec(values), [values]);
   const preview = useSchedulePreview(spec);
@@ -332,10 +326,10 @@ export function JobFormFields({ form }: { form: JobForm }) {
             placeholder="No group"
             clearable
             searchable
-            data={(groups.data?.items ?? []).map((g) => ({ value: g.id, label: g.name }))}
+            data={groups.map((g) => ({ value: g.id, label: g.name }))}
             value={values.groupId}
             onChange={(id) =>
-              form.setFieldValue('groupId', groups.data?.items.find((g) => g.id === id)?.id ?? null)
+              form.setFieldValue('groupId', groups.find((g) => g.id === id)?.id ?? null)
             }
           />
           <EnvironmentSelect

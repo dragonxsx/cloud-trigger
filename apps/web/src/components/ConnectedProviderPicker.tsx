@@ -1,10 +1,9 @@
 import { type EndpointKind, endpointProvider, isRecord } from '@cloud-trigger/core';
 import { Select, SimpleGrid, Stack, Text } from '@mantine/core';
-import { useQuery } from '@tanstack/react-query';
+import { useList } from '@refinedev/core';
 import { useMemo } from 'react';
 
 import type { ConnectionDto, ProviderDto } from '../lib/api';
-import { listAllConnections } from '../lib/connections';
 import type { ConfigIssueDto } from '../lib/errors';
 import { ProviderConfigForm } from './ProviderConfigForm';
 
@@ -135,16 +134,16 @@ export function ConnectedProviderPicker({
   endpointError,
   onChange,
 }: Props) {
-  const connections = useQuery({
-    queryKey: ['connections', 'all'],
-    queryFn: () => listAllConnections(),
-    staleTime: 30_000,
+  const connections = useList<ConnectionDto>({
+    resource: 'connections',
+    pagination: { mode: 'off' },
+    queryOptions: { staleTime: 30_000 },
   });
   const usable = useMemo(() => {
     const types = new Set(providers.flatMap((p) => p.connectionType ?? []));
 
-    return (connections.data ?? []).filter((c) => types.has(c.type));
-  }, [connections.data, providers]);
+    return connections.result.data.filter((c) => types.has(c.type));
+  }, [connections.result.data, providers]);
   const connection: ConnectionDto | undefined = usable.find((c) => c.key === value.connection?.key);
   const endpoints = useMemo(
     () =>

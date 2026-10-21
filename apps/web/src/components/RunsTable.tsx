@@ -21,7 +21,7 @@ import {
 import { Link, useNavigate } from 'react-router';
 
 import type { RunDto } from '../lib/api';
-import { dateTime, duration, fromNow } from '../lib/format';
+import { countOf, dateTime, duration, fromNow } from '../lib/format';
 import { LateBadge, STATUS, StatusBadge } from '../lib/status';
 
 export const lastResult = (run: RunDto) =>
@@ -186,7 +186,7 @@ export function RunsTable({
             leftIcon={<IconArrowUp size={14} />}
             onClick={() => setFrozen(runs)}
           >
-            {incoming === 1 ? 'Show 1 new run' : `Show ${incoming} new runs`}
+            {`Show ${countOf(incoming, 'new run')}`}
           </Button>
         )}
       </div>

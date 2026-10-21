@@ -1,5 +1,5 @@
 import { Alert, Badge, Button, Group, PasswordInput, Stack, Text, Title } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
+import { useNotification, useUpdatePassword } from '@refinedev/core';
 import { List } from '@refinedev/mantine';
 import { useState } from 'react';
 
@@ -12,9 +12,7 @@ import {
   levelDescription,
   useIdentity,
 } from '../lib/access';
-import { client } from '../lib/api';
-import { errorMessage, focusFirstInvalidField, isUnauthorized } from '../lib/errors';
-import { startPasswordSession } from '../providers/auth-provider';
+import { errorMessage, errorStatus, focusFirstInvalidField } from '../lib/errors';
 
 const VIA_LABELS: Record<IdentityDto['via'], string> = {
   local: 'a username and password',
@@ -50,6 +48,11 @@ function AccessSummary() {
   );
 }
 
+interface PasswordChange {
+  readonly currentPassword: string;
+  readonly newPassword: string;
+}
+
 function ChangePasswordForm() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -57,10 +60,26 @@ function ChangePasswordForm() {
   const [submitted, setSubmitted] = useState(false);
   const [currentError, setCurrentError] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { open } = useNotification();
+  const { mutate: updatePassword, isPending } = useUpdatePassword<PasswordChange>({
+    mutationOptions: {
+      onSuccess: ({ successNotification }) => {
+        if (successNotification) {
+          open?.({
+            type: 'success',
+            key: 'update-password-success',
+            message: successNotification.message,
+            ...(successNotification.description === undefined
+              ? {}
+              : { description: successNotification.description }),
+          });
+        }
+      },
+    },
+  });
   const currentProblem =
     currentError ?? (submitted && current === '' ? 'Enter your current password' : undefined);
-  const submit = async (form: HTMLFormElement) => {
+  const submit = (form: HTMLFormElement) => {
     setSubmitted(true);
     setCurrentError(null);
     setFailure(null);
@@ -69,30 +88,24 @@ function ChangePasswordForm() {
 
       return;
     }
-    setSaving(true);
-    try {
-      startPasswordSession(
-        await client.auth.changePassword({ currentPassword: current, newPassword: next }),
-      );
-      setCurrent('');
-      setNext('');
-      setConfirm('');
-      setSubmitted(false);
-      showNotification({
-        color: 'teal',
-        title: 'Password changed',
-        message: 'Your other sessions were signed out.',
-      });
-    } catch (error: unknown) {
-      if (isUnauthorized(error)) {
-        setCurrentError(errorMessage(error));
-        focusFirstInvalidField(form);
-      } else {
-        setFailure(errorMessage(error));
-      }
-    } finally {
-      setSaving(false);
-    }
+    updatePassword(
+      { currentPassword: current, newPassword: next },
+      {
+        onSuccess: ({ success, error }) => {
+          if (success) {
+            setCurrent('');
+            setNext('');
+            setConfirm('');
+            setSubmitted(false);
+          } else if (errorStatus(error) === 401) {
+            setCurrentError(errorMessage(error));
+            focusFirstInvalidField(form);
+          } else {
+            setFailure(errorMessage(error));
+          }
+        },
+      },
+    );
   };
 
   return (
@@ -100,7 +113,7 @@ function ChangePasswordForm() {
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
-        void submit(e.currentTarget);
+        submit(e.currentTarget);
       }}
     >
       <Stack spacing="sm">
@@ -132,7 +145,7 @@ function ChangePasswordForm() {
           </Alert>
         )}
         <Group position="right">
-          <Button type="submit" loading={saving}>
+          <Button type="submit" loading={isPending}>
             Change password
           </Button>
         </Group>

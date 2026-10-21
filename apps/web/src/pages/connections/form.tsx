@@ -31,7 +31,7 @@ import {
   IconPlus,
   IconTrash,
 } from '@tabler/icons-react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { type ReactNode, useMemo, useRef, useState } from 'react';
 
 import { confirmAction } from '../../components/confirm';
@@ -42,6 +42,8 @@ import { useHasScope } from '../../lib/access';
 import { type ConnectionSpecDto, client } from '../../lib/api';
 import type { ConfigIssueDto } from '../../lib/errors';
 import { errorMessage } from '../../lib/errors';
+import { countOf } from '../../lib/format';
+import { useProviders } from '../../lib/providers';
 import { type OverlayEndpoint, type OverlayValues, OverlaysSection } from './overlays';
 import { type TestTone, connectionAddress, describeTest, hasValue } from './summary';
 
@@ -160,8 +162,11 @@ export const validateConnection = (values: ConnectionFormValues): Record<string,
   return errors;
 };
 
-/** Overlay endpoint patches follow their endpoint's key; `to: null` drops them with it. */
-const movePatches = (overlays: OverlayValues[], from: string, to: string | null): OverlayValues[] =>
+const renameOrDropOverlayPatches = (
+  overlays: OverlayValues[],
+  from: string,
+  to: string | null,
+): OverlayValues[] =>
   overlays.map((overlay) => ({
     ...overlay,
     endpoints: overlay.endpoints.flatMap((patch) =>
@@ -217,9 +222,6 @@ function TestResult({ tone, message }: { tone: TestTone; message: string }) {
 const focusOnMount = (input: HTMLInputElement | null): void => {
   input?.focus();
 };
-
-const plural = (count: number, noun: string): string =>
-  `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
 
 export function ConnectionTestButton({
   type,
@@ -289,11 +291,7 @@ export function ConnectionFormFields({
   form: ConnectionForm;
   editing?: boolean;
 }) {
-  const providers = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list({}),
-    staleTime: 300_000,
-  });
+  const providers = useProviders();
   const all = providers.data ?? [];
   const connectionTypes = all.filter((p) => p.kind === 'connection');
   const choices = useMemo(() => {
@@ -355,14 +353,13 @@ export function ConnectionFormFields({
     });
   };
   const setEndpoints = (endpoints: EndpointValues[]) => form.setFieldValue('endpoints', endpoints);
-  // Patches stay put while another endpoint still has the old key or already has the new one.
   const moveEndpoint = (index: number, to: string | null) => {
     const from = values.endpoints[index]?.key ?? '';
-    const shared = values.endpoints.some(
+    const keyClaimedByAnotherEndpoint = values.endpoints.some(
       (endpoint, i) => i !== index && (endpoint.key === from || endpoint.key === to),
     );
-    if (!shared) {
-      form.setFieldValue('overlays', movePatches(values.overlays, from, to));
+    if (!keyClaimedByAnotherEndpoint) {
+      form.setFieldValue('overlays', renameOrDropOverlayPatches(values.overlays, from, to));
     }
   };
   const overlayEndpoints: OverlayEndpoint[] = values.endpoints.flatMap((endpoint) => {
@@ -413,8 +410,8 @@ export function ConnectionFormFields({
   };
   const changeType = (type: string) => {
     const lost = [
-      ...(values.endpoints.length > 0 ? [plural(values.endpoints.length, 'endpoint')] : []),
-      ...(values.overlays.length > 0 ? [plural(values.overlays.length, 'overlay')] : []),
+      ...(values.endpoints.length > 0 ? [countOf(values.endpoints.length, 'endpoint')] : []),
+      ...(values.overlays.length > 0 ? [countOf(values.overlays.length, 'overlay')] : []),
     ];
     if (lost.length === 0) {
       switchType(type);
@@ -469,7 +466,7 @@ export function ConnectionFormFields({
     const label = endpoint.name || endpoint.key || 'this endpoint';
     void confirmAction({
       title: `Remove ${label}?`,
-      message: `${patched > 0 ? `Its overrides in ${plural(patched, 'overlay')} go too. ` : ''}Jobs that pick this endpoint stop working once you save the connection.`,
+      message: `${patched > 0 ? `Its overrides in ${countOf(patched, 'overlay')} go too. ` : ''}Jobs that pick this endpoint stop working once you save the connection.`,
       confirmLabel: 'Remove endpoint',
       onConfirm: () => removeEndpoint(index),
     });

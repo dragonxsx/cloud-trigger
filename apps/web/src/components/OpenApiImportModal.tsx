@@ -40,6 +40,7 @@ import { z } from 'zod';
 
 import { type ApiClient, client } from '../lib/api';
 import { configIssues, errorMessage } from '../lib/errors';
+import { countOf } from '../lib/format';
 
 type AnalysisDto = Awaited<ReturnType<ApiClient['connections']['openapiPreview']>>;
 type AuthSuggestion = NonNullable<AnalysisDto['auth']>;
@@ -76,9 +77,6 @@ const MODE_LABELS: { value: ImportMode; label: string }[] = [
 const isSourceKind = (v: string): v is SourceKind => SourceKind.safeParse(v).success;
 const isNaming = (v: string): v is Naming => Naming.safeParse(v).success;
 const isMode = (v: string | null): v is ImportMode => ImportMode.safeParse(v).success;
-
-const plural = (count: number, noun: string): string =>
-  `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
 
 const finalPath = (operation: ImportedOperation): string => {
   const { config } = endpointProvider(operation.endpoint).ref;
@@ -145,7 +143,7 @@ function Warnings({ warnings }: { warnings: AnalysisDto['warnings'] }) {
     <Alert
       color="yellow"
       icon={<IconAlertTriangle size={18} />}
-      title={plural(warnings.length, 'warning')}
+      title={countOf(warnings.length, 'warning')}
     >
       <Spoiler maxHeight={60} showLabel="Show all" hideLabel="Hide">
         <List size="sm" spacing={2}>
@@ -563,7 +561,7 @@ export function OpenApiImportModal({ opened, onClose, endpoints, baseUrl, onAppl
                   </Text>
                 </Text>
                 <Text size="sm" color="dimmed">
-                  {plural(analysis.operations.length, 'operation')} ·{' '}
+                  {countOf(analysis.operations.length, 'operation')} ·{' '}
                   {classified.filter((c) => c.status === 'new').length} new ·{' '}
                   {classified.filter((c) => c.status === 'changed').length} changed ·{' '}
                   {classified.filter((c) => c.status === 'unchanged').length} unchanged

@@ -14,8 +14,16 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { CanAccess, useDelete, useInvalidate, useList, useShow } from '@refinedev/core';
+import {
+  CanAccess,
+  useDelete,
+  useInvalidate,
+  useList,
+  useNavigation,
+  useNotification,
+  useShow,
+  useUpdate,
+} from '@refinedev/core';
 import { EditButton, Show } from '@refinedev/mantine';
 import {
   IconDots,
@@ -29,8 +37,8 @@ import {
   IconTrash,
 } from '@tabler/icons-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import dayjs from 'dayjs';
 import { Suspense, lazy, useState } from 'react';
-import { useNavigate } from 'react-router';
 
 import { BackfillDialog } from '../../components/BackfillDialog';
 import { confirmAction } from '../../components/confirm';
@@ -48,7 +56,7 @@ import { copyWithFallback } from '../../components/ShareButtons';
 import { useLiveAnalyticsRefresh } from '../../components/useLiveAnalyticsRefresh';
 import { usePageTitle } from '../../components/usePageTitle';
 import { type JobDto, type RunDto, client } from '../../lib/api';
-import { notifyError } from '../../lib/errors';
+import { errorMessage, notifyError } from '../../lib/errors';
 import { dateTime, dateTimeWithLocal, duration, fromNow, percent } from '../../lib/format';
 import { useGroupsById } from '../../lib/groups';
 import { targetSummary, triggerSummary } from '../../lib/job-summary';
@@ -57,7 +65,6 @@ import { DISABLED_HINT, JobState, isHalted } from './state';
 
 const LIVE_ANALYTICS_MS = 5_000;
 
-const WEEK = 7 * 86_400_000;
 const HOUR_MS = 3_600_000;
 
 const RunsOverTimeChart = lazy(async () => ({
@@ -100,10 +107,11 @@ function useJobRefresh(job: JobDto) {
 
 function JobActions({ job }: { job: JobDto }) {
   const refresh = useJobRefresh(job);
+  const { open } = useNotification();
   const runNow = useMutation({
     mutationFn: () => client.jobs.run({ id: job.id }),
     onSuccess: async () => {
-      showNotification({ color: 'green', message: 'Run queued' });
+      open?.({ type: 'success', message: 'Run queued' });
       await refresh();
     },
     onError: (e) => notifyError('Could not start the run', e),
@@ -114,8 +122,8 @@ function JobActions({ job }: { job: JobDto }) {
         ? client.jobs.pause({ id: job.id })
         : client.jobs.resume({ id: job.id }),
     onSuccess: async (updated) => {
-      showNotification({
-        color: 'green',
+      open?.({
+        type: 'success',
         message: updated.pausedReason === null ? 'Job resumed' : 'Job paused',
       });
       await refresh();
@@ -150,20 +158,23 @@ function JobActions({ job }: { job: JobDto }) {
 
 function EnableButton({ job }: { job: JobDto }) {
   const refresh = useJobRefresh(job);
-  const enable = useMutation({
-    mutationFn: () =>
-      client.jobs.update({
-        ...toSpec(job),
-        enabled: true,
+  const { mutate: update, mutation } = useUpdate<JobDto>();
+  const enable = () =>
+    update(
+      {
+        resource: 'jobs',
         id: job.id,
-        expectedVersion: job.version,
-      }),
-    onSuccess: async () => {
-      showNotification({ color: 'green', message: 'Job enabled' });
-      await refresh();
-    },
-    onError: (e) => notifyError('Could not enable the job', e),
-  });
+        values: { ...toSpec(job), enabled: true, expectedVersion: job.version },
+        mutationMode: 'pessimistic',
+        successNotification: { type: 'success', message: 'Job enabled' },
+        errorNotification: (error) => ({
+          type: 'error',
+          message: 'Could not enable the job',
+          description: errorMessage(error),
+        }),
+      },
+      { onSuccess: () => void refresh() },
+    );
 
   return (
     <CanAccess resource="jobs" action="edit">
@@ -172,8 +183,8 @@ function EnableButton({ job }: { job: JobDto }) {
         color="gray"
         variant="default"
         leftIcon={<IconPower size={14} />}
-        loading={enable.isPending}
-        onClick={() => enable.mutate()}
+        loading={mutation.isPending}
+        onClick={enable}
       >
         Enable job
       </Button>
@@ -185,7 +196,7 @@ function MoreActions({ job }: { job: JobDto }) {
   const [dialog, setDialog] = useState<'backfill' | 'extract' | null>(null);
   const close = () => setDialog(null);
   const slots = useExtractableSlots(job);
-  const navigate = useNavigate();
+  const { list } = useNavigation();
   const { mutate: remove } = useDelete<JobDto>();
   const canBackfill = job.upstreamJobIds.length === 0;
   const canExtract = job.workflowId === null && slots.length > 0;
@@ -206,7 +217,7 @@ function MoreActions({ job }: { job: JobDto }) {
       onConfirm: () =>
         remove(
           { resource: 'jobs', id: job.id, mutationMode: 'pessimistic' },
-          { onSuccess: () => void navigate('/jobs') },
+          { onSuccess: () => list('jobs') },
         ),
     });
 
@@ -273,8 +284,8 @@ function WebhookPanel({ job }: { job: JobDto }) {
 }
 
 const lastWeek = (jobId: string) => ({
-  from: new Date(Date.now() - WEEK).toISOString(),
-  to: new Date(Date.now() + 60_000).toISOString(),
+  from: dayjs().subtract(7, 'day').toISOString(),
+  to: dayjs().add(1, 'minute').toISOString(),
   jobId,
 });
 

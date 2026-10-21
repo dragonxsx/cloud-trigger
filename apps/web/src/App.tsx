@@ -29,6 +29,7 @@ import { ActivityProgress } from './components/ActivityProgress';
 import { AppLayout } from './components/AppLayout';
 import { NotFoundPage, PageLoader } from './components/PageState';
 import { RequireAccess } from './components/RequireAccess';
+import { UnauthorizedWatcher } from './components/UnauthorizedWatcher';
 import { APP_TITLE, pageTitle } from './components/usePageTitle';
 import { client } from './lib/api';
 import {
@@ -43,6 +44,7 @@ import { shouldRetryQuery } from './lib/errors';
 import { lazyNamed } from './lib/lazy';
 import { accessControlProvider, authProvider } from './providers/auth-provider';
 import { dataProvider } from './providers/data-provider';
+import { i18nProvider } from './providers/i18n-provider';
 import { createSharedRunStreamLiveProvider } from './providers/live-provider';
 import { useAppNotificationProvider } from './providers/notification-provider';
 import { buildTheme } from './theme';
@@ -200,6 +202,7 @@ export function App() {
                   accessControlProvider={accessControlProvider}
                   routerProvider={routerProvider}
                   notificationProvider={notificationProvider}
+                  i18nProvider={i18nProvider}
                   resources={[
                     {
                       name: 'dashboard',
@@ -235,6 +238,11 @@ export function App() {
                         icon: <IconHierarchy2 size={18} />,
                         canDelete: true,
                       },
+                    },
+                    {
+                      name: 'workflow-runs',
+                      show: '/workflows/runs/:id',
+                      meta: { label: 'Workflow runs', hide: true },
                     },
                     {
                       name: 'groups',
@@ -299,6 +307,7 @@ export function App() {
                   }}
                 >
                   <ActivityProgress />
+                  <UnauthorizedWatcher />
                   <Routes>
                     <Route
                       path="/setup"

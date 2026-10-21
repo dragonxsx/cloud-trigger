@@ -1,4 +1,5 @@
 import { Anchor, Badge } from '@mantine/core';
+import { useNavigation } from '@refinedev/core';
 import { Link } from 'react-router';
 
 import type { GroupDto } from '../lib/api';
@@ -14,8 +15,10 @@ export const GROUP_SWATCHES = [
 ] as const;
 
 export function GroupChip({ group }: { group: Pick<GroupDto, 'id' | 'name' | 'color'> }) {
+  const { showUrl } = useNavigation();
+
   return (
-    <Anchor component={Link} to={`/groups/show/${group.id}`} underline={false}>
+    <Anchor component={Link} to={showUrl('groups', group.id)} underline={false}>
       <Badge
         variant="outline"
         radius="sm"

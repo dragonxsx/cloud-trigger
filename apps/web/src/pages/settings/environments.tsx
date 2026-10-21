@@ -3,9 +3,12 @@ import {
   ActionIcon,
   Alert,
   Button,
+  Center,
   Code,
   Group,
+  Loader,
   Modal,
+  Pagination,
   ScrollArea,
   Stack,
   Table,
@@ -14,19 +17,42 @@ import {
   Textarea,
   Tooltip,
 } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { useCan } from '@refinedev/core';
-import { List } from '@refinedev/mantine';
+import { type HttpError, useCan, useDelete, useTable } from '@refinedev/core';
+import { List, type UseModalFormReturnType, useModalForm } from '@refinedev/mantine';
 import { IconAlertCircle, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import type { ChangeEvent } from 'react';
 
 import { confirmAction } from '../../components/confirm';
 import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
 import { LoadError } from '../../components/PageState';
-import { type EnvironmentDto, client } from '../../lib/api';
-import { ENVIRONMENTS_KEY, environmentLabel, useEnvironments } from '../../lib/environments';
-import { focusFirstInvalidField, notifyError, toHttpError } from '../../lib/errors';
+import type { EnvironmentDto } from '../../lib/api';
+import { ENVIRONMENTS_KEY, environmentLabel } from '../../lib/environments';
+import { focusFirstInvalidField } from '../../lib/errors';
+import { unfieldedError } from './form-errors';
+
+interface EnvironmentValues {
+  key: string;
+  name: string;
+  description: string;
+  version: number;
+}
+
+interface EnvironmentPayload {
+  key: string;
+  name: string;
+  description: string;
+  expectedVersion: number;
+}
+
+type EnvironmentForm = UseModalFormReturnType<
+  EnvironmentDto,
+  HttpError,
+  EnvironmentValues,
+  EnvironmentPayload
+>;
+
+const BLANK: EnvironmentValues = { key: '', name: '', description: '', version: 0 };
 
 const keyProblem = (key: string): string | null => {
   const trimmed = key.trim();
@@ -38,106 +64,73 @@ const keyProblem = (key: string): string | null => {
   return parsed.success ? null : (parsed.error.issues[0]?.message ?? 'Not a valid key');
 };
 
-function EnvironmentForm({
+function EnvironmentFields({
+  form,
   editing,
-  onSaved,
+  onClose,
 }: {
-  editing: EnvironmentDto | null;
-  onSaved: (saved: EnvironmentDto) => void;
+  form: EnvironmentForm;
+  editing: boolean;
+  onClose: () => void;
 }) {
-  const [key, setKey] = useState(editing?.key ?? '');
-  const [name, setName] = useState(editing?.name ?? '');
-  const [description, setDescription] = useState(editing?.description ?? '');
-  const [keyError, setKeyError] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const formRef = useRef<HTMLFormElement>(null);
-  const save = () => {
-    const spec = { key: key.trim(), name, description };
+  const { onFinish, formLoading, mutation, query } = form.refineCore;
+  const editable = editing ? ['name', 'description'] : ['key', 'name', 'description'];
+  const error = unfieldedError(mutation.error, editable);
+  const field = (path: 'key' | 'name' | 'description') => {
+    const props = form.getInputProps(path);
 
-    return editing
-      ? client.environments.update({ ...spec, expectedVersion: editing.version })
-      : client.environments.create(spec);
+    return {
+      ...props,
+      onChange: (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        mutation.reset();
+        form.setFieldValue(path, e.currentTarget.value);
+      },
+    };
   };
-  const fail = (failure: unknown) => {
-    const http = toHttpError(failure);
-    const onKey = editing === null ? http.errors?.['key'] : undefined;
-    const keyMessage = Array.isArray(onKey) && typeof onKey[0] === 'string' ? onKey[0] : null;
-    setKeyError(keyMessage);
-    setError(keyMessage === null ? http.message : null);
-    if (formRef.current) {
-      focusFirstInvalidField(formRef.current);
-    }
-  };
+
+  if (query?.isLoading === true) {
+    return (
+      <Center py="lg">
+        <Loader size="sm" />
+      </Center>
+    );
+  }
 
   return (
     <form
-      ref={formRef}
       noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        const problem = editing === null ? keyProblem(key) : null;
-        if (problem !== null) {
-          setKeyError(problem);
-          setError(null);
-          if (formRef.current) {
-            focusFirstInvalidField(formRef.current);
-          }
-
-          return;
-        }
-        setSaving(true);
-        setError(null);
-        save()
-          .then(onSaved)
-          .catch(fail)
-          .finally(() => setSaving(false));
-      }}
+      onSubmit={form.onSubmit(
+        (values) => {
+          void onFinish(values).then(onClose, () => focusFirstInvalidField());
+        },
+        () => focusFirstInvalidField(),
+      )}
     >
       <Stack spacing="sm">
         <TextInput
           label="Key"
           description='Connection overlays, jobs, groups and workflows reference the environment by this key. Lowercase letters, digits, "-" and "_".'
           placeholder="staging"
-          value={key}
-          onChange={(e) => {
-            setKey(e.currentTarget.value);
-            setKeyError(null);
-            setError(null);
-          }}
-          disabled={editing !== null}
+          {...field('key')}
+          disabled={editing}
           autoComplete="off"
-          {...(editing === null && { 'data-autofocus': true })}
-          {...(keyError !== null && { error: keyError })}
+          {...(!editing && { 'data-autofocus': true })}
           required
         />
         <TextInput
           label="Display name"
-          value={name}
           autoComplete="off"
-          {...(editing !== null && { 'data-autofocus': true })}
-          onChange={(e) => {
-            setName(e.currentTarget.value);
-            setError(null);
-          }}
+          {...(editing && { 'data-autofocus': true })}
+          {...field('name')}
         />
-        <Textarea
-          label="Description"
-          autosize
-          minRows={2}
-          value={description}
-          onChange={(e) => {
-            setDescription(e.currentTarget.value);
-            setError(null);
-          }}
-        />
+        <Textarea label="Description" autosize minRows={2} {...field('description')} />
         {error !== null && (
           <Alert color="red" icon={<IconAlertCircle size={18} />} role="alert">
             {error}
           </Alert>
         )}
         <Group position="right">
-          <Button type="submit" loading={saving}>
+          <Button type="submit" loading={formLoading}>
             {editing ? 'Save' : 'Create environment'}
           </Button>
         </Group>
@@ -146,31 +139,87 @@ function EnvironmentForm({
   );
 }
 
+function useEnvironmentForm(action: 'create' | 'edit'): EnvironmentForm {
+  const queryClient = useQueryClient();
+
+  return useModalForm<EnvironmentDto, HttpError, EnvironmentValues, EnvironmentPayload>({
+    initialValues: BLANK,
+    validate: action === 'create' ? { key: keyProblem } : {},
+    transformValues: ({ key, name, description, version }) => ({
+      key: key.trim(),
+      name,
+      description,
+      expectedVersion: version,
+    }),
+    refineCoreProps: {
+      resource: 'environments',
+      action,
+      redirect: false,
+      warnWhenUnsavedChanges: false,
+      errorNotification: false,
+      successNotification: (data) => {
+        const saved = data?.data;
+
+        return saved === undefined
+          ? false
+          : action === 'create'
+            ? {
+                type: 'success',
+                message: 'Environment created',
+                description: `${environmentLabel(saved)} is ready for connection overlays.`,
+              }
+            : {
+                type: 'success',
+                message: 'Environment saved',
+                description: `${environmentLabel(saved)} was updated.`,
+              };
+      },
+      onMutationSuccess: () => void queryClient.invalidateQueries({ queryKey: ENVIRONMENTS_KEY }),
+    },
+  });
+}
+
 export function EnvironmentList() {
   const queryClient = useQueryClient();
-  const environments = useEnvironments();
-  const [editing, setEditing] = useState<EnvironmentDto | null | undefined>(undefined);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const { tableQuery, currentPage, setCurrentPage, pageCount } = useTable<EnvironmentDto>({
+    resource: 'environments',
+    pagination: { pageSize: 50 },
+  });
+  const createForm = useEnvironmentForm('create');
+  const editForm = useEnvironmentForm('edit');
+  const { mutate: deleteEnvironment, mutation: deletion } = useDelete<EnvironmentDto>();
   const canCreate = useCan({ resource: 'environments', action: 'create' }).data?.can === true;
   const canEdit = useCan({ resource: 'environments', action: 'edit' }).data?.can === true;
   const canDelete = useCan({ resource: 'environments', action: 'delete' }).data?.can === true;
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: ENVIRONMENTS_KEY });
-  const remove = async (environment: EnvironmentDto) => {
-    setDeleting(environment.key);
-    try {
-      await client.environments.delete({ key: environment.key });
-      showNotification({
-        color: 'teal',
-        title: 'Environment deleted',
-        message: `${environmentLabel(environment)} was removed.`,
-      });
-      refresh();
-    } catch (error: unknown) {
-      notifyError(`Couldn't delete ${environment.key}`, error);
-    } finally {
-      setDeleting(null);
-    }
+  const environments = tableQuery.data?.data ?? [];
+  const closeCreate = () => {
+    createForm.modal.close();
+    createForm.refineCore.mutation.reset();
   };
+  const closeEdit = () => {
+    editForm.modal.close();
+    editForm.refineCore.mutation.reset();
+  };
+  const remove = (environment: EnvironmentDto) =>
+    deleteEnvironment(
+      {
+        resource: 'environments',
+        id: environment.key,
+        mutationMode: 'pessimistic',
+        successNotification: {
+          type: 'success',
+          message: 'Environment deleted',
+          description: `${environmentLabel(environment)} was removed.`,
+        },
+        errorNotification: (error) => ({
+          type: 'error',
+          message: `Couldn't delete ${environment.key}`,
+          description: error?.message ?? 'Something went wrong',
+        }),
+      },
+      { onSuccess: () => void queryClient.invalidateQueries({ queryKey: ENVIRONMENTS_KEY }) },
+    );
+  const editingKey = editForm.refineCore.id;
 
   return (
     <List
@@ -178,7 +227,7 @@ export function EnvironmentList() {
       breadcrumb={pageBreadcrumb}
       headerButtons={
         canCreate ? (
-          <Button leftIcon={<IconPlus size={16} />} onClick={() => setEditing(null)}>
+          <Button leftIcon={<IconPlus size={16} />} onClick={() => createForm.modal.show()}>
             Add environment
           </Button>
         ) : null
@@ -189,112 +238,111 @@ export function EnvironmentList() {
         groups and workflows pick the environment they run in; without one they use the base
         connection config.
       </Text>
-      {environments.isError ? (
+      {tableQuery.isError ? (
         <LoadError
-          error={environments.error}
+          error={tableQuery.error}
           what="environments"
-          onRetry={() => void environments.refetch()}
+          onRetry={() => void tableQuery.refetch()}
         />
       ) : (
-        <ScrollArea>
-          <Table highlightOnHover verticalSpacing="xs" className="ct-table" miw={560}>
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Name</th>
-                <th>Description</th>
-                {(canEdit || canDelete) && <th aria-label="Actions" />}
-              </tr>
-            </thead>
-            <tbody>
-              {(environments.data ?? []).map((environment) => (
-                <tr key={environment.key}>
-                  <td>
-                    <Code>{environment.key}</Code>
-                  </td>
-                  <td>
-                    <Text size="sm" weight={500}>
-                      {environment.name}
-                    </Text>
-                  </td>
-                  <td>
-                    <Text size="sm" color="dimmed" lineClamp={2}>
-                      {environment.description}
-                    </Text>
-                  </td>
-                  {(canEdit || canDelete) && (
-                    <td>
-                      <Group position="right" spacing={4} noWrap>
-                        {canEdit && (
-                          <Tooltip label="Edit">
-                            <ActionIcon
-                              size="lg"
-                              onClick={() => setEditing(environment)}
-                              aria-label={`Edit ${environment.key}`}
-                            >
-                              <IconPencil size={16} />
-                            </ActionIcon>
-                          </Tooltip>
-                        )}
-                        {canDelete && (
-                          <Tooltip label="Delete">
-                            <ActionIcon
-                              size="lg"
-                              color="red"
-                              loading={deleting === environment.key}
-                              onClick={() =>
-                                void confirmAction({
-                                  title: `Delete ${environmentLabel(environment)}?`,
-                                  message:
-                                    'Connection overlays for this environment stop applying. Deleting fails while a job, group, workflow or connection overlay still uses it.',
-                                  confirmLabel: 'Delete environment',
-                                  onConfirm: () => remove(environment),
-                                })
-                              }
-                              aria-label={`Delete ${environment.key}`}
-                            >
-                              <IconTrash size={16} />
-                            </ActionIcon>
-                          </Tooltip>
-                        )}
-                      </Group>
-                    </td>
-                  )}
+        <Stack spacing="md">
+          <ScrollArea>
+            <Table highlightOnHover verticalSpacing="xs" className="ct-table" miw={560}>
+              <thead>
+                <tr>
+                  <th>Key</th>
+                  <th>Name</th>
+                  <th>Description</th>
+                  {(canEdit || canDelete) && <th aria-label="Actions" />}
                 </tr>
-              ))}
-            </tbody>
-          </Table>
-          {environments.data?.length === 0 && (
-            <Text color="dimmed" p="lg" align="center">
-              No environments yet.
-              {canCreate &&
-                ' Add staging or production to give connections per-environment overrides.'}
-            </Text>
+              </thead>
+              <tbody>
+                {environments.map((environment) => (
+                  <tr key={environment.key}>
+                    <td>
+                      <Code>{environment.key}</Code>
+                    </td>
+                    <td>
+                      <Text size="sm" weight={500}>
+                        {environment.name}
+                      </Text>
+                    </td>
+                    <td>
+                      <Text size="sm" color="dimmed" lineClamp={2}>
+                        {environment.description}
+                      </Text>
+                    </td>
+                    {(canEdit || canDelete) && (
+                      <td>
+                        <Group position="right" spacing={4} noWrap>
+                          {canEdit && (
+                            <Tooltip label="Edit">
+                              <ActionIcon
+                                size="lg"
+                                onClick={() => editForm.modal.show(environment.key)}
+                                aria-label={`Edit ${environment.key}`}
+                              >
+                                <IconPencil size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                          {canDelete && (
+                            <Tooltip label="Delete">
+                              <ActionIcon
+                                size="lg"
+                                color="red"
+                                loading={
+                                  deletion.isPending && deletion.variables?.id === environment.key
+                                }
+                                onClick={() =>
+                                  void confirmAction({
+                                    title: `Delete ${environmentLabel(environment)}?`,
+                                    message:
+                                      'Connection overlays for this environment stop applying. Deleting fails while a job, group, workflow or connection overlay still uses it.',
+                                    confirmLabel: 'Delete environment',
+                                    onConfirm: () => remove(environment),
+                                  })
+                                }
+                                aria-label={`Delete ${environment.key}`}
+                              >
+                                <IconTrash size={16} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        </Group>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+            {tableQuery.isSuccess && environments.length === 0 && (
+              <Text color="dimmed" p="lg" align="center">
+                No environments yet.
+                {canCreate &&
+                  ' Add staging or production to give connections per-environment overrides.'}
+              </Text>
+            )}
+          </ScrollArea>
+          {pageCount > 1 && (
+            <Pagination
+              page={currentPage}
+              total={pageCount}
+              onChange={setCurrentPage}
+              position="right"
+            />
           )}
-        </ScrollArea>
+        </Stack>
       )}
+      <Modal opened={createForm.modal.visible} onClose={closeCreate} title="Add environment">
+        <EnvironmentFields form={createForm} editing={false} onClose={closeCreate} />
+      </Modal>
       <Modal
-        opened={editing !== undefined}
-        onClose={() => setEditing(undefined)}
-        title={editing ? `Edit ${editing.key}` : 'Add environment'}
+        opened={editForm.modal.visible}
+        onClose={closeEdit}
+        title={editingKey === undefined ? 'Edit environment' : `Edit ${String(editingKey)}`}
       >
-        {editing !== undefined && (
-          <EnvironmentForm
-            key={editing?.key ?? 'new'}
-            editing={editing}
-            onSaved={(saved) => {
-              showNotification({
-                color: 'teal',
-                title: editing ? 'Environment saved' : 'Environment created',
-                message: editing
-                  ? `${environmentLabel(saved)} was updated.`
-                  : `${environmentLabel(saved)} is ready for connection overlays.`,
-              });
-              setEditing(undefined);
-              refresh();
-            }}
-          />
-        )}
+        <EnvironmentFields form={editForm} editing onClose={closeEdit} />
       </Modal>
     </List>
   );

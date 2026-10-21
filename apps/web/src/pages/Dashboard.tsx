@@ -11,7 +11,7 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core';
-import { useList } from '@refinedev/core';
+import { useGo, useList } from '@refinedev/core';
 import { IconInfoCircle } from '@tabler/icons-react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { type ReactNode, Suspense, lazy, useMemo, useState } from 'react';
@@ -55,18 +55,10 @@ const windowFor = (range: RangeKey) => {
   return { from: new Date(to - RANGES[range].ms).toISOString(), to: new Date(to).toISOString() };
 };
 
-const failedRunsOf = (jobId: string): string => {
-  const params = new URLSearchParams();
-  params.set('filters[0][field]', 'jobId');
-  params.set('filters[0][operator]', 'eq');
-  params.set('filters[0][value]', jobId);
-  params.set('filters[1][field]', 'status');
-  params.set('filters[1][operator]', 'in');
-  params.set('filters[1][value][0]', 'failed');
-  params.set('filters[1][value][1]', 'timed_out');
-
-  return `/runs?${params.toString()}`;
-};
+const failedRunsFilters = (jobId: string) => [
+  { field: 'jobId', operator: 'eq', value: jobId },
+  { field: 'status', operator: 'in', value: ['failed', 'timed_out'] },
+];
 
 function Stat({
   label,
@@ -121,7 +113,17 @@ const ChartSkeleton = ({ height }: { height: number }) => <Skeleton height={heig
 export function Dashboard() {
   const [range, setRange] = useState<RangeKey>('24h');
   const now = useNow();
+  const go = useGo();
   useLiveAnalyticsRefresh(LIVE_REFRESH_MS);
+  const failedRunsOf = (jobId: string): string => {
+    const path = go({
+      to: { resource: 'runs', action: 'list' },
+      query: { filters: failedRunsFilters(jobId) },
+      type: 'path',
+    });
+
+    return typeof path === 'string' ? path : '/runs';
+  };
 
   const summary = useQuery({
     queryKey: ['analytics', 'summary', range],

@@ -1,10 +1,9 @@
 import { RUN_STATUS_STYLE } from '@cloud-trigger/core';
 import { Alert, Anchor, Badge, Button, Group, ScrollArea, Stack, Table, Text } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { CanAccess } from '@refinedev/core';
+import { CanAccess, useInvalidate, useNavigation, useNotification, useShow } from '@refinedev/core';
 import { Show } from '@refinedev/mantine';
 import { IconCheck, IconPlayerStop, IconUserCheck, IconX } from '@tabler/icons-react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router';
 
 import { confirmAction } from '../../components/confirm';
@@ -13,8 +12,8 @@ import { RecordLoadError } from '../../components/PageState';
 import { usePageTitle } from '../../components/usePageTitle';
 import { NodeStatusBadge, WorkflowGraph } from '../../components/WorkflowGraph';
 import { type WorkflowRunDto, client } from '../../lib/api';
-import { notifyError, toHttpError } from '../../lib/errors';
-import { dateTime, fromNow } from '../../lib/format';
+import { notifyError } from '../../lib/errors';
+import { countOf, dateTime, fromNow } from '../../lib/format';
 
 const RUN_STATUS: Record<WorkflowRunDto['status'], { label: string; color: string }> = {
   running: RUN_STATUS_STYLE.running,
@@ -43,19 +42,24 @@ export function WorkflowRunBadge({ status }: { status: WorkflowRunDto['status'] 
   );
 }
 
+const useInvalidateRun = () => {
+  const invalidate = useInvalidate();
+
+  return (id: string) =>
+    invalidate({ resource: 'workflow-runs', invalidates: ['detail', 'list'], id });
+};
+
 function Decision({ run, node }: { run: WorkflowRunDto; node: string }) {
-  const queryClient = useQueryClient();
+  const invalidateRun = useInvalidateRun();
+  const { open } = useNotification();
   const decide = useMutation({
     mutationFn: (approved: boolean) =>
       approved
         ? client.workflowRuns.approve({ id: run.id, node })
         : client.workflowRuns.reject({ id: run.id, node }),
     onSuccess: async (_next, approved) => {
-      showNotification({
-        color: 'green',
-        message: approved ? `Approved ${node}` : `Rejected ${node}`,
-      });
-      await queryClient.invalidateQueries({ queryKey: ['workflow-run', run.id] });
+      open?.({ type: 'success', message: approved ? `Approved ${node}` : `Rejected ${node}` });
+      await invalidateRun(run.id);
     },
     onError: (e) => notifyError('Could not record the decision', e),
   });
@@ -114,7 +118,9 @@ function PendingApprovals({ run }: { run: WorkflowRunDto }) {
       color="orange"
       icon={<IconUserCheck size={18} />}
       title={
-        gates.length === 1 ? 'Waiting for approval' : `${gates.length} gates waiting for approval`
+        gates.length === 1
+          ? 'Waiting for approval'
+          : `${countOf(gates.length, 'gate')} waiting for approval`
       }
     >
       <Stack spacing="sm">
@@ -149,12 +155,13 @@ function CancelButton({ run }: { run: WorkflowRunDto | undefined }) {
 }
 
 function CancelRunButton({ run }: { run: WorkflowRunDto }) {
-  const queryClient = useQueryClient();
+  const invalidateRun = useInvalidateRun();
+  const { open } = useNotification();
   const cancel = useMutation({
     mutationFn: () => client.workflowRuns.cancel({ id: run.id }),
     onSuccess: async () => {
-      showNotification({ color: 'green', message: 'Workflow run cancelled' });
-      await queryClient.invalidateQueries({ queryKey: ['workflow-run', run.id] });
+      open?.({ type: 'success', message: 'Workflow run cancelled' });
+      await invalidateRun(run.id);
     },
     onError: (e) => notifyError('Could not cancel the workflow', e),
   });
@@ -190,12 +197,16 @@ const focusStepRow = (key: string) => {
 
 export function WorkflowRunShow() {
   const { id = '' } = useParams();
-  const query = useQuery({
-    queryKey: ['workflow-run', id],
-    queryFn: () => client.workflowRuns.get({ id }),
-    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2_000 : false),
+  const { showUrl } = useNavigation();
+  const { query } = useShow<WorkflowRunDto>({
+    resource: 'workflow-runs',
+    id,
+    errorNotification: false,
+    queryOptions: {
+      refetchInterval: (q) => (q.state.data?.data.status === 'running' ? 2_000 : false),
+    },
   });
-  const run = query.data;
+  const run = query.data?.data;
   usePageTitle(run ? `${run.workflowName} run` : undefined, 'Workflows');
   const statuses = run
     ? Object.fromEntries(Object.entries(run.nodes).map(([key, state]) => [key, state.status]))
@@ -204,7 +215,7 @@ export function WorkflowRunShow() {
   if (query.isError) {
     return (
       <RecordLoadError
-        error={toHttpError(query.error, { notFoundOnInvalid: true })}
+        error={query.error}
         onRetry={() => void query.refetch()}
         resource="Workflow run"
         listPath="/workflows"
@@ -232,7 +243,7 @@ export function WorkflowRunShow() {
               {RUN_REASON[run.reason]} · started {dateTime(run.startedAt)}
               {run.finishedAt ? ` · finished ${fromNow(run.finishedAt)}` : ''}
             </Text>
-            <Anchor component={Link} to={`/workflows/show/${run.workflowId}`} size="sm">
+            <Anchor component={Link} to={showUrl('workflows', run.workflowId)} size="sm">
               Open workflow
             </Anchor>
           </Group>
@@ -263,7 +274,7 @@ export function WorkflowRunShow() {
                       <td>
                         <Group spacing={6}>
                           {state?.runId && (
-                            <Anchor component={Link} to={`/runs/show/${state.runId}`} size="sm">
+                            <Anchor component={Link} to={showUrl('runs', state.runId)} size="sm">
                               Open job run
                             </Anchor>
                           )}

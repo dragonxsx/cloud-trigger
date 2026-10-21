@@ -1,15 +1,15 @@
 import { Anchor, Group, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
-import { useList, useShow } from '@refinedev/core';
+import { useList, useNavigation, useShow } from '@refinedev/core';
 import { DeleteButton, EditButton, Show } from '@refinedev/mantine';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 
-import { PageHeading, backIcon, countOf, pageBreadcrumb } from '../../components/page-chrome';
+import { PageHeading, backIcon, pageBreadcrumb } from '../../components/page-chrome';
 import { RecordLoadError } from '../../components/PageState';
 import { usePageTitle } from '../../components/usePageTitle';
 import type { GroupDto, JobDto } from '../../lib/api';
 import { environmentLabel, useEnvironments } from '../../lib/environments';
-import { duration, fromNow } from '../../lib/format';
+import { countOf, duration, fromNow } from '../../lib/format';
 import { JobState } from '../jobs/state';
 import { rateLimitSummary } from './list';
 
@@ -205,6 +205,7 @@ function GroupDetails({ group }: { group: GroupDto }) {
 }
 
 function GroupHeaderButtons({ group }: { group: GroupDto | undefined }) {
+  const { list } = useNavigation();
   if (!group) {
     return null;
   }
@@ -214,6 +215,7 @@ function GroupHeaderButtons({ group }: { group: GroupDto | undefined }) {
       <EditButton recordItemId={group.id} />
       <DeleteButton
         recordItemId={group.id}
+        onSuccess={() => list('groups')}
         confirmTitle={`Delete ${group.name}? Only a group with no jobs can be deleted.`}
         confirmOkText="Delete group"
         confirmCancelText="Cancel"

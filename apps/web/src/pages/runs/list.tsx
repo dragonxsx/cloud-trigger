@@ -12,9 +12,8 @@ import {
   Tabs,
   Text,
 } from '@mantine/core';
-import { type CrudFilter, useList, useOne, useTable } from '@refinedev/core';
+import { type LogicalFilter, getDefaultFilter, useList, useOne, useTable } from '@refinedev/core';
 import { List } from '@refinedev/mantine';
-import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { z } from 'zod';
 
@@ -28,9 +27,6 @@ import { FAILED_INBOX, FailedRuns } from './failed';
 const STATUSES = RunStatus.options;
 const REASON_OPTIONS = RunReason.options.map((value) => ({ value, label: REASON_LABEL[value] }));
 const VIEW_PARAM = 'view';
-
-const valueOf = (filters: readonly CrudFilter[], field: string): unknown =>
-  filters.find((f) => 'field' in f && f.field === field)?.value;
 
 const StatusList = z.array(RunStatus).catch([]);
 const ReasonValue = RunReason.nullable().catch(null);
@@ -57,7 +53,18 @@ export function RunList() {
     <List title={<PageHeading>Runs</PageHeading>} canCreate={false} breadcrumb={false}>
       <Tabs
         value={tab}
-        onTabChange={(next) => setParams(next === 'failed' ? { [VIEW_PARAM]: 'failed' } : {})}
+        onTabChange={(next) =>
+          setParams((current) => {
+            const updated = new URLSearchParams(current);
+            if (next === 'failed') {
+              updated.set(VIEW_PARAM, 'failed');
+            } else {
+              updated.delete(VIEW_PARAM);
+            }
+
+            return updated;
+          })
+        }
         keepMounted={false}
       >
         <Tabs.List mb="md">
@@ -114,34 +121,26 @@ function AllRuns() {
       pagination: { pageSize: 50 },
       liveMode: 'auto',
     });
-  const [statuses, setStatuses] = useState<string[]>(() =>
-    StatusList.parse(valueOf(filters, 'status')),
-  );
-  const [reason, setReason] = useState<string | null>(() =>
-    ReasonValue.parse(valueOf(filters, 'reason') ?? null),
-  );
-  const [lateOnly, setLateOnly] = useState(() => LateValue.parse(valueOf(filters, 'late')));
-  const [jobId, setJobId] = useState<string | null>(() =>
-    JobIdValue.parse(valueOf(filters, 'jobId') ?? null),
-  );
-  useEffect(() => {
-    setFilters(
-      [
-        { field: 'status', operator: 'in', value: statuses.length > 0 ? statuses : undefined },
-        { field: 'reason', operator: 'eq', value: reason ?? undefined },
-        { field: 'late', operator: 'eq', value: lateOnly ? true : undefined },
-        { field: 'jobId', operator: 'eq', value: jobId ?? undefined },
-      ],
-      'replace',
-    );
-  }, [statuses, reason, lateOnly, jobId, setFilters]);
+  const statuses = StatusList.parse(getDefaultFilter('status', filters, 'in'));
+  const reason = ReasonValue.parse(getDefaultFilter('reason', filters) ?? null);
+  const lateOnly = LateValue.parse(getDefaultFilter('late', filters));
+  const jobId = JobIdValue.parse(getDefaultFilter('jobId', filters) ?? null);
+  const applyFilter = (filter: LogicalFilter) => {
+    setFilters([filter], 'merge');
+    setCurrentPage(1);
+  };
+  const setStatuses = (next: string[]) =>
+    applyFilter({ field: 'status', operator: 'in', value: next.length > 0 ? next : undefined });
+  const setReason = (next: string | null) =>
+    applyFilter({ field: 'reason', operator: 'eq', value: next ?? undefined });
+  const setLateOnly = (next: boolean) =>
+    applyFilter({ field: 'late', operator: 'eq', value: next ? true : undefined });
+  const clearJob = () => applyFilter({ field: 'jobId', operator: 'eq', value: undefined });
 
   const filtered = statuses.length > 0 || reason !== null || lateOnly || jobId !== null;
   const clearFilters = () => {
-    setStatuses([]);
-    setReason(null);
-    setLateOnly(false);
-    setJobId(null);
+    setFilters([], 'replace');
+    setCurrentPage(1);
   };
 
   return (
@@ -163,7 +162,7 @@ function AllRuns() {
           </Chip.Group>
         </Box>
         <Group spacing="sm" sx={{ flexWrap: 'wrap' }}>
-          {jobId !== null && <JobFilterChip jobId={jobId} onClear={() => setJobId(null)} />}
+          {jobId !== null && <JobFilterChip jobId={jobId} onClear={clearJob} />}
           <Chip checked={lateOnly} onChange={setLateOnly} size="sm">
             Late only
           </Chip>

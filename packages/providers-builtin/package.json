@@ -25,7 +25,7 @@
     "@cloud-trigger/core": "workspace:*",
     "@slack/webhook": "8.0.2",
     "croner": "10.0.1",
-    "cronstrue": "3.32.0",
+    "cronstrue": "catalog:",
     "graphql": "17.0.2",
     "jsonpath-plus": "11.2.1",
     "liquidjs": "10.30.0",

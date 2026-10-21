@@ -94,8 +94,7 @@ const AxisParam = z.object({
 });
 const AxisParams = z.array(AxisParam);
 
-const escapeHtml = (text: string): string =>
-  text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+const { encodeHTML } = echarts.format;
 
 const tooltipFor =
   (format: (value: number) => string, emptyText: string) =>
@@ -105,16 +104,16 @@ const tooltipFor =
       return '';
     }
     const [first] = parsed.data;
-    const header = first === undefined ? '' : escapeHtml(chartTime(first.axisValue));
+    const header = first === undefined ? '' : encodeHTML(chartTime(first.axisValue));
     const rows = parsed.data.flatMap((p) => {
       const value = p.value[1];
 
       return value === null || value === 0
         ? []
-        : [`${p.marker}${escapeHtml(p.seriesName)}&nbsp;&nbsp;<b>${escapeHtml(format(value))}</b>`];
+        : [`${p.marker}${encodeHTML(p.seriesName)}&nbsp;&nbsp;<b>${encodeHTML(format(value))}</b>`];
     });
 
-    return [`<b>${header}</b>`, ...(rows.length > 0 ? rows : [escapeHtml(emptyText)])].join(
+    return [`<b>${header}</b>`, ...(rows.length > 0 ? rows : [encodeHTML(emptyText)])].join(
       '<br/>',
     );
   };

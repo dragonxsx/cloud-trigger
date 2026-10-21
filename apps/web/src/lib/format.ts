@@ -70,3 +70,6 @@ export const duration = (ms: number | null | undefined): string =>
 
 export const percent = (ratio: number | null): string =>
   ratio === null ? '—' : `${(ratio * 100).toFixed(ratio > 0.999 && ratio < 1 ? 2 : 1)}%`;
+
+export const countOf = (count: number, one: string, many = `${one}s`): string =>
+  `${count.toLocaleString()} ${count === 1 ? one : many}`;

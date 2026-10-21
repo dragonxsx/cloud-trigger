@@ -12,8 +12,6 @@ minimumReleaseAgeExclude:
   - "@scalar/json-magic@0.16.1"
 catalogMode: prefer
 catalog:
-  "@mantine/modals": 5.10.5
-  "@mantine/nprogress": 5.10.5
   "@orpc/client": 1.15.7
   "@orpc/contract": 1.15.7
   "@orpc/openapi-client": 1.15.7

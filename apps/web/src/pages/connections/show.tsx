@@ -1,18 +1,19 @@
 import { endpointProvider, isRecord, mergePatch } from '@cloud-trigger/core';
-import { Anchor, Badge, Code, Divider, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
+import { Anchor, Badge, Code, Divider, SimpleGrid, Stack, Table, Text } from '@mantine/core';
 import { useShow } from '@refinedev/core';
 import { Show } from '@refinedev/mantine';
-import { useQuery } from '@tanstack/react-query';
+import { skipToken, useQuery } from '@tanstack/react-query';
 import { Fragment } from 'react';
 import { Link } from 'react-router';
 
-import { backIcon, pageBreadcrumb } from '../../components/page-chrome';
+import { PageHeading, backIcon, pageBreadcrumb } from '../../components/page-chrome';
 import { RecordLoadError } from '../../components/PageState';
 import { usePageTitle } from '../../components/usePageTitle';
 import { type ConnectionDto, type ConnectionUsagesDto, client } from '../../lib/api';
 import { environmentLabel, useEnvironments } from '../../lib/environments';
+import { countOf } from '../../lib/format';
 import { ConnectionTestButton } from './form';
-import { connectionAddress, countValues, endpointSummary, fieldCount } from './summary';
+import { connectionAddress, endpointSummary, overriddenFields, overrideLabel } from './summary';
 
 const KIND_LABEL = { target: 'Target', trigger: 'Event source', notifier: 'Notifier' } as const;
 
@@ -41,12 +42,6 @@ const usageRows = (usages: ConnectionUsagesDto | undefined): UsageRow[] => [
   })),
 ];
 
-type OverlayDto = ConnectionDto['overlays'][number];
-
-const overlayFields = (overlay: OverlayDto): number =>
-  countValues(overlay.config) +
-  overlay.endpoints.reduce((total, patch) => total + countValues(patch.config), 0);
-
 function EnvironmentsPanel({ connection }: { connection: ConnectionDto }) {
   const environments = useEnvironments();
   const labelOf = (key: string) => {
@@ -71,7 +66,7 @@ function EnvironmentsPanel({ connection }: { connection: ConnectionDto }) {
       ) : (
         connection.overlays.map((overlay, index) => {
           const label = labelOf(overlay.environment);
-          const count = overlayFields(overlay);
+          const count = overriddenFields(overlay);
           const config = isRecord(overlay.config)
             ? mergePatch(connection.config, overlay.config)
             : connection.config;
@@ -84,9 +79,9 @@ function EnvironmentsPanel({ connection }: { connection: ConnectionDto }) {
                   <Text size="sm" weight={600}>
                     {label}
                     <Text span color="dimmed" weight={400} ml="xs">
-                      {count === 0 ? 'no overrides' : `${fieldCount(count)} overridden`}
+                      {overrideLabel(count, 'no overrides')}
                       {overlay.endpoints.length > 0 &&
-                        ` · ${String(overlay.endpoints.length)} endpoint${overlay.endpoints.length === 1 ? '' : 's'} changed`}
+                        ` · ${countOf(overlay.endpoints.length, 'endpoint')} changed`}
                     </Text>
                   </Text>
                   <Code>{connectionAddress({ config })}</Code>
@@ -112,10 +107,10 @@ export function ConnectionShow() {
   const connection = query.data?.data;
   const title = connection ? connection.name || connection.key : undefined;
   usePageTitle(title, 'Connections');
+  const key = connection?.key;
   const usages = useQuery({
-    queryKey: ['connections', 'usages', connection?.key],
-    queryFn: () => client.connections.usages({ key: connection?.key ?? '' }),
-    enabled: connection !== undefined,
+    queryKey: ['connections', 'usages', key],
+    queryFn: key === undefined ? skipToken : () => client.connections.usages({ key }),
   });
 
   if (query.isError) {
@@ -135,11 +130,7 @@ export function ConnectionShow() {
       isLoading={query.isLoading}
       goBack={backIcon}
       breadcrumb={pageBreadcrumb}
-      title={
-        <Title order={1} size="h3">
-          {title ?? 'Connection'}
-        </Title>
-      }
+      title={<PageHeading>{title ?? 'Connection'}</PageHeading>}
     >
       {connection && (
         <Stack spacing="lg">

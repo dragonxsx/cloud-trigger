@@ -1,5 +1,4 @@
 import {
-  ActionIcon,
   Anchor,
   Badge,
   Box,
@@ -17,15 +16,9 @@ import {
   UnstyledButton,
 } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
-import { type CrudFilter, type CrudSort, useTable } from '@refinedev/core';
-import { List } from '@refinedev/mantine';
-import {
-  IconArrowDown,
-  IconArrowUp,
-  IconArrowsSort,
-  IconChevronRight,
-  IconSearch,
-} from '@tabler/icons-react';
+import { type CrudSort, getDefaultFilter, useNavigation, useTable } from '@refinedev/core';
+import { List, ShowButton } from '@refinedev/mantine';
+import { IconArrowDown, IconArrowUp, IconArrowsSort, IconSearch } from '@tabler/icons-react';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { z } from 'zod';
@@ -64,12 +57,6 @@ function MemberOf({
 }
 
 const FilterValue = z.string().catch('');
-
-const filterValue = (filters: readonly CrudFilter[], field: string): string => {
-  const found = filters.find((f) => 'field' in f && f.field === field);
-
-  return FilterValue.parse(found?.value);
-};
 
 type SortKey = 'name' | 'nextRun' | 'lastSuccess' | 'failures';
 type SortValue = string | number | null;
@@ -207,13 +194,15 @@ function JobRow({
   groups: ReadonlyMap<string, GroupDto>;
   now: number;
 }) {
+  const { showUrl } = useNavigation();
+
   return (
     <tr>
       <td style={{ minWidth: 200, maxWidth: 320 }}>
         <Tooltip label={job.name} withArrow multiline width={320} openDelay={400}>
           <Anchor
             component={Link}
-            to={`/jobs/show/${job.id}`}
+            to={showUrl('jobs', job.id)}
             weight={600}
             size="sm"
             lineClamp={2}
@@ -271,15 +260,14 @@ function JobRow({
         </Text>
       </td>
       <td>
-        <ActionIcon
-          component={Link}
-          to={`/jobs/show/${job.id}`}
+        <ShowButton
+          resource="jobs"
+          recordItemId={job.id}
+          hideText
           size="lg"
           variant="subtle"
           aria-label={`Open ${job.name}`}
-        >
-          <IconChevronRight size={18} />
-        </ActionIcon>
+        />
       </td>
     </tr>
   );
@@ -322,20 +310,14 @@ export function JobList() {
     sorters: { mode: 'off' },
     syncWithLocation: true,
   });
-  const [search, setSearch] = useState(() => filterValue(filters, 'search'));
+  const appliedSearch = FilterValue.parse(getDefaultFilter('search', filters, 'contains'));
+  const environment = FilterValue.parse(getDefaultFilter('environment', filters, 'eq')) || null;
+  const [draft, setDraft] = useState({ base: appliedSearch, value: appliedSearch });
+  const search = draft.base === appliedSearch ? draft.value : appliedSearch;
   const [debounced] = useDebouncedValue(search, 250);
-  const [environment, setEnvironment] = useState<string | null>(
-    () => filterValue(filters, 'environment') || null,
-  );
   useEffect(() => {
-    setFilters(
-      [
-        { field: 'search', operator: 'contains', value: debounced || undefined },
-        { field: 'environment', operator: 'eq', value: environment ?? undefined },
-      ],
-      'replace',
-    );
-  }, [debounced, environment, setFilters]);
+    setFilters([{ field: 'search', operator: 'contains', value: debounced || undefined }], 'merge');
+  }, [debounced, setFilters]);
   const sorter = sorters[0];
   const items = useMemo(
     () => sortJobs(tableQuery.data?.data ?? [], sorter),
@@ -344,18 +326,25 @@ export function JobList() {
   const groups = useGroupsById();
   const environments = useEnvironments();
   const now = useNow();
-  const filtered = debounced !== '' || environment !== null;
+  const filtered = appliedSearch !== '' || environment !== null;
   const changeSearch = (value: string) => {
-    setSearch(value);
+    setDraft({ base: appliedSearch, value });
     setCurrentPage(1);
   };
   const changeEnvironment = (value: string | null) => {
-    setEnvironment(value);
+    setFilters([{ field: 'environment', operator: 'eq', value: value ?? undefined }], 'merge');
     setCurrentPage(1);
   };
   const clearFilters = () => {
-    changeSearch('');
-    changeEnvironment(null);
+    setDraft({ base: '', value: '' });
+    setFilters(
+      [
+        { field: 'search', operator: 'contains', value: undefined },
+        { field: 'environment', operator: 'eq', value: undefined },
+      ],
+      'merge',
+    );
+    setCurrentPage(1);
   };
 
   return (

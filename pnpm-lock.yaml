@@ -6,12 +6,6 @@ settings:
 
 catalogs:
   default:
-    '@mantine/modals':
-      specifier: 5.10.5
-      version: 5.10.5
-    '@mantine/nprogress':
-      specifier: 5.10.5
-      version: 5.10.5
     '@orpc/client':
       specifier: 1.15.7
       version: 1.15.7
@@ -280,13 +274,13 @@ importers:
         specifier: 5.10.5
         version: 5.10.5(react@18.3.1)
       '@mantine/modals':
-        specifier: 'catalog:'
+        specifier: 5.10.5
         version: 5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@mantine/notifications':
         specifier: 5.10.5
         version: 5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@mantine/nprogress':
-        specifier: 'catalog:'
+        specifier: 5.10.5
         version: 5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@orpc/client':
         specifier: 'catalog:'
@@ -635,8 +629,8 @@ importers:
         specifier: 10.0.1
         version: 10.0.1
       cronstrue:
-        specifier: 3.32.0
-        version: 3.32.0
+        specifier: 'catalog:'
+        version: 3.36.0
       graphql:
         specifier: 17.0.2
         version: 17.0.2
@@ -3897,10 +3891,6 @@ packages:
   croner@10.0.1:
     resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
     engines: {node: '>=18.0'}
-
-  cronstrue@3.32.0:
-    resolution: {integrity: sha512-OHTec7+5nosN4UsitwgBDQ0bofGZF3H4pLqgqa93NR3nExNlhtVHcO2JY3jRognrFH8Bl9oAooT0hyCjSyOU+Q==}
-    hasBin: true
 
   cronstrue@3.36.0:
     resolution: {integrity: sha512-uk3Wi80f8SNqrXmreyBAP1E4PudFU+9wg91+v+6ZYeb5a2ajR9rRwuNB1Bt/bjgh7hQM9+6FgyTUz2NDA3uKaw==}
@@ -9830,8 +9820,6 @@ snapshots:
       readable-stream: 4.8.0
 
   croner@10.0.1: {}
-
-  cronstrue@3.32.0: {}
 
   cronstrue@3.36.0: {}
 

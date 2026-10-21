@@ -11,18 +11,17 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { CanAccess, useShow } from '@refinedev/core';
+import { CanAccess, useList, useNavigation, useNotification, useShow } from '@refinedev/core';
 import { DeleteButton, EditButton, Show } from '@refinedev/mantine';
 import { IconPlayerTrackNext } from '@tabler/icons-react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router';
+import { useMutation } from '@tanstack/react-query';
+import { Link } from 'react-router';
 
 import { PageHeading, backIcon, pageBreadcrumb } from '../../components/page-chrome';
-import { RecordLoadError } from '../../components/PageState';
+import { LoadError, PageLoader, RecordLoadError } from '../../components/PageState';
 import { usePageTitle } from '../../components/usePageTitle';
 import { KIND_LABEL, WorkflowGraph } from '../../components/WorkflowGraph';
-import { type WorkflowDto, client } from '../../lib/api';
+import { type WorkflowDto, type WorkflowRunDto, client } from '../../lib/api';
 import { notifyError } from '../../lib/errors';
 import { dateTime, fromNow } from '../../lib/format';
 import { triggerSummary } from '../../lib/job-summary';
@@ -31,12 +30,13 @@ import { RUN_REASON, WorkflowRunBadge } from './run';
 const EDGE_TEXT = { succeeded: 'succeeds', failed: 'fails', any: 'finishes' } as const;
 
 function RunNowButton({ workflow }: { workflow: WorkflowDto }) {
-  const navigate = useNavigate();
+  const { show } = useNavigation();
+  const { open } = useNotification();
   const start = useMutation({
     mutationFn: () => client.workflows.run({ id: workflow.id }),
-    onSuccess: async (run) => {
-      showNotification({ color: 'green', message: 'Workflow started' });
-      await navigate(`/workflows/runs/${run.id}`);
+    onSuccess: (run) => {
+      open?.({ type: 'success', message: 'Workflow started' });
+      show('workflow-runs', run.id);
     },
     onError: (e) => notifyError('Could not start the workflow', e),
   });
@@ -116,19 +116,26 @@ function StepList({ workflow }: { workflow: WorkflowDto }) {
 }
 
 function RecentRuns({ workflow }: { workflow: WorkflowDto }) {
-  const runs = useQuery({
-    queryKey: ['workflow-runs', workflow.id],
-    queryFn: () => client.workflowRuns.list({ workflowId: workflow.id, limit: 20 }),
-    refetchInterval: 5_000,
+  const { showUrl } = useNavigation();
+  const { result, query } = useList<WorkflowRunDto>({
+    resource: 'workflow-runs',
+    filters: [{ field: 'workflowId', operator: 'eq', value: workflow.id }],
+    pagination: { pageSize: 20 },
+    errorNotification: false,
+    queryOptions: { refetchInterval: 5_000 },
   });
-  const items = runs.data?.items ?? [];
+  const items = result.data;
 
   return (
     <Stack className="ct-panel" p="lg" spacing="xs">
       <Title order={2} size="h4">
         Recent runs
       </Title>
-      {items.length === 0 ? (
+      {query.isError ? (
+        <LoadError error={query.error} what="recent runs" onRetry={() => void query.refetch()} />
+      ) : query.isLoading ? (
+        <PageLoader label="Loading runs…" />
+      ) : items.length === 0 ? (
         <Text size="sm" color="dimmed">
           No runs yet.
         </Text>
@@ -147,7 +154,7 @@ function RecentRuns({ workflow }: { workflow: WorkflowDto }) {
               {items.map((run) => (
                 <tr key={run.id}>
                   <td>
-                    <Anchor component={Link} to={`/workflows/runs/${run.id}`} size="sm">
+                    <Anchor component={Link} to={showUrl('workflow-runs', run.id)} size="sm">
                       {dateTime(run.startedAt)}
                     </Anchor>
                   </td>
@@ -167,6 +174,7 @@ function RecentRuns({ workflow }: { workflow: WorkflowDto }) {
 }
 
 function WorkflowHeaderButtons({ workflow }: { workflow: WorkflowDto | undefined }) {
+  const { list } = useNavigation();
   if (!workflow) {
     return null;
   }
@@ -177,6 +185,7 @@ function WorkflowHeaderButtons({ workflow }: { workflow: WorkflowDto | undefined
       <EditButton recordItemId={workflow.id} />
       <DeleteButton
         recordItemId={workflow.id}
+        onSuccess={() => list('workflows')}
         confirmTitle={`Delete ${workflow.name}? Its inline jobs are deleted too.`}
         confirmOkText="Delete workflow"
         confirmCancelText="Cancel"

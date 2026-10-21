@@ -1,6 +1,6 @@
 import { Alert, Button, Group, List, Pagination, Stack, Text } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
-import { CanAccess, useInvalidate, useTable } from '@refinedev/core';
+import { CanAccess, useInvalidate, useNotification, useTable } from '@refinedev/core';
 import { IconChecks, IconRepeat } from '@tabler/icons-react';
 import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -10,6 +10,7 @@ import { LoadError } from '../../components/PageState';
 import { RunsTable } from '../../components/RunsTable';
 import { type RunDto, client } from '../../lib/api';
 import { notifyError } from '../../lib/errors';
+import { countOf } from '../../lib/format';
 
 export const FAILED_INBOX = [
   { field: 'status', operator: 'in', value: ['failed', 'timed_out'] },
@@ -18,16 +19,13 @@ export const FAILED_INBOX = [
 
 const PREVIEW = 5;
 
-const plural = (count: number, word: string): string =>
-  `${count.toLocaleString()} ${word}${count === 1 ? '' : 's'}`;
-
 function SelectionSummary({ runs }: { runs: readonly RunDto[] }) {
   const jobs = [...new Set(runs.map((r) => r.jobName))];
 
   return (
     <Stack spacing={6}>
       <Text size="sm">
-        {plural(runs.length, 'run')} from {plural(jobs.length, 'job')}:
+        {countOf(runs.length, 'run')} from {countOf(jobs.length, 'job')}:
       </Text>
       <List size="sm" spacing={2}>
         {jobs.slice(0, PREVIEW).map((name) => (
@@ -42,6 +40,7 @@ function SelectionSummary({ runs }: { runs: readonly RunDto[] }) {
 export function FailedRuns() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const invalidate = useInvalidate();
+  const { open } = useNotification();
   const { tableQuery, currentPage, setCurrentPage, pageCount } = useTable<RunDto>({
     resource: 'runs',
     pagination: { pageSize: 50 },
@@ -53,7 +52,7 @@ export function FailedRuns() {
   const chosen = runs.filter((r) => selected.has(r.id));
   const ids = chosen.map((r) => r.id);
   const done = async (message: string) => {
-    showNotification({ color: 'green', message });
+    open?.({ type: 'success', message });
     setSelected(new Set());
     await invalidate({ resource: 'runs', invalidates: ['list'] });
   };
@@ -64,25 +63,25 @@ export function FailedRuns() {
       if (failed.length > 0) {
         showNotification({
           color: 'orange',
-          title: `${plural(failed.length, 'run')} could not be replayed`,
+          title: `${countOf(failed.length, 'run')} could not be replayed`,
           message: failed.map((r) => r.error).join('; '),
         });
       }
-      await done(`${plural(results.length - failed.length, 'replay')} queued`);
+      await done(`${countOf(results.length - failed.length, 'replay')} queued`);
     },
     onError: (e) => notifyError('Could not replay the runs', e),
   });
   const acknowledge = useMutation({
     mutationFn: (runIds: readonly string[]) => client.runs.acknowledge({ ids: [...runIds] }),
     onSuccess: ({ acknowledged }) =>
-      done(`${plural(acknowledged, 'run')} dismissed. They stay in All runs.`),
+      done(`${countOf(acknowledged, 'run')} dismissed. They stay in All runs.`),
     onError: (e) => notifyError('Could not dismiss the runs', e),
   });
 
   const confirmReplay = () => {
     const runIds = ids;
     void confirmAction({
-      title: `Replay ${plural(runIds.length, 'run')}?`,
+      title: `Replay ${countOf(runIds.length, 'run')}?`,
       message: (
         <Stack spacing="xs">
           <SelectionSummary runs={chosen} />
@@ -91,7 +90,7 @@ export function FailedRuns() {
           </Text>
         </Stack>
       ),
-      confirmLabel: `Replay ${plural(runIds.length, 'run')}`,
+      confirmLabel: `Replay ${countOf(runIds.length, 'run')}`,
       danger: false,
       onConfirm: () => replay.mutate(runIds),
     });
@@ -99,7 +98,7 @@ export function FailedRuns() {
   const confirmDismiss = () => {
     const runIds = ids;
     void confirmAction({
-      title: `Dismiss ${plural(runIds.length, 'run')}?`,
+      title: `Dismiss ${countOf(runIds.length, 'run')}?`,
       message: (
         <Stack spacing="xs">
           <SelectionSummary runs={chosen} />
@@ -108,7 +107,7 @@ export function FailedRuns() {
           </Text>
         </Stack>
       ),
-      confirmLabel: `Dismiss ${plural(runIds.length, 'run')}`,
+      confirmLabel: `Dismiss ${countOf(runIds.length, 'run')}`,
       onConfirm: () => acknowledge.mutate(runIds),
     });
   };

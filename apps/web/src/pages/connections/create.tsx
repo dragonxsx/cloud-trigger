@@ -1,8 +1,12 @@
-import { Title } from '@mantine/core';
 import type { HttpError } from '@refinedev/core';
 import { Create, useForm } from '@refinedev/mantine';
 
-import { backIcon, pageBreadcrumb, saveWithInvalidFocus } from '../../components/page-chrome';
+import {
+  PageHeading,
+  backIcon,
+  pageBreadcrumb,
+  saveWithInvalidFocus,
+} from '../../components/page-chrome';
 import { usePageTitle } from '../../components/usePageTitle';
 import type { ConnectionDto } from '../../lib/api';
 import { focusFirstInvalidField } from '../../lib/errors';
@@ -37,11 +41,7 @@ export function ConnectionCreate() {
     <Create
       goBack={backIcon}
       breadcrumb={pageBreadcrumb}
-      title={
-        <Title order={1} size="h3">
-          New connection
-        </Title>
-      }
+      title={<PageHeading>New connection</PageHeading>}
       saveButtonProps={saveWithInvalidFocus(form)}
     >
       <ConnectionFormFields form={form} />

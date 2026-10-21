@@ -1,6 +1,7 @@
 import { isRecord } from '@cloud-trigger/core';
 
 import type { ConnectionDto } from '../../lib/api';
+import { countOf } from '../../lib/format';
 
 const ADDRESS_FIELDS = [
   'baseUrl',
@@ -73,8 +74,15 @@ export const countValues = (value: unknown): number => {
   return hasValue(value) ? 1 : 0;
 };
 
-export const fieldCount = (count: number): string =>
-  `${String(count)} field${count === 1 ? '' : 's'}`;
+export const overriddenFields = (overlay: {
+  readonly config?: unknown;
+  readonly endpoints: readonly { readonly config?: unknown }[];
+}): number =>
+  countValues(overlay.config) +
+  overlay.endpoints.reduce((total, patch) => total + countValues(patch.config), 0);
+
+export const overrideLabel = (count: number, none: string): string =>
+  count === 0 ? none : `${countOf(count, 'field')} overridden`;
 
 export type TestTone = 'ok' | 'warn' | 'fail';
 

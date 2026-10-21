@@ -1,8 +1,12 @@
-import { Title } from '@mantine/core';
 import { type HttpError, useParsed } from '@refinedev/core';
 import { Edit, ListButton, SaveButton, useForm } from '@refinedev/mantine';
 
-import { backIcon, pageBreadcrumb, saveWithInvalidFocus } from '../../components/page-chrome';
+import {
+  PageHeading,
+  backIcon,
+  pageBreadcrumb,
+  saveWithInvalidFocus,
+} from '../../components/page-chrome';
 import { RecordLoadError } from '../../components/PageState';
 import { usePageTitle } from '../../components/usePageTitle';
 import type { ConnectionDto } from '../../lib/api';
@@ -57,11 +61,7 @@ export function ConnectionEdit() {
     <Edit
       goBack={backIcon}
       breadcrumb={pageBreadcrumb}
-      title={
-        <Title order={1} size="h3">
-          {heading}
-        </Title>
-      }
+      title={<PageHeading>{heading}</PageHeading>}
       saveButtonProps={saveProps}
       headerButtons={
         <>

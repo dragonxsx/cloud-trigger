@@ -18,6 +18,7 @@ import { useState } from 'react';
 
 import { type ApiClient, client } from '../lib/api';
 import { errorMessage, notifyError } from '../lib/errors';
+import { countOf } from '../lib/format';
 import { confirmAction } from './confirm';
 
 type ImportResultDto = Awaited<ReturnType<ApiClient['jobs']['import']>>;
@@ -104,7 +105,7 @@ export function JobTransferButtons() {
       return;
     }
     void confirmAction({
-      title: `Delete ${String(deleted.length)} ${deleted.length === 1 ? 'job' : 'jobs'}?`,
+      title: `Delete ${countOf(deleted.length, 'job')}?`,
       message: `Replace mode deletes jobs that are not in the YAML: ${deleted.join(', ')}. This cannot be undone.`,
       confirmLabel: 'Import and delete',
       onConfirm: () => apply.mutate(),

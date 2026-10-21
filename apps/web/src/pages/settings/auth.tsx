@@ -1,6 +1,6 @@
 import { Alert, Button, Divider, Group, Stack, Text, Title } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { useLogout, useWarnAboutChange } from '@refinedev/core';
+import { useForm } from '@mantine/form';
+import { useLogout, useNotification, useWarnAboutChange } from '@refinedev/core';
 import { List } from '@refinedev/mantine';
 import { IconLogout } from '@tabler/icons-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,7 +10,6 @@ import { confirmAction, confirmed } from '../../components/confirm';
 import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
 import { PageLoader, LoadError } from '../../components/PageState';
 import {
-  type MethodErrors,
   SignInMethodsFields,
   type SignInMethodsValue,
   fromAuthSettings,
@@ -25,32 +24,36 @@ import { resetAuthConfig } from '../../lib/oidc';
 
 const SETTINGS_KEY = ['auth-settings'];
 
-const snapshot = (value: SignInMethodsValue): string => JSON.stringify(toAuthMethods(value));
-
 function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
   const queryClient = useQueryClient();
   const { mutate: logout } = useLogout();
   const { setWarnWhen } = useWarnAboutChange();
-  const initial = fromAuthSettings(settings);
-  const [value, setValue] = useState<SignInMethodsValue>(initial);
+  const { open } = useNotification();
+  const form = useForm<SignInMethodsValue>({ initialValues: fromAuthSettings(settings) });
+  const value = form.values;
   const [saving, setSaving] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [serverErrors, setServerErrors] = useState<MethodErrors>({});
   const [issues, setIssues] = useState<string[]>([]);
-  const dirty = snapshot(value) !== snapshot(initial);
-  const errors = { ...(submitted ? methodsErrors(value) : {}), ...serverErrors };
+  const dirty = form.isDirty();
+  const errors = {
+    ...(submitted ? methodsErrors(value) : {}),
+    ...Object.fromEntries(
+      Object.entries(form.errors).flatMap(([path, message]) =>
+        typeof message === 'string' ? [[path, message]] : [],
+      ),
+    ),
+  };
 
   useEffect(() => {
     setWarnWhen(dirty);
   }, [dirty, setWarnWhen]);
   useEffect(() => () => setWarnWhen(false), [setWarnWhen]);
 
-  const change = (next: SignInMethodsValue) => {
-    setServerErrors({});
-    setValue(next);
-  };
   const saved = (next: AuthSettingsDto) => {
+    const values = fromAuthSettings(next);
+    form.setValues(values);
+    form.resetDirty(values);
     setWarnWhen(false);
     queryClient.setQueryData(SETTINGS_KEY, next);
     resetAuthConfig();
@@ -70,7 +73,7 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
   const save = async () => {
     setSubmitted(true);
     setIssues([]);
-    setServerErrors({});
+    form.clearErrors();
     if (Object.keys(methodsErrors(value)).length > 0) {
       focusFirstInvalidField();
 
@@ -98,10 +101,10 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
           expectedVersion: settings.version,
         }),
       );
-      showNotification({
-        color: 'teal',
-        title: 'Sign-in settings saved',
-        message: 'New sign-ins use these settings right away.',
+      open?.({
+        type: 'success',
+        message: 'Sign-in settings saved',
+        description: 'New sign-ins use these settings right away.',
       });
     } catch (error: unknown) {
       const found = configIssues(error);
@@ -115,7 +118,7 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
           mapped[field] = issue.message;
         }
       }
-      setServerErrors(mapped);
+      form.setErrors(mapped);
       setIssues(found.length > 0 ? other : [errorMessage(error)]);
       focusFirstInvalidField();
     } finally {
@@ -127,7 +130,7 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
     <Stack spacing="lg">
       <SignInMethodsFields
         value={value}
-        onChange={change}
+        onChange={form.setValues}
         testOidc={(issuer) => client.setup.testOidc({ issuer })}
         errors={errors}
       />
@@ -150,9 +153,8 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
           variant="default"
           disabled={!dirty || saving}
           onClick={() => {
-            setValue(initial);
+            form.reset();
             setSubmitted(false);
-            setServerErrors({});
             setIssues([]);
           }}
         >

@@ -13,13 +13,13 @@ import {
 } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
 import { useInvalidate } from '@refinedev/core';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { sentenceCase } from 'change-case';
+import { useMutation } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
 import { type ExtractSlotDto, type JobDto, type ProviderDto, client } from '../lib/api';
-import { configIssues, errorMessage, notifyError } from '../lib/errors';
+import { configIssues, errorMessage, fieldLabel, notifyError } from '../lib/errors';
+import { useProviders } from '../lib/providers';
 
 interface SlotOption {
   readonly value: string;
@@ -73,20 +73,10 @@ const optional = (value: string): string | undefined =>
   value.trim() === '' ? undefined : value.trim();
 
 export function useExtractableSlots(job: JobDto): readonly SlotOption[] {
-  const providers = useQuery({
-    queryKey: ['providers'],
-    queryFn: () => client.providers.list({}),
-    staleTime: 300_000,
-  });
+  const providers = useProviders();
 
   return useMemo(() => extractableSlots(job, providers.data ?? []), [job, providers.data]);
 }
-
-const issueLabel = (path: string): string => {
-  const last = path.split('.').findLast((segment) => !/^\d+$/.test(segment)) ?? path;
-
-  return sentenceCase(last);
-};
 
 export function ExtractConnectionDialog({
   job,
@@ -201,7 +191,7 @@ export function ExtractConnectionDialog({
               <List size="sm">
                 {issues.map((issue) => (
                   <List.Item key={`${issue.path}:${issue.message}`}>
-                    {issue.path ? `${issueLabel(issue.path)}: ` : ''}
+                    {issue.path ? `${fieldLabel(issue.path)}: ` : ''}
                     {issue.message}
                   </List.Item>
                 ))}

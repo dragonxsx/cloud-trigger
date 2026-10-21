@@ -17,7 +17,7 @@ import { useState } from 'react';
 
 import { type JobDto, client } from '../lib/api';
 import { errorMessage, notifyError } from '../lib/errors';
-import { dateTime, localTimeZone } from '../lib/format';
+import { countOf, dateTime, localTimeZone } from '../lib/format';
 
 const LOCAL = 'YYYY-MM-DD[T]HH:mm';
 const toIso = (local: string): string | undefined => {
@@ -59,7 +59,7 @@ export function BackfillDialog({
     onSuccess: async (result) => {
       showNotification({
         color: 'green',
-        message: `${result.created.length} runs queued${result.duplicates > 0 ? `, ${result.duplicates} already backfilled` : ''}`,
+        message: `${countOf(result.created.length, 'run')} queued${result.duplicates > 0 ? `, ${result.duplicates} already backfilled` : ''}`,
       });
       onClose();
       preview.reset();

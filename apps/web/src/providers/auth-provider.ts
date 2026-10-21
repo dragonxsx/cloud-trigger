@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 import { LEVEL_LABELS } from '../lib/access';
 import { auth, client } from '../lib/api';
-import { errorMessage, isUnauthorized } from '../lib/errors';
+import { errorMessage, isUnauthorized, toHttpError } from '../lib/errors';
 import { signIn, signOut } from '../lib/oidc';
 import { passwordSession } from '../lib/session';
 
@@ -13,6 +13,11 @@ const LoginParams = z.union([
   z.object({ username: z.string().trim().min(1), password: z.string().min(1) }),
   z.object({ apiKey: z.string().trim().min(1) }),
 ]);
+
+const UpdatePasswordParams = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(1),
+});
 
 export const startPasswordSession = (session: { token: string; expiresAt: string }): void => {
   auth.setApiKey(null);
@@ -80,13 +85,37 @@ export const authProvider: AuthProvider = {
 
     return { success: true, redirectTo: '/login' };
   },
+  updatePassword: async (params: unknown) => {
+    const parsed = UpdatePasswordParams.safeParse(params);
+    if (!parsed.success) {
+      return {
+        success: false,
+        error: { name: 'Password not changed', message: 'Fill in every field' },
+      };
+    }
+    try {
+      startPasswordSession(await client.auth.changePassword(parsed.data));
+
+      return {
+        success: true,
+        successNotification: {
+          message: 'Password changed',
+          description: 'Your other sessions were signed out.',
+        },
+      };
+    } catch (error: unknown) {
+      return { success: false, error: toHttpError(error) };
+    }
+  },
   check: async () => {
     try {
       await whoAmI();
 
       return { authenticated: true };
-    } catch {
-      return { authenticated: false, redirectTo: '/login', logout: true };
+    } catch (error) {
+      return isUnauthorized(error)
+        ? { authenticated: false, redirectTo: '/login', logout: true }
+        : { authenticated: false, error: toHttpError(error) };
     }
   },
   onError: async (error: unknown) =>

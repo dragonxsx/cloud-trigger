@@ -16,10 +16,9 @@ import {
   TextInput,
   Tooltip,
 } from '@mantine/core';
-import { showNotification } from '@mantine/notifications';
-import { List } from '@refinedev/mantine';
+import { type HttpError, useDelete, useList } from '@refinedev/core';
+import { List, type UseModalFormReturnType, useModalForm } from '@refinedev/mantine';
 import { IconCopy, IconKeyOff, IconPlus } from '@tabler/icons-react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import { confirmAction } from '../../components/confirm';
@@ -27,44 +26,29 @@ import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
 import { LoadError } from '../../components/PageState';
 import { copyToClipboard } from '../../components/ShareButtons';
 import { ScopeBadge, ScopeLevel } from '../../components/SignInMethods';
-import { type ApiKeyDto, type CreatedApiKeyDto, client } from '../../lib/api';
-import { errorMessage, notifyError } from '../../lib/errors';
+import type { ApiKeyDto, CreatedApiKeyDto } from '../../lib/api';
+import { fieldError } from '../../lib/errors';
 import { fromNow } from '../../lib/format';
+import { unfieldedError } from './form-errors';
 
-const KEYS_KEY = ['api-keys'];
+interface CreateKeyValues {
+  name: string;
+  scopes: Scope[];
+}
 
-function CreateKeyForm({
-  saving,
-  onSavingChange,
-  onCreated,
-}: {
-  saving: boolean;
-  onSavingChange: (saving: boolean) => void;
-  onCreated: (key: CreatedApiKeyDto) => void;
-}) {
-  const [name, setName] = useState('');
-  const [scopes, setScopes] = useState<Scope[]>(['write']);
-  const [error, setError] = useState<string | null>(null);
-  const nameError = error ?? undefined;
+type CreateKeyForm = UseModalFormReturnType<CreatedApiKeyDto, HttpError, CreateKeyValues>;
+
+function CreateKeyFields({ form }: { form: CreateKeyForm }) {
+  const { onFinish, formLoading, mutation } = form.refineCore;
+  const nameError =
+    fieldError(form.errors, 'name') ?? unfieldedError(mutation.error, ['name']) ?? undefined;
 
   return (
     <form
       noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (name.trim() === '') {
-          setError('Enter a name, such as ci or terraform');
-
-          return;
-        }
-        onSavingChange(true);
-        setError(null);
-        client.apiKeys
-          .create({ name: name.trim(), scopes })
-          .then(onCreated)
-          .catch((failure: unknown) => setError(errorMessage(failure)))
-          .finally(() => onSavingChange(false));
-      }}
+      onSubmit={form.onSubmit((values) => {
+        void onFinish(values).catch(() => undefined);
+      })}
     >
       <Stack spacing="sm">
         <TextInput
@@ -72,17 +56,22 @@ function CreateKeyForm({
           description="Who or what uses this key, such as ci or terraform."
           autoComplete="off"
           data-autofocus
-          value={name}
+          value={form.values.name}
           onChange={(e) => {
-            setError(null);
-            setName(e.currentTarget.value);
+            mutation.reset();
+            form.setFieldValue('name', e.currentTarget.value);
           }}
           {...(nameError === undefined ? {} : { error: nameError })}
           withAsterisk
         />
-        <ScopeLevel label="Access" value={scopes} onChange={setScopes} />
+        <ScopeLevel
+          label="Access"
+          value={form.values.scopes}
+          onChange={(scopes) => form.setFieldValue('scopes', scopes)}
+          error={fieldError(form.errors, 'scopes')}
+        />
         <Group position="right">
-          <Button type="submit" loading={saving}>
+          <Button type="submit" loading={formLoading}>
             Create key
           </Button>
         </Group>
@@ -196,50 +185,66 @@ function KeyRow({
 }
 
 export function ApiKeyList() {
-  const queryClient = useQueryClient();
-  const [creating, setCreating] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [created, setCreated] = useState<CreatedApiKeyDto | null>(null);
   const [showRevoked, setShowRevoked] = useState(false);
-  const [revoking, setRevoking] = useState<string | null>(null);
-  const keys = useQuery({ queryKey: KEYS_KEY, queryFn: () => client.apiKeys.list({}) });
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: KEYS_KEY });
-  const revoke = async (key: ApiKeyDto) => {
-    setRevoking(key.id);
-    try {
-      await client.apiKeys.revoke({ id: key.id });
-      showNotification({
-        color: 'teal',
-        title: 'Key revoked',
-        message: `${key.name} no longer works.`,
-      });
-      refresh();
-    } catch (error: unknown) {
-      notifyError(`Couldn't revoke ${key.name}`, error);
-    } finally {
-      setRevoking(null);
-    }
-  };
+  const { query: keys } = useList<ApiKeyDto>({
+    resource: 'api-keys',
+    pagination: { mode: 'off' },
+  });
+  const createForm = useModalForm<CreatedApiKeyDto, HttpError, CreateKeyValues>({
+    initialValues: { name: '', scopes: ['write'] },
+    validate: {
+      name: (value) => (value.trim() === '' ? 'Enter a name, such as ci or terraform' : null),
+    },
+    transformValues: (values) => ({ ...values, name: values.name.trim() }),
+    refineCoreProps: {
+      resource: 'api-keys',
+      action: 'create',
+      redirect: false,
+      warnWhenUnsavedChanges: false,
+      successNotification: false,
+      errorNotification: false,
+      onMutationSuccess: ({ data }) => setCreated(data),
+    },
+  });
+  const { mutate: revokeKey, mutation: revocation } = useDelete<ApiKeyDto>();
+  const revoke = (key: ApiKeyDto) =>
+    revokeKey({
+      resource: 'api-keys',
+      id: key.id,
+      mutationMode: 'pessimistic',
+      successNotification: {
+        type: 'success',
+        message: 'Key revoked',
+        description: `${key.name} no longer works.`,
+      },
+      errorNotification: (error) => ({
+        type: 'error',
+        message: `Couldn't revoke ${key.name}`,
+        description: error?.message ?? 'Something went wrong',
+      }),
+    });
   const close = () => {
-    setCreating(false);
+    createForm.modal.close();
+    createForm.refineCore.mutation.reset();
     setCreated(null);
   };
-  const all = keys.data ?? [];
+  const all = keys.data?.data ?? [];
   const revokedCount = all.filter((key) => key.revokedAt).length;
   const visible = showRevoked ? all : all.filter((key) => !key.revokedAt);
-  const locked = created !== null || saving;
+  const locked = created !== null || createForm.refineCore.formLoading;
 
   return (
     <List
       title={<PageHeading>API keys</PageHeading>}
       breadcrumb={pageBreadcrumb}
       headerButtons={
-        <Button leftIcon={<IconPlus size={16} />} onClick={() => setCreating(true)}>
+        <Button leftIcon={<IconPlus size={16} />} onClick={() => createForm.modal.show()}>
           Create key
         </Button>
       }
     >
-      {keys.error ? (
+      {keys.isError ? (
         <LoadError error={keys.error} what="API keys" onRetry={() => void keys.refetch()} />
       ) : (
         <Stack spacing="sm">
@@ -269,7 +274,7 @@ export function ApiKeyList() {
                   <KeyRow
                     key={key.id}
                     apiKey={key}
-                    revoking={revoking === key.id}
+                    revoking={revocation.isPending && revocation.variables?.id === key.id}
                     onRevoke={() =>
                       void confirmAction({
                         title: `Revoke ${key.name}?`,
@@ -294,7 +299,7 @@ export function ApiKeyList() {
         </Stack>
       )}
       <Modal
-        opened={creating}
+        opened={createForm.modal.visible}
         onClose={close}
         title={created ? 'Your new key' : 'Create API key'}
         closeOnEscape={!locked}
@@ -304,14 +309,7 @@ export function ApiKeyList() {
         {created ? (
           <NewKey created={created} onClose={close} />
         ) : (
-          <CreateKeyForm
-            saving={saving}
-            onSavingChange={setSaving}
-            onCreated={(key) => {
-              setCreated(key);
-              refresh();
-            }}
-          />
+          <CreateKeyFields form={createForm} />
         )}
       </Modal>
     </List>
