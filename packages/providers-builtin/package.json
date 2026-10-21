@@ -18,7 +18,7 @@
   },
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
-    "@types/node": "24.19.2",
+    "@types/node": "catalog:",
     "@types/nodemailer": "8.0.2"
   },
   "dependencies": {
@@ -29,13 +29,13 @@
     "graphql": "17.0.2",
     "jsonpath-plus": "11.2.1",
     "liquidjs": "10.30.0",
-    "neverthrow": "8.2.0",
+    "neverthrow": "catalog:",
     "nodemailer": "10.1.2",
     "oauth4webapi": "3.8.8",
     "p-limit": "7.3.3",
     "rrule": "2.8.1",
-    "undici": "8.12.2",
-    "zod": "4.6.7"
+    "undici": "catalog:",
+    "zod": "catalog:"
   },
   "files": [
     "dist"

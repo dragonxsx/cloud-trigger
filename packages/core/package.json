@@ -19,13 +19,13 @@
   "dependencies": {
     "@sindresorhus/slugify": "3.0.1",
     "defu": "6.1.7",
-    "neverthrow": "8.2.0",
+    "neverthrow": "catalog:",
     "safe-stable-stringify": "3.0.0",
     "uuid": "14.0.3",
-    "zod": "4.6.7"
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "24.19.2"
+    "@types/node": "catalog:"
   },
   "files": [
     "dist"

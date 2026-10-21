@@ -17,11 +17,11 @@
   },
   "dependencies": {
     "@cloud-trigger/core": "workspace:*",
-    "@orpc/contract": "1.15.7",
-    "zod": "4.6.7"
+    "@orpc/contract": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "24.19.2"
+    "@types/node": "catalog:"
   },
   "files": [
     "dist"

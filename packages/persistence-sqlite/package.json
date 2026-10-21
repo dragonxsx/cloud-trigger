@@ -30,13 +30,13 @@
     "@cloud-trigger/core": "workspace:*",
     "@cloud-trigger/persistence-sql": "workspace:*",
     "better-sqlite3": "13.0.3",
-    "drizzle-orm": "0.45.4",
-    "zod": "4.6.7"
+    "drizzle-orm": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
     "@types/better-sqlite3": "9.6.0",
-    "@types/node": "24.19.2",
-    "drizzle-kit": "0.31.11"
+    "@types/node": "catalog:",
+    "drizzle-kit": "catalog:"
   }
 }

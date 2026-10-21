@@ -23,12 +23,12 @@
     "@cloud-trigger/core": "workspace:*",
     "@cloud-trigger/providers-builtin": "workspace:*",
     "@platformatic/kafka": "2.14.0",
-    "zod": "4.6.7"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
     "@testcontainers/kafka": "12.2.1",
-    "@types/node": "24.19.2",
-    "testcontainers": "12.2.1"
+    "@types/node": "catalog:",
+    "testcontainers": "catalog:"
   }
 }

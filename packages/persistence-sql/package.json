@@ -31,10 +31,10 @@
   ],
   "dependencies": {
     "@cloud-trigger/core": "workspace:*",
-    "drizzle-orm": "0.45.4",
-    "zod": "4.6.7"
+    "drizzle-orm": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/node": "24.19.2"
+    "@types/node": "catalog:"
   }
 }

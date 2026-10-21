@@ -25,9 +25,9 @@
     "@cloud-trigger/persistence-sqlite": "workspace:*",
     "@cloud-trigger/providers-builtin": "workspace:*",
     "@cloud-trigger/testing": "workspace:*",
-    "@types/node": "24.19.2",
-    "vitest": "5.0.5",
-    "zod": "4.6.7"
+    "@types/node": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
   },
   "files": [
     "dist"

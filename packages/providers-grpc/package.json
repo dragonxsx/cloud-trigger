@@ -26,11 +26,11 @@
     "@grpc/proto-loader": "0.8.1",
     "grpc-js-reflection-client": "1.4.2",
     "protobufjs": "8.8.1",
-    "zod": "4.6.7"
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
     "@grpc/reflection": "1.0.4",
-    "@types/node": "24.19.2"
+    "@types/node": "catalog:"
   }
 }

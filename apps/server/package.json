@@ -51,25 +51,25 @@
     "ipaddr.js": "2.5.0",
     "jose": "6.2.12",
     "nestjs-pino": "5.3.1",
-    "neverthrow": "8.2.0",
+    "neverthrow": "catalog:",
     "pino": "10.4.0",
     "pino-http": "11.0.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
-    "undici": "8.12.3",
-    "yaml": "2.9.1",
-    "zod": "4.6.7"
+    "undici": "catalog:",
+    "yaml": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
-    "@orpc/client": "1.15.7",
-    "@orpc/contract": "1.15.7",
-    "@orpc/openapi-client": "1.15.7",
-    "@testcontainers/mongodb": "12.2.1",
-    "@testcontainers/postgresql": "12.2.1",
+    "@orpc/client": "catalog:",
+    "@orpc/contract": "catalog:",
+    "@orpc/openapi-client": "catalog:",
+    "@testcontainers/mongodb": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
     "@types/express": "5.0.6",
-    "@types/node": "24.19.2",
-    "vitest": "5.0.5"
+    "@types/node": "catalog:",
+    "vitest": "catalog:"
   },
   "files": [
     "dist"

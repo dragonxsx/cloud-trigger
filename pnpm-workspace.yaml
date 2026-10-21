@@ -10,3 +10,19 @@ allowBuilds:
   protobufjs: false
 minimumReleaseAgeExclude:
   - "@scalar/json-magic@0.16.1"
+catalogMode: prefer
+catalog:
+  "@orpc/client": 1.15.7
+  "@orpc/contract": 1.15.7
+  "@orpc/openapi-client": 1.15.7
+  "@testcontainers/mongodb": 12.2.1
+  "@testcontainers/postgresql": 12.2.1
+  "@types/node": 24.19.2
+  drizzle-kit: 0.31.11
+  drizzle-orm: 0.45.4
+  neverthrow: 8.2.0
+  testcontainers: 12.2.1
+  undici: 8.12.3
+  vitest: 5.0.5
+  yaml: 2.9.1
+  zod: 4.6.7

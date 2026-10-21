@@ -24,15 +24,15 @@
   "dependencies": {
     "@cloud-trigger/core": "workspace:*",
     "mongodb": "7.7.0",
-    "neverthrow": "8.2.0",
-    "zod": "4.6.7"
+    "neverthrow": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
-    "@testcontainers/mongodb": "12.2.1",
-    "@types/node": "24.19.2",
+    "@testcontainers/mongodb": "catalog:",
+    "@types/node": "catalog:",
     "type-fest": "5.10.0",
-    "vitest": "5.0.5"
+    "vitest": "catalog:"
   },
   "files": [
     "dist"
