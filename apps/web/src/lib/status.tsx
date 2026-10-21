@@ -1,5 +1,5 @@
 import { RUN_STATUS_STYLE } from '@cloud-trigger/core';
-import { Badge, Loader, Tooltip } from '@mantine/core';
+import { Badge, type BadgeProps, Loader, Tooltip } from '@mantine/core';
 import {
   IconAlertTriangle,
   IconBan,
@@ -76,17 +76,57 @@ export function StatusBadge({ status }: { status: RunStatusDto }) {
   );
 }
 
-export function LateBadge({ reasons }: { reasons: readonly string[] }) {
+const TOOLTIP_EVENTS = { hover: true, focus: true, touch: true };
+
+interface HintBadgeProps {
+  readonly label: string;
+  readonly hint: string;
+  readonly color?: BadgeProps['color'];
+  readonly variant?: BadgeProps['variant'];
+  readonly icon?: ReactNode;
+}
+
+export function HintBadge({
+  label,
+  hint,
+  color = 'gray',
+  variant = 'light',
+  icon,
+}: HintBadgeProps) {
   return (
-    <Tooltip label={reasons.join('; ') || 'Breached its SLA'} withArrow multiline width={260}>
+    <Tooltip label={hint} withArrow multiline width={260} events={TOOLTIP_EVENTS}>
       <Badge
+        tabIndex={0}
+        variant={variant}
+        color={color}
+        radius="sm"
+        leftSection={icon}
+        styles={{ root: { textTransform: 'none', fontWeight: 600, cursor: 'help' } }}
+      >
+        {label}
+        <span className="ct-sr-only">: {hint}</span>
+      </Badge>
+    </Tooltip>
+  );
+}
+
+export function LateBadge({ reasons }: { reasons: readonly string[] }) {
+  const hint = reasons.join('; ') || 'Breached its SLA';
+
+  return (
+    <Tooltip label={hint} withArrow multiline width={260} events={TOOLTIP_EVENTS}>
+      <Badge
+        tabIndex={0}
         variant="outline"
         color="gray"
         radius="sm"
         leftSection={<IconClockExclamation size={12} style={{ display: 'block' }} />}
-        styles={{ root: { textTransform: 'none', fontWeight: 600, color: 'var(--ct-ink)' } }}
+        styles={{
+          root: { textTransform: 'none', fontWeight: 600, color: 'var(--ct-ink)', cursor: 'help' },
+        }}
       >
         Late
+        <span className="ct-sr-only">: {hint}</span>
       </Badge>
     </Tooltip>
   );

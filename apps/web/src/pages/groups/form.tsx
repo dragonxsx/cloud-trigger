@@ -6,8 +6,10 @@ import {
   Text,
   TextInput,
   Textarea,
+  Title,
 } from '@mantine/core';
-import type { UseFormReturnType } from '@mantine/form';
+import type { FormErrors, UseFormReturnType } from '@mantine/form';
+import { IconColorPicker } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 
@@ -59,6 +61,20 @@ export const toGroupSpec = ({
   ...(version !== undefined && { expectedVersion: version }),
 });
 
+export function validateGroup(values: GroupFormValues): FormErrors {
+  const errors: FormErrors = {};
+  if (values.name.trim() === '') {
+    errors['name'] = 'Enter a name';
+  }
+  values.defaultNotifications.forEach((rule, index) => {
+    if (rule.on.length === 0) {
+      errors[`defaultNotifications.${index}.on`] = 'Pick at least one event';
+    }
+  });
+
+  return errors;
+}
+
 const rateLimitOf = (perSecond: number | undefined, maxConcurrent: number | undefined) =>
   perSecond === undefined && maxConcurrent === undefined
     ? null
@@ -71,7 +87,9 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   return (
     <Stack className="ct-panel" p="lg" spacing="md">
       <div>
-        <Text weight={650}>{title}</Text>
+        <Title order={2} size="h4">
+          {title}
+        </Title>
         {hint && (
           <Text size="sm" color="dimmed">
             {hint}
@@ -104,6 +122,7 @@ export function GroupFormFields({ form }: { form: GroupForm }) {
             format="hex"
             swatches={[...GROUP_SWATCHES]}
             swatchesPerRow={7}
+            eyeDropperIcon={<IconColorPicker size={16} title="Pick a colour from the screen" />}
             {...form.getInputProps('color')}
           />
         </SimpleGrid>

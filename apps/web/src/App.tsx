@@ -1,51 +1,50 @@
-import {
-  ActionIcon,
-  Button,
-  Center,
-  ColorSchemeProvider,
-  Loader,
-  Global,
-  MantineProvider,
-  Tooltip,
-  useMantineColorScheme,
-} from '@mantine/core';
+import { ColorSchemeProvider, Global, MantineProvider } from '@mantine/core';
 import { useColorScheme, useLocalStorage } from '@mantine/hooks';
+import { ModalsProvider } from '@mantine/modals';
 import { NotificationsProvider } from '@mantine/notifications';
-import { Authenticated, Refine, useGetIdentity } from '@refinedev/core';
-import {
-  ErrorComponent,
-  ThemedLayout,
-  ThemedSider,
-  useNotificationProvider,
-} from '@refinedev/mantine';
-import routerProvider, { CatchAllNavigate, UnsavedChangesNotifier } from '@refinedev/react-router';
+import { Authenticated, type IResourceItem, Refine } from '@refinedev/core';
+import routerProvider, {
+  CatchAllNavigate,
+  DocumentTitleHandler,
+  UnsavedChangesNotifier,
+} from '@refinedev/react-router';
 import {
   IconActivity,
-  IconApi,
   IconCalendarTime,
   IconFolders,
-  IconStack2,
   IconHierarchy2,
   IconKey,
   IconLayoutDashboard,
   IconPlugConnected,
-  IconMoon,
   IconSettings,
   IconShieldLock,
-  IconSun,
-  IconUserCircle,
+  IconStack2,
   IconUsers,
 } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
-import { Suspense, useEffect } from 'react';
-import { BrowserRouter, Link, Navigate, Outlet, Route, Routes } from 'react-router';
+import { type ReactNode, Suspense, useLayoutEffect, useMemo } from 'react';
+import { BrowserRouter, Navigate, Outlet, Route, Routes } from 'react-router';
 
-import { BrandTitle } from './components/Brand';
+import { ActivityProgress } from './components/ActivityProgress';
+import { AppLayout } from './components/AppLayout';
+import { NotFoundPage, PageLoader } from './components/PageState';
+import { RequireAccess } from './components/RequireAccess';
+import { APP_TITLE, pageTitle } from './components/usePageTitle';
 import { client } from './lib/api';
+import {
+  type ColorScheme,
+  type ColorSchemePreference,
+  ColorSchemePreferenceContext,
+  THEME_STORAGE_KEY,
+  applyColorScheme,
+  parseStoredScheme,
+} from './lib/color-scheme';
+import { shouldRetryQuery } from './lib/errors';
 import { lazyNamed } from './lib/lazy';
 import { accessControlProvider, authProvider } from './providers/auth-provider';
 import { dataProvider } from './providers/data-provider';
 import { createSharedRunStreamLiveProvider } from './providers/live-provider';
+import { useAppNotificationProvider } from './providers/notification-provider';
 import { buildTheme } from './theme';
 
 const Dashboard = lazyNamed(() => import('./pages/Dashboard'), 'Dashboard');
@@ -77,12 +76,6 @@ const ApiKeyList = lazyNamed(() => import('./pages/settings/api-keys'), 'ApiKeyL
 const EnvironmentList = lazyNamed(() => import('./pages/settings/environments'), 'EnvironmentList');
 const AccountPage = lazyNamed(() => import('./pages/Account'), 'AccountPage');
 
-const PageLoader = () => (
-  <Center h={240}>
-    <Loader size="sm" />
-  </Center>
-);
-
 const liveProvider = createSharedRunStreamLiveProvider();
 
 function SetupGate() {
@@ -102,276 +95,350 @@ function SetupGate() {
   return <Outlet />;
 }
 
-const Sider = () => (
-  <ThemedSider
-    Title={BrandTitle}
-    render={({ items, logout }) => (
-      <>
-        {items}
-        {logout}
-      </>
-    )}
-  />
+const SYSTEM_PREFERENCE: ColorSchemePreference = 'system';
+
+const QUERY_CLIENT_CONFIG = { defaultOptions: { queries: { retry: shouldRetryQuery } } };
+
+const PATH_TITLES: Readonly<Record<string, string>> = {
+  '/account': 'Your account',
+  '/login': 'Sign in',
+  '/setup': 'Set up',
+  '/auth/callback': 'Signing in',
+};
+
+const singular = (label: string): string => (label.endsWith('s') ? label.slice(0, -1) : label);
+
+function documentTitle({
+  resource,
+  action,
+  pathname,
+}: {
+  resource?: IResourceItem;
+  action?: string;
+  pathname?: string;
+}): string {
+  const fromPath = pathname === undefined ? undefined : PATH_TITLES[pathname];
+  if (fromPath !== undefined) {
+    return pageTitle(fromPath);
+  }
+  const label = resource?.meta?.label;
+  if (label === undefined) {
+    return APP_TITLE;
+  }
+  const one = singular(label);
+  switch (action) {
+    case 'create':
+      return pageTitle(`New ${one.toLowerCase()}`, label);
+    case 'edit':
+      return pageTitle(`Edit ${one.toLowerCase()}`, label);
+    case 'show':
+      return pageTitle(one, label);
+    default:
+      return pageTitle(label);
+  }
+}
+
+const guarded = (
+  resource: string,
+  action: string,
+  back: { to: string; label: string },
+  element: ReactNode,
+) => (
+  <RequireAccess resource={resource} action={action} backTo={back.to} backLabel={back.label}>
+    {element}
+  </RequireAccess>
 );
 
-function HeaderActions() {
-  const scheme = useMantineColorScheme();
-  const dark = scheme.colorScheme === 'dark';
-  const identity = useGetIdentity<{ via: string }>();
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 4,
-        justifyContent: 'flex-end',
-        padding: '8px 16px',
-        borderBottom: '1px solid var(--ct-line)',
-        background: 'var(--ct-surface)',
-      }}
-    >
-      {identity.data?.via === 'anonymous' ? (
-        <Button component={Link} to="/login" size="xs" variant="light" mr="xs">
-          Viewing as guest · Sign in
-        </Button>
-      ) : (
-        <Tooltip label="Your account">
-          <ActionIcon component={Link} to="/account" variant="subtle" aria-label="Your account">
-            <IconUserCircle size={18} />
-          </ActionIcon>
-        </Tooltip>
-      )}
-      <Tooltip label="API reference">
-        <ActionIcon
-          component="a"
-          href="/docs"
-          target="_blank"
-          variant="subtle"
-          aria-label="API reference"
-        >
-          <IconApi size={18} />
-        </ActionIcon>
-      </Tooltip>
-      <Tooltip label={dark ? 'Light theme' : 'Dark theme'}>
-        <ActionIcon
-          variant="subtle"
-          onClick={() => scheme.toggleColorScheme()}
-          aria-label="Toggle color scheme"
-        >
-          {dark ? <IconSun size={18} /> : <IconMoon size={18} />}
-        </ActionIcon>
-      </Tooltip>
-    </div>
-  );
-}
+const JOBS_BACK = { to: '/jobs', label: 'Back to jobs' };
+const WORKFLOWS_BACK = { to: '/workflows', label: 'Back to workflows' };
+const GROUPS_BACK = { to: '/groups', label: 'Back to groups' };
+const CONNECTIONS_BACK = { to: '/connections', label: 'Back to connections' };
+const HOME_BACK = { to: '/', label: 'Back to dashboard' };
 
 export function App() {
   const system = useColorScheme(undefined, { getInitialValueInEffect: false });
-  const [override, setOverride, clearOverride] = useLocalStorage<'light' | 'dark' | undefined>({
-    key: 'cloud-trigger.theme-override',
+  const [override, setOverride, clearOverride] = useLocalStorage<ColorScheme | undefined>({
+    key: THEME_STORAGE_KEY,
     defaultValue: undefined,
     getInitialValueInEffect: false,
-    deserialize: (raw) => (raw === '"light"' ? 'light' : raw === '"dark"' ? 'dark' : undefined),
+    deserialize: parseStoredScheme,
   });
   const colorScheme = override ?? system;
-  const toggle = () => {
-    const next = colorScheme === 'dark' ? 'light' : 'dark';
-    if (next === system) {
-      clearOverride();
-    } else {
-      setOverride(next);
-    }
+  const preference = useMemo(
+    () => ({
+      preference: override ?? SYSTEM_PREFERENCE,
+      setPreference: (next: ColorSchemePreference) => {
+        if (next === 'system') {
+          clearOverride();
+        } else {
+          setOverride(next);
+        }
+      },
+    }),
+    [override, clearOverride, setOverride],
+  );
+  const toggle = (value?: ColorScheme) => {
+    setOverride(value ?? (colorScheme === 'dark' ? 'light' : 'dark'));
   };
-  useEffect(() => {
-    document.documentElement.dataset['theme'] = colorScheme;
+  useLayoutEffect(() => {
+    applyColorScheme(colorScheme);
   }, [colorScheme]);
+  const notificationProvider = useAppNotificationProvider();
 
   return (
-    <BrowserRouter>
-      <ColorSchemeProvider colorScheme={colorScheme} toggleColorScheme={toggle}>
-        <MantineProvider theme={buildTheme(colorScheme)} withNormalizeCSS withGlobalStyles>
-          <Global styles={{ body: { WebkitFontSmoothing: 'antialiased' } }} />
-          <NotificationsProvider position="top-right">
-            <Refine
-              dataProvider={dataProvider}
-              liveProvider={liveProvider}
-              authProvider={authProvider}
-              accessControlProvider={accessControlProvider}
-              routerProvider={routerProvider}
-              // oxlint-disable-next-line react/hooks -- Refine calls the hook inside its provider
-              notificationProvider={useNotificationProvider}
-              resources={[
-                {
-                  name: 'dashboard',
-                  list: '/',
-                  meta: { label: 'Dashboard', icon: <IconLayoutDashboard size={18} /> },
-                },
-                {
-                  name: 'jobs',
-                  list: '/jobs',
-                  create: '/jobs/create',
-                  edit: '/jobs/edit/:id',
-                  show: '/jobs/show/:id',
-                  meta: { label: 'Jobs', icon: <IconCalendarTime size={18} />, canDelete: true },
-                },
-                {
-                  name: 'runs',
-                  list: '/runs',
-                  show: '/runs/show/:id',
-                  meta: { label: 'Runs', icon: <IconActivity size={18} /> },
-                },
-                {
-                  name: 'workflows',
-                  list: '/workflows',
-                  create: '/workflows/create',
-                  edit: '/workflows/edit/:id',
-                  show: '/workflows/show/:id',
-                  meta: { label: 'Workflows', icon: <IconHierarchy2 size={18} />, canDelete: true },
-                },
-                {
-                  name: 'groups',
-                  list: '/groups',
-                  create: '/groups/create',
-                  edit: '/groups/edit/:id',
-                  show: '/groups/show/:id',
-                  meta: { label: 'Groups', icon: <IconFolders size={18} />, canDelete: true },
-                },
-                {
-                  name: 'connections',
-                  list: '/connections',
-                  create: '/connections/create',
-                  edit: '/connections/edit/:id',
-                  show: '/connections/show/:id',
-                  meta: {
-                    label: 'Connections',
-                    icon: <IconPlugConnected size={18} />,
-                    canDelete: true,
-                  },
-                },
-                {
-                  name: 'settings',
-                  meta: { label: 'Settings', icon: <IconSettings size={18} /> },
-                },
-                {
-                  name: 'environments',
-                  list: '/settings/environments',
-                  meta: {
-                    label: 'Environments',
-                    parent: 'settings',
-                    icon: <IconStack2 size={18} />,
-                  },
-                },
-                {
-                  name: 'auth-settings',
-                  list: '/settings/auth',
-                  meta: {
-                    label: 'Sign-in methods',
-                    parent: 'settings',
-                    icon: <IconShieldLock size={18} />,
-                  },
-                },
-                {
-                  name: 'users',
-                  list: '/settings/users',
-                  meta: { label: 'Users', parent: 'settings', icon: <IconUsers size={18} /> },
-                },
-                {
-                  name: 'api-keys',
-                  list: '/settings/api-keys',
-                  meta: { label: 'API keys', parent: 'settings', icon: <IconKey size={18} /> },
-                },
-              ]}
-              options={{
-                liveMode: 'auto',
-                syncWithLocation: true,
-                warnWhenUnsavedChanges: true,
-                disableTelemetry: true,
-                title: { text: 'Cloud Trigger' },
-              }}
-            >
-              <Routes>
-                <Route
-                  path="/setup"
-                  element={
-                    <Suspense fallback={<PageLoader />}>
-                      <SetupWizard />
-                    </Suspense>
-                  }
-                />
-                <Route element={<SetupGate />}>
-                  <Route
-                    path="/auth/callback"
-                    element={
-                      <Suspense fallback={<PageLoader />}>
-                        <AuthCallback />
-                      </Suspense>
-                    }
-                  />
-                  <Route
-                    element={
-                      <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
-                        <ThemedLayout Title={BrandTitle} Sider={Sider} Header={HeaderActions}>
+    <BrowserRouter useTransitions={false}>
+      <ColorSchemePreferenceContext.Provider value={preference}>
+        <ColorSchemeProvider colorScheme={colorScheme} toggleColorScheme={toggle}>
+          <MantineProvider theme={buildTheme(colorScheme)} withNormalizeCSS withGlobalStyles>
+            <Global styles={{ body: { WebkitFontSmoothing: 'antialiased' } }} />
+            <ModalsProvider>
+              <NotificationsProvider position="top-right">
+                <Refine
+                  dataProvider={dataProvider}
+                  liveProvider={liveProvider}
+                  authProvider={authProvider}
+                  accessControlProvider={accessControlProvider}
+                  routerProvider={routerProvider}
+                  notificationProvider={notificationProvider}
+                  resources={[
+                    {
+                      name: 'dashboard',
+                      list: '/',
+                      meta: { label: 'Dashboard', icon: <IconLayoutDashboard size={18} /> },
+                    },
+                    {
+                      name: 'jobs',
+                      list: '/jobs',
+                      create: '/jobs/create',
+                      edit: '/jobs/edit/:id',
+                      show: '/jobs/show/:id',
+                      meta: {
+                        label: 'Jobs',
+                        icon: <IconCalendarTime size={18} />,
+                        canDelete: true,
+                      },
+                    },
+                    {
+                      name: 'runs',
+                      list: '/runs',
+                      show: '/runs/show/:id',
+                      meta: { label: 'Runs', icon: <IconActivity size={18} /> },
+                    },
+                    {
+                      name: 'workflows',
+                      list: '/workflows',
+                      create: '/workflows/create',
+                      edit: '/workflows/edit/:id',
+                      show: '/workflows/show/:id',
+                      meta: {
+                        label: 'Workflows',
+                        icon: <IconHierarchy2 size={18} />,
+                        canDelete: true,
+                      },
+                    },
+                    {
+                      name: 'groups',
+                      list: '/groups',
+                      create: '/groups/create',
+                      edit: '/groups/edit/:id',
+                      show: '/groups/show/:id',
+                      meta: { label: 'Groups', icon: <IconFolders size={18} />, canDelete: true },
+                    },
+                    {
+                      name: 'connections',
+                      list: '/connections',
+                      create: '/connections/create',
+                      edit: '/connections/edit/:id',
+                      show: '/connections/show/:id',
+                      meta: {
+                        label: 'Connections',
+                        icon: <IconPlugConnected size={18} />,
+                        canDelete: true,
+                      },
+                    },
+                    {
+                      name: 'settings',
+                      meta: { label: 'Settings', icon: <IconSettings size={18} /> },
+                    },
+                    {
+                      name: 'environments',
+                      list: '/settings/environments',
+                      meta: {
+                        label: 'Environments',
+                        parent: 'settings',
+                        icon: <IconStack2 size={18} />,
+                      },
+                    },
+                    {
+                      name: 'auth-settings',
+                      list: '/settings/auth',
+                      meta: {
+                        label: 'Sign-in methods',
+                        parent: 'settings',
+                        icon: <IconShieldLock size={18} />,
+                      },
+                    },
+                    {
+                      name: 'users',
+                      list: '/settings/users',
+                      meta: { label: 'Users', parent: 'settings', icon: <IconUsers size={18} /> },
+                    },
+                    {
+                      name: 'api-keys',
+                      list: '/settings/api-keys',
+                      meta: { label: 'API keys', parent: 'settings', icon: <IconKey size={18} /> },
+                    },
+                  ]}
+                  options={{
+                    liveMode: 'auto',
+                    syncWithLocation: true,
+                    warnWhenUnsavedChanges: true,
+                    disableTelemetry: true,
+                    title: { text: APP_TITLE },
+                    reactQuery: { clientConfig: QUERY_CLIENT_CONFIG },
+                  }}
+                >
+                  <ActivityProgress />
+                  <Routes>
+                    <Route
+                      path="/setup"
+                      element={
+                        <Suspense fallback={<PageLoader />}>
+                          <SetupWizard />
+                        </Suspense>
+                      }
+                    />
+                    <Route element={<SetupGate />}>
+                      <Route
+                        path="/auth/callback"
+                        element={
                           <Suspense fallback={<PageLoader />}>
-                            <Outlet />
+                            <AuthCallback />
                           </Suspense>
-                        </ThemedLayout>
-                      </Authenticated>
-                    }
-                  >
-                    <Route index element={<Dashboard />} />
-                    <Route path="/jobs">
-                      <Route index element={<JobList />} />
-                      <Route path="create" element={<JobCreate />} />
-                      <Route path="edit/:id" element={<JobEdit />} />
-                      <Route path="show/:id" element={<JobShow />} />
+                        }
+                      />
+                      <Route
+                        element={
+                          <Authenticated key="app" fallback={<CatchAllNavigate to="/login" />}>
+                            <AppLayout>
+                              <Suspense fallback={<PageLoader />}>
+                                <Outlet />
+                              </Suspense>
+                            </AppLayout>
+                          </Authenticated>
+                        }
+                      >
+                        <Route index element={<Dashboard />} />
+                        <Route path="/jobs">
+                          <Route index element={<JobList />} />
+                          <Route
+                            path="create"
+                            element={guarded('jobs', 'create', JOBS_BACK, <JobCreate />)}
+                          />
+                          <Route
+                            path="edit/:id"
+                            element={guarded('jobs', 'edit', JOBS_BACK, <JobEdit />)}
+                          />
+                          <Route path="show/:id" element={<JobShow />} />
+                        </Route>
+                        <Route path="/runs">
+                          <Route index element={<RunList />} />
+                          <Route path="show/:id" element={<RunShow />} />
+                        </Route>
+                        <Route path="/workflows">
+                          <Route index element={<WorkflowList />} />
+                          <Route
+                            path="create"
+                            element={guarded(
+                              'workflows',
+                              'create',
+                              WORKFLOWS_BACK,
+                              <WorkflowCreate />,
+                            )}
+                          />
+                          <Route
+                            path="edit/:id"
+                            element={guarded('workflows', 'edit', WORKFLOWS_BACK, <WorkflowEdit />)}
+                          />
+                          <Route path="show/:id" element={<WorkflowShow />} />
+                          <Route path="runs/:id" element={<WorkflowRunShow />} />
+                        </Route>
+                        <Route path="/groups">
+                          <Route index element={<GroupList />} />
+                          <Route
+                            path="create"
+                            element={guarded('groups', 'create', GROUPS_BACK, <GroupCreate />)}
+                          />
+                          <Route
+                            path="edit/:id"
+                            element={guarded('groups', 'edit', GROUPS_BACK, <GroupEdit />)}
+                          />
+                          <Route path="show/:id" element={<GroupShow />} />
+                        </Route>
+                        <Route path="/connections">
+                          <Route index element={<ConnectionList />} />
+                          <Route
+                            path="create"
+                            element={guarded(
+                              'connections',
+                              'create',
+                              CONNECTIONS_BACK,
+                              <ConnectionCreate />,
+                            )}
+                          />
+                          <Route
+                            path="edit/:id"
+                            element={guarded(
+                              'connections',
+                              'edit',
+                              CONNECTIONS_BACK,
+                              <ConnectionEdit />,
+                            )}
+                          />
+                          <Route path="show/:id" element={<ConnectionShow />} />
+                        </Route>
+                        <Route path="/settings">
+                          <Route index element={<Navigate to="environments" replace />} />
+                          <Route path="environments" element={<EnvironmentList />} />
+                          <Route
+                            path="auth"
+                            element={guarded(
+                              'auth-settings',
+                              'list',
+                              HOME_BACK,
+                              <AuthSettingsPage />,
+                            )}
+                          />
+                          <Route
+                            path="users"
+                            element={guarded('users', 'list', HOME_BACK, <UserList />)}
+                          />
+                          <Route
+                            path="api-keys"
+                            element={guarded('api-keys', 'list', HOME_BACK, <ApiKeyList />)}
+                          />
+                        </Route>
+                        <Route path="/account" element={<AccountPage />} />
+                        <Route path="*" element={<NotFoundPage />} />
+                      </Route>
+                      <Route
+                        path="/login"
+                        element={
+                          <Suspense fallback={<PageLoader />}>
+                            <Login />
+                          </Suspense>
+                        }
+                      />
                     </Route>
-                    <Route path="/runs">
-                      <Route index element={<RunList />} />
-                      <Route path="show/:id" element={<RunShow />} />
-                    </Route>
-                    <Route path="/workflows">
-                      <Route index element={<WorkflowList />} />
-                      <Route path="create" element={<WorkflowCreate />} />
-                      <Route path="edit/:id" element={<WorkflowEdit />} />
-                      <Route path="show/:id" element={<WorkflowShow />} />
-                      <Route path="runs/:id" element={<WorkflowRunShow />} />
-                    </Route>
-                    <Route path="/groups">
-                      <Route index element={<GroupList />} />
-                      <Route path="create" element={<GroupCreate />} />
-                      <Route path="edit/:id" element={<GroupEdit />} />
-                      <Route path="show/:id" element={<GroupShow />} />
-                    </Route>
-                    <Route path="/connections">
-                      <Route index element={<ConnectionList />} />
-                      <Route path="create" element={<ConnectionCreate />} />
-                      <Route path="edit/:id" element={<ConnectionEdit />} />
-                      <Route path="show/:id" element={<ConnectionShow />} />
-                    </Route>
-                    <Route path="/settings">
-                      <Route path="environments" element={<EnvironmentList />} />
-                      <Route path="auth" element={<AuthSettingsPage />} />
-                      <Route path="users" element={<UserList />} />
-                      <Route path="api-keys" element={<ApiKeyList />} />
-                    </Route>
-                    <Route path="/account" element={<AccountPage />} />
-                    <Route path="*" element={<ErrorComponent />} />
-                  </Route>
-                  <Route
-                    path="/login"
-                    element={
-                      <Suspense fallback={<PageLoader />}>
-                        <Login />
-                      </Suspense>
-                    }
-                  />
-                </Route>
-              </Routes>
-              <UnsavedChangesNotifier />
-            </Refine>
-          </NotificationsProvider>
-        </MantineProvider>
-      </ColorSchemeProvider>
+                  </Routes>
+                  <UnsavedChangesNotifier />
+                  <DocumentTitleHandler handler={documentTitle} />
+                </Refine>
+              </NotificationsProvider>
+            </ModalsProvider>
+          </MantineProvider>
+        </ColorSchemeProvider>
+      </ColorSchemePreferenceContext.Provider>
     </BrowserRouter>
   );
 }

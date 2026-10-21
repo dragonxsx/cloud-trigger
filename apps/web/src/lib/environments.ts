@@ -15,8 +15,14 @@ export async function listAllEnvironments(cursor?: string): Promise<EnvironmentD
     : [...page.items, ...(await listAllEnvironments(page.nextCursor))];
 }
 
+const comparable = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
 export const environmentLabel = (environment: Pick<EnvironmentDto, 'key' | 'name'>): string =>
-  environment.name ? `${environment.name} (${environment.key})` : environment.key;
+  !environment.name
+    ? environment.key
+    : comparable(environment.name) === comparable(environment.key)
+      ? environment.name
+      : `${environment.name} (${environment.key})`;
 
 export function useEnvironments() {
   return useQuery({

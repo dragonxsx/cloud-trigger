@@ -1,8 +1,11 @@
-import { Pagination, ScrollArea, Stack, Table, Text } from '@mantine/core';
-import { useTable } from '@refinedev/core';
-import { EditButton, List, ShowButton } from '@refinedev/mantine';
+import { ActionIcon, Pagination, ScrollArea, Stack, Table, Text } from '@mantine/core';
+import { CanAccess, useTable } from '@refinedev/core';
+import { List } from '@refinedev/mantine';
+import { IconPencil } from '@tabler/icons-react';
+import { Link } from 'react-router';
 
 import { GroupChip } from '../../components/GroupChip';
+import { PageHeading } from '../../components/page-chrome';
 import type { GroupDto } from '../../lib/api';
 
 export const rateLimitSummary = (group: Pick<GroupDto, 'rateLimit'>): string => {
@@ -26,7 +29,7 @@ export function GroupList() {
   const groups = tableQuery.data?.data ?? [];
 
   return (
-    <List title="Groups">
+    <List title={<PageHeading>Groups</PageHeading>}>
       <Stack spacing="md">
         {groups.length === 0 && !tableQuery.isLoading ? (
           <Text color="dimmed" p="lg" align="center">
@@ -41,7 +44,9 @@ export function GroupList() {
                   <th>Description</th>
                   <th>Rate limit</th>
                   <th style={{ textAlign: 'right' }}>Default notifications</th>
-                  <th aria-label="Actions" />
+                  <th>
+                    <span className="ct-sr-only">Actions</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -62,8 +67,18 @@ export function GroupList() {
                       <Text size="sm">{group.defaultNotifications.length}</Text>
                     </td>
                     <td>
-                      <ShowButton hideText size="xs" recordItemId={group.id} />
-                      <EditButton hideText size="xs" recordItemId={group.id} />
+                      <CanAccess resource="groups" action="edit">
+                        <ActionIcon
+                          component={Link}
+                          to={`/groups/edit/${group.id}`}
+                          variant="subtle"
+                          size="lg"
+                          aria-label={`Edit ${group.name}`}
+                          title={`Edit ${group.name}`}
+                        >
+                          <IconPencil size={18} />
+                        </ActionIcon>
+                      </CanAccess>
                     </td>
                   </tr>
                 ))}

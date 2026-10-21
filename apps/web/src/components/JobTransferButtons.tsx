@@ -18,6 +18,7 @@ import { useState } from 'react';
 
 import { type ApiClient, client } from '../lib/api';
 import { errorMessage, notifyError } from '../lib/errors';
+import { confirmAction } from './confirm';
 
 type ImportResultDto = Awaited<ReturnType<ApiClient['jobs']['import']>>;
 type Mode = 'upsert' | 'replace';
@@ -95,6 +96,20 @@ export function JobTransferButtons() {
     preview.reset();
     apply.reset();
   };
+  const applyImport = () => {
+    const deleted = preview.data?.deleted ?? [];
+    if (mode !== 'replace' || deleted.length === 0) {
+      apply.mutate();
+
+      return;
+    }
+    void confirmAction({
+      title: `Delete ${String(deleted.length)} ${deleted.length === 1 ? 'job' : 'jobs'}?`,
+      message: `Replace mode deletes jobs that are not in the YAML: ${deleted.join(', ')}. This cannot be undone.`,
+      confirmLabel: 'Import and delete',
+      onConfirm: () => apply.mutate(),
+    });
+  };
   const loadFile = async (file: File) => {
     setYaml(await file.text());
     resetResults();
@@ -129,6 +144,8 @@ export function JobTransferButtons() {
           </Text>
           <Group position="apart">
             <SegmentedControl
+              aria-label="Import mode"
+              role="radiogroup"
               value={mode}
               onChange={(v) => {
                 if (isMode(v)) {
@@ -183,7 +200,7 @@ export function JobTransferButtons() {
               color={mode === 'replace' ? 'red' : 'blue'}
               disabled={!preview.data || preview.data.issues.length > 0}
               loading={apply.isPending}
-              onClick={() => apply.mutate()}
+              onClick={applyImport}
             >
               Apply
             </Button>

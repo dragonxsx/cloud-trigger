@@ -6,6 +6,8 @@ import {
   type ImportedOperation,
   OpenApiImportOptions,
   classifyOperations,
+  endpointProvider,
+  isRecord,
   planEndpointImport,
 } from '@cloud-trigger/core';
 import {
@@ -14,6 +16,7 @@ import {
   Button,
   Checkbox,
   Chip,
+  Code,
   FileButton,
   Group,
   List,
@@ -74,6 +77,16 @@ const isSourceKind = (v: string): v is SourceKind => SourceKind.safeParse(v).suc
 const isNaming = (v: string): v is Naming => Naming.safeParse(v).success;
 const isMode = (v: string | null): v is ImportMode => ImportMode.safeParse(v).success;
 
+const plural = (count: number, noun: string): string =>
+  `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
+
+const finalPath = (operation: ImportedOperation): string => {
+  const { config } = endpointProvider(operation.endpoint).ref;
+  const url = isRecord(config) ? config['url'] : undefined;
+
+  return typeof url === 'string' && url !== '' ? url : operation.path;
+};
+
 const pathOf = (url: string): string | undefined => {
   try {
     return new URL(url).pathname.replace(/\/+$/, '');
@@ -132,7 +145,7 @@ function Warnings({ warnings }: { warnings: AnalysisDto['warnings'] }) {
     <Alert
       color="yellow"
       icon={<IconAlertTriangle size={18} />}
-      title={`${warnings.length} warnings`}
+      title={plural(warnings.length, 'warning')}
     >
       <Spoiler maxHeight={60} showLabel="Show all" hideLabel="Hide">
         <List size="sm" spacing={2}>
@@ -205,16 +218,18 @@ function SourceStep(p: {
               </Text>
             </Group>
           )}
-          <Textarea
-            aria-label="OpenAPI document"
-            placeholder={'openapi: 3.1.0\ninfo:\n  title: …'}
-            autosize
-            minRows={p.kind === 'paste' ? 12 : 6}
-            maxRows={18}
-            value={p.text}
-            onChange={(e) => p.onText(e.currentTarget.value)}
-            styles={{ input: MONO }}
-          />
+          {p.kind === 'paste' && (
+            <Textarea
+              aria-label="OpenAPI document"
+              placeholder={'openapi: 3.1.0\ninfo:\n  title: …'}
+              autosize
+              minRows={12}
+              maxRows={18}
+              value={p.text}
+              onChange={(e) => p.onText(e.currentTarget.value)}
+              styles={{ input: MONO }}
+            />
+          )}
         </>
       )}
     </Stack>
@@ -245,7 +260,7 @@ function OperationRow(p: {
       </td>
       <td>
         <Text className="ct-mono" size="xs">
-          {operation.path}
+          {finalPath(operation)}
         </Text>
         {operation.summary && (
           <Text size="xs" color="dimmed" lineClamp={1}>
@@ -548,7 +563,7 @@ export function OpenApiImportModal({ opened, onClose, endpoints, baseUrl, onAppl
                   </Text>
                 </Text>
                 <Text size="sm" color="dimmed">
-                  {analysis.operations.length} operations ·{' '}
+                  {plural(analysis.operations.length, 'operation')} ·{' '}
                   {classified.filter((c) => c.status === 'new').length} new ·{' '}
                   {classified.filter((c) => c.status === 'changed').length} changed ·{' '}
                   {classified.filter((c) => c.status === 'unchanged').length} unchanged
@@ -579,7 +594,7 @@ export function OpenApiImportModal({ opened, onClose, endpoints, baseUrl, onAppl
               />
               <TextInput
                 label="Path prefix"
-                description="Added before every path, such as /v1."
+                description="Added before every path, such as /v1. The Path column shows the result."
                 placeholder="none"
                 value={pathPrefix}
                 onChange={(e) => setPathPrefix(e.currentTarget.value)}
@@ -641,6 +656,45 @@ export function OpenApiImportModal({ opened, onClose, endpoints, baseUrl, onAppl
         {step === 2 && analysis && (
           <Alert color="gray" title="Ready to apply">
             <Stack spacing={4}>
+              {pathPrefix.trim() !== '' && (
+                <Text size="sm">
+                  Every path starts with <Code>{pathPrefix.trim()}</Code>, the path prefix you set.
+                </Text>
+              )}
+              {chosen.length > 0 && (
+                <div style={{ maxHeight: '32vh', overflow: 'auto' }}>
+                  <Table verticalSpacing={4} fontSize="xs" className="ct-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 88 }}>Method</th>
+                        <th>Saved path</th>
+                        <th>Endpoint key</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {classified
+                        .filter((c) => selected.has(c.operation.operationKey))
+                        .map(({ operation, match }) => (
+                          <tr key={operation.operationKey}>
+                            <td>
+                              <MethodBadge method={operation.method} />
+                            </td>
+                            <td>
+                              <Text className="ct-mono" size="xs">
+                                {finalPath(operation)}
+                              </Text>
+                            </td>
+                            <td>
+                              <Text className="ct-mono" size="xs">
+                                {match ?? operation.endpoint.key}
+                              </Text>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </Table>
+                </div>
+              )}
               <Names label="Add" names={plan.added} />
               <Names label="Update" names={plan.updated} />
               <Names label="Unchanged" names={plan.unchanged} />

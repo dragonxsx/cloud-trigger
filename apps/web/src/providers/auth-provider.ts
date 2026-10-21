@@ -2,6 +2,7 @@ import type { Scope } from '@cloud-trigger/api-contract';
 import type { AccessControlProvider, AuthProvider } from '@refinedev/core';
 import { z } from 'zod';
 
+import { LEVEL_LABELS } from '../lib/access';
 import { auth, client } from '../lib/api';
 import { errorMessage, isUnauthorized } from '../lib/errors';
 import { signIn, signOut } from '../lib/oidc';
@@ -100,6 +101,7 @@ export const authProvider: AuthProvider = {
       id: identity.subject,
       via: identity.via,
       name: identity.via === 'anonymous' ? 'Guest' : identity.name,
+      scopes: identity.scopes,
     };
   },
 };
@@ -136,7 +138,10 @@ export const accessControlProvider: AccessControlProvider = {
 
       return scopes.includes(needed)
         ? { can: true }
-        : { can: false, reason: `Requires the ${needed} scope` };
+        : {
+            can: false,
+            reason: `This needs ${LEVEL_LABELS[needed]} access, which your account does not have`,
+          };
     } catch {
       return { can: false };
     }

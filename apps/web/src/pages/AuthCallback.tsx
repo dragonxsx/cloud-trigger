@@ -1,9 +1,54 @@
-import { Alert, Anchor, Center, Loader, Stack } from '@mantine/core';
+import {
+  Alert,
+  Anchor,
+  Button,
+  Code,
+  Collapse,
+  Group,
+  Loader,
+  Stack,
+  Text,
+  Title,
+} from '@mantine/core';
+import { IconAlertCircle } from '@tabler/icons-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 
+import { AuthShell, BrandMark } from '../components/Brand';
 import { errorMessage } from '../lib/errors';
 import { completeSignIn } from '../lib/oidc';
+
+function SignInFailed({ detail }: { detail: string }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Stack spacing="sm">
+      <Alert color="red" icon={<IconAlertCircle size={16} />} title="Sign in failed" role="alert">
+        We couldn&apos;t finish signing you in with single sign-on. Try again. If it keeps
+        happening, ask your administrator to check the SSO settings.
+      </Alert>
+      <Anchor
+        component="button"
+        type="button"
+        size="sm"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {open ? 'Hide technical details' : 'Show technical details'}
+      </Anchor>
+      <Collapse in={open}>
+        <Code block style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {detail}
+        </Code>
+      </Collapse>
+      <Group position="right">
+        <Button component={Link} to="/login">
+          Back to sign in
+        </Button>
+      </Group>
+    </Stack>
+  );
+}
 
 export function AuthCallback() {
   const navigate = useNavigate();
@@ -21,19 +66,21 @@ export function AuthCallback() {
   }, [navigate]);
 
   return (
-    <Center h="100vh">
-      {failure ? (
-        <Stack w={360}>
-          <Alert color="red" title="Sign in failed">
-            {failure}
-          </Alert>
-          <Anchor component={Link} to="/login">
-            Back to sign in
-          </Anchor>
-        </Stack>
+    <AuthShell>
+      <BrandMark size={32} />
+      <Title order={1} size="h3">
+        {failure === null ? 'Finishing sign-in…' : "Couldn't sign you in"}
+      </Title>
+      {failure === null ? (
+        <Group spacing="sm" aria-live="polite">
+          <Loader size="sm" />
+          <Text size="sm" color="dimmed">
+            Checking your identity provider&apos;s response.
+          </Text>
+        </Group>
       ) : (
-        <Loader />
+        <SignInFailed detail={failure} />
       )}
-    </Center>
+    </AuthShell>
   );
 }

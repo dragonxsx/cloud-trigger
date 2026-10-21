@@ -1,13 +1,18 @@
-import { endpointProvider } from '@cloud-trigger/core';
-import { Anchor, Badge, Code, SimpleGrid, Stack, Table, Text } from '@mantine/core';
+import { endpointProvider, isRecord, mergePatch } from '@cloud-trigger/core';
+import { Anchor, Badge, Code, Divider, SimpleGrid, Stack, Table, Text, Title } from '@mantine/core';
 import { useShow } from '@refinedev/core';
 import { Show } from '@refinedev/mantine';
 import { useQuery } from '@tanstack/react-query';
+import { Fragment } from 'react';
 import { Link } from 'react-router';
 
+import { backIcon, pageBreadcrumb } from '../../components/page-chrome';
+import { RecordLoadError } from '../../components/PageState';
+import { usePageTitle } from '../../components/usePageTitle';
 import { type ConnectionDto, type ConnectionUsagesDto, client } from '../../lib/api';
+import { environmentLabel, useEnvironments } from '../../lib/environments';
 import { ConnectionTestButton } from './form';
-import { connectionAddress, endpointSummary } from './summary';
+import { connectionAddress, countValues, endpointSummary, fieldCount } from './summary';
 
 const KIND_LABEL = { target: 'Target', trigger: 'Event source', notifier: 'Notifier' } as const;
 
@@ -36,17 +41,106 @@ const usageRows = (usages: ConnectionUsagesDto | undefined): UsageRow[] => [
   })),
 ];
 
+type OverlayDto = ConnectionDto['overlays'][number];
+
+const overlayFields = (overlay: OverlayDto): number =>
+  countValues(overlay.config) +
+  overlay.endpoints.reduce((total, patch) => total + countValues(patch.config), 0);
+
+function EnvironmentsPanel({ connection }: { connection: ConnectionDto }) {
+  const environments = useEnvironments();
+  const labelOf = (key: string) => {
+    const found = environments.data?.find((environment) => environment.key === key);
+
+    return found ? environmentLabel(found) : key;
+  };
+
+  return (
+    <Stack className="ct-panel" p="lg" spacing="sm">
+      <div>
+        <Text weight={600}>Environments</Text>
+        <Text size="sm" color="dimmed">
+          Overlays change the address, credentials or endpoints in one environment. Other
+          environments use the base config.
+        </Text>
+      </div>
+      {connection.overlays.length === 0 ? (
+        <Text size="sm" color="dimmed">
+          No overlays. Every environment uses the base config.
+        </Text>
+      ) : (
+        connection.overlays.map((overlay, index) => {
+          const label = labelOf(overlay.environment);
+          const count = overlayFields(overlay);
+          const config = isRecord(overlay.config)
+            ? mergePatch(connection.config, overlay.config)
+            : connection.config;
+
+          return (
+            <Fragment key={overlay.environment}>
+              {index > 0 && <Divider />}
+              <Stack spacing={6}>
+                <div>
+                  <Text size="sm" weight={600}>
+                    {label}
+                    <Text span color="dimmed" weight={400} ml="xs">
+                      {count === 0 ? 'no overrides' : `${fieldCount(count)} overridden`}
+                      {overlay.endpoints.length > 0 &&
+                        ` · ${String(overlay.endpoints.length)} endpoint${overlay.endpoints.length === 1 ? '' : 's'} changed`}
+                    </Text>
+                  </Text>
+                  <Code>{connectionAddress({ config })}</Code>
+                </div>
+                <ConnectionTestButton
+                  type={connection.type}
+                  config={connection.config}
+                  savedKey={connection.key}
+                  overlay={{ environment: overlay.environment, config: overlay.config ?? {} }}
+                  label={`Test ${label}`}
+                />
+              </Stack>
+            </Fragment>
+          );
+        })
+      )}
+    </Stack>
+  );
+}
+
 export function ConnectionShow() {
-  const { query } = useShow<ConnectionDto>({ resource: 'connections' });
+  const { query } = useShow<ConnectionDto>({ resource: 'connections', errorNotification: false });
   const connection = query.data?.data;
+  const title = connection ? connection.name || connection.key : undefined;
+  usePageTitle(title, 'Connections');
   const usages = useQuery({
     queryKey: ['connections', 'usages', connection?.key],
     queryFn: () => client.connections.usages({ key: connection?.key ?? '' }),
     enabled: connection !== undefined,
   });
 
+  if (query.isError) {
+    return (
+      <RecordLoadError
+        error={query.error}
+        onRetry={() => void query.refetch()}
+        resource="Connection"
+        listPath="/connections"
+        listLabel="Connections"
+      />
+    );
+  }
+
   return (
-    <Show isLoading={query.isLoading} title={connection?.name || connection?.key || 'Connection'}>
+    <Show
+      isLoading={query.isLoading}
+      goBack={backIcon}
+      breadcrumb={pageBreadcrumb}
+      title={
+        <Title order={1} size="h3">
+          {title ?? 'Connection'}
+        </Title>
+      }
+    >
       {connection && (
         <Stack spacing="lg">
           {connection.description && <Text>{connection.description}</Text>}
@@ -81,13 +175,22 @@ export function ConnectionShow() {
           </SimpleGrid>
 
           <Stack className="ct-panel" p="lg" spacing="sm">
-            <Text weight={600}>Check</Text>
+            <div>
+              <Text weight={600}>Test connection</Text>
+              {connection.overlays.length > 0 && (
+                <Text size="sm" color="dimmed">
+                  Checks the base config. Test each environment under Environments.
+                </Text>
+              )}
+            </div>
             <ConnectionTestButton
               type={connection.type}
               config={connection.config}
               savedKey={connection.key}
             />
           </Stack>
+
+          <EnvironmentsPanel connection={connection} />
 
           <Stack className="ct-panel" p="lg" spacing="sm">
             <Text weight={600}>Endpoints</Text>

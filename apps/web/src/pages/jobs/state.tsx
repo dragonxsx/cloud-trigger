@@ -1,7 +1,7 @@
 import { Badge, Group } from '@mantine/core';
 
 import type { JobDto } from '../../lib/api';
-import { LateBadge } from '../../lib/status';
+import { HintBadge, LateBadge } from '../../lib/status';
 
 type JobStateFields = Pick<
   JobDto,
@@ -17,6 +17,12 @@ type JobStateFields = Pick<
 
 const EVENT_TRIGGERS = new Set(['webhook']);
 
+export const DISABLED_HINT =
+  'Turned off in the job settings. Enable it to schedule runs again; Resume does not apply.';
+
+export const isHalted = (job: Pick<JobDto, 'enabled' | 'pausedReason'>): boolean =>
+  !job.enabled || job.pausedReason !== null;
+
 export function JobState({ job }: { job: JobStateFields }) {
   return (
     <Group spacing={4} noWrap>
@@ -28,39 +34,25 @@ export function JobState({ job }: { job: JobStateFields }) {
 
 function ScheduleState({ job }: { job: JobStateFields }) {
   if (!job.enabled) {
-    return (
-      <Badge variant="outline" color="gray" tt="none">
-        Disabled
-      </Badge>
-    );
+    return <HintBadge label="Disabled" hint={DISABLED_HINT} variant="outline" color="gray" />;
   }
   if (job.pausedReason !== null) {
     return (
-      <Badge variant="light" color="orange" tt="none" title={job.pausedReason}>
-        Paused
-      </Badge>
+      <HintBadge
+        label="Paused"
+        hint={`${job.pausedReason}. Resume the job to schedule runs again.`}
+        color="orange"
+      />
     );
   }
   if (job.schedule.nextFireAt === null && job.upstreamJobIds.length > 0) {
-    return (
-      <Badge variant="light" color="signal" tt="none" title="Runs after its upstream jobs">
-        Chained
-      </Badge>
-    );
+    return <HintBadge label="Chained" hint="Runs after its upstream jobs" color="signal" />;
   }
   if (job.workflowId !== null) {
-    return (
-      <Badge variant="light" color="signal" tt="none" title="Runs as a step of its workflow">
-        In workflow
-      </Badge>
-    );
+    return <HintBadge label="In workflow" hint="Runs as a step of its workflow" color="signal" />;
   }
   if (job.eventSource !== null || EVENT_TRIGGERS.has(job.trigger.type)) {
-    return (
-      <Badge variant="light" color="signal" tt="none" title="Runs when an event arrives">
-        On events
-      </Badge>
-    );
+    return <HintBadge label="On events" hint="Runs when an event arrives" color="signal" />;
   }
   if (job.trigger.type === 'manual') {
     return (

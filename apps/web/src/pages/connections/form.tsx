@@ -1,8 +1,11 @@
 import {
+  ConnectionKey,
+  EndpointKey,
   type EndpointKind,
   assertNever,
   endpointProvider,
   isRecord,
+  mergePatch,
   slugKey,
 } from '@cloud-trigger/core';
 import {
@@ -22,21 +25,25 @@ import type { UseFormReturnType } from '@mantine/form';
 import { showNotification } from '@mantine/notifications';
 import {
   IconAlertCircle,
+  IconAlertTriangle,
   IconCircleCheck,
   IconFileImport,
   IconPlus,
   IconTrash,
 } from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useRef, useState } from 'react';
 
+import { confirmAction } from '../../components/confirm';
 import { forConnection } from '../../components/ConnectedProviderPicker';
 import { OpenApiImportModal, type OpenApiImportResult } from '../../components/OpenApiImportModal';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
+import { useHasScope } from '../../lib/access';
 import { type ConnectionSpecDto, client } from '../../lib/api';
 import type { ConfigIssueDto } from '../../lib/errors';
 import { errorMessage } from '../../lib/errors';
 import { type OverlayEndpoint, type OverlayValues, OverlaysSection } from './overlays';
+import { type TestTone, connectionAddress, describeTest, hasValue } from './summary';
 
 interface ProviderRefValues {
   type: string;
@@ -125,6 +132,34 @@ export const toConnectionSpec = ({
   ...(version !== undefined && { expectedVersion: version }),
 });
 
+const keyError = (schema: typeof ConnectionKey, value: string): string | null => {
+  const trimmed = value.trim();
+  if (trimmed === '') {
+    return 'Required';
+  }
+  const parsed = schema.safeParse(trimmed);
+
+  return parsed.success ? null : (parsed.error.issues[0]?.message ?? 'Not a valid key');
+};
+
+export const validateConnection = (values: ConnectionFormValues): Record<string, string | null> => {
+  const errors: Record<string, string | null> = { key: keyError(ConnectionKey, values.key) };
+  values.endpoints.forEach((endpoint, index) => {
+    const duplicate = values.endpoints.some(
+      (other, i) => i < index && other.key !== '' && other.key === endpoint.key,
+    );
+    errors[`endpoints.${String(index)}.key`] = duplicate
+      ? 'Another endpoint already uses this key'
+      : keyError(EndpointKey, endpoint.key);
+  });
+  values.overlays.forEach((overlay, index) => {
+    errors[`overlays.${String(index)}.environment`] =
+      overlay.environment === '' ? 'Pick an environment' : null;
+  });
+
+  return errors;
+};
+
 /** Overlay endpoint patches follow their endpoint's key; `to: null` drops them with it. */
 const movePatches = (overlays: OverlayValues[], from: string, to: string | null): OverlayValues[] =>
   overlays.map((overlay) => ({
@@ -134,12 +169,20 @@ const movePatches = (overlays: OverlayValues[], from: string, to: string | null)
     ),
   }));
 
+interface StashedType {
+  readonly config: unknown;
+  readonly endpoints: EndpointValues[];
+  readonly overlays: OverlayValues[];
+}
+
 const issuesAt = (errors: Record<string, ReactNode>, prefix: string): ConfigIssueDto[] =>
   Object.entries(errors).flatMap(([path, message]) =>
     path.startsWith(prefix) && typeof message === 'string'
       ? [{ path: path.slice(prefix.length).replace(/^\./, ''), message }]
       : [],
   );
+
+const FOCUS_AFTER_REMOVE_MS = 50;
 
 function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
@@ -157,30 +200,44 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
-function TestResult({ ok, message }: { ok: boolean; message: string }) {
+const TONE: Record<TestTone, { color: string; icon: ReactNode }> = {
+  ok: { color: 'teal', icon: <IconCircleCheck size={18} /> },
+  warn: { color: 'yellow', icon: <IconAlertTriangle size={18} /> },
+  fail: { color: 'red', icon: <IconAlertCircle size={18} /> },
+};
+
+function TestResult({ tone, message }: { tone: TestTone; message: string }) {
   return (
-    <Alert
-      color={ok ? 'teal' : 'red'}
-      icon={ok ? <IconCircleCheck size={18} /> : <IconAlertCircle size={18} />}
-    >
+    <Alert color={TONE[tone].color} icon={TONE[tone].icon}>
       {message}
     </Alert>
   );
 }
+
+const focusOnMount = (input: HTMLInputElement | null): void => {
+  input?.focus();
+};
+
+const plural = (count: number, noun: string): string =>
+  `${String(count)} ${noun}${count === 1 ? '' : 's'}`;
 
 export function ConnectionTestButton({
   type,
   config,
   savedKey,
   overlay,
+  label = 'Test connection',
 }: {
   type: string;
   config: unknown;
   savedKey?: string | undefined;
   overlay?: { environment: string; config: unknown } | undefined;
+  label?: string;
 }) {
+  const canWrite = useHasScope('write');
+  const snapshot = JSON.stringify({ type, config, overlay });
   const test = useMutation({
-    mutationFn: () =>
+    mutationFn: (_tested: string) =>
       client.connections.test({
         type,
         config,
@@ -188,16 +245,39 @@ export function ConnectionTestButton({
         ...(overlay !== undefined && { overlay }),
       }),
   });
+  const stale = test.variables !== undefined && test.variables !== snapshot;
+  const address = connectionAddress({
+    config:
+      overlay === undefined || !isRecord(overlay.config)
+        ? config
+        : mergePatch(config, overlay.config),
+  });
+  const view = test.data ? describeTest(test.data, address) : undefined;
 
   return (
     <Stack spacing="xs">
-      <Group>
-        <Button variant="default" loading={test.isPending} onClick={() => test.mutate()}>
-          Test connection
+      <Group spacing="sm">
+        <Button
+          variant="default"
+          loading={test.isPending}
+          disabled={canWrite === false}
+          onClick={() => test.mutate(snapshot)}
+        >
+          {label}
         </Button>
+        {canWrite === false && (
+          <Text size="sm" color="dimmed">
+            Testing needs the write scope.
+          </Text>
+        )}
+        {stale && !test.isPending && (
+          <Text size="sm" color="dimmed">
+            Settings changed since the last test. Test again to check them.
+          </Text>
+        )}
       </Group>
-      {test.data && <TestResult ok={test.data.ok} message={test.data.message} />}
-      {test.isError && <TestResult ok={false} message={errorMessage(test.error)} />}
+      {!stale && view && <TestResult tone={view.tone} message={view.message} />}
+      {!stale && test.isError && <TestResult tone="fail" message={errorMessage(test.error)} />}
     </Stack>
   );
 }
@@ -226,11 +306,35 @@ export function ConnectionFormFields({
   }, [providers.data, form.values.type]);
   const { values, errors } = form;
   const [importing, setImporting] = useState(false);
+  const [openEndpoints, setOpenEndpoints] = useState<string[]>([]);
+  const [focusEndpoint, setFocusEndpoint] = useState<string | null>(null);
+  const [endpointIds, setEndpointIds] = useState<readonly string[]>([]);
+  const createdIds = useRef(0);
+  const removeButtons = useRef(new Map<string, HTMLButtonElement>());
+  const addEndpointButton = useRef<HTMLButtonElement>(null);
+  const newEndpointId = () => {
+    createdIds.current += 1;
+
+    return `added-${String(createdIds.current)}`;
+  };
+  const ids = values.endpoints.map((_, i) => endpointIds[i] ?? `loaded-${String(i)}`);
+  const resetEndpointIds = (count: number) =>
+    setEndpointIds(Array.from({ length: count }, () => newEndpointId()));
+  const [stash, setStash] = useState<ReadonlyMap<string, StashedType>>(new Map());
+  const invalidEndpoints = Object.keys(errors).flatMap((path) => {
+    const index = /^endpoints\.(\d+)\./.exec(path)?.[1];
+    const id = index === undefined ? undefined : ids[Number(index)];
+
+    return id === undefined ? [] : [id];
+  });
+  const shownEndpoints = [...new Set([...openEndpoints, ...invalidEndpoints])];
   const connectionConfig = isRecord(values.config) ? values.config : {};
   const baseUrl =
     typeof connectionConfig['baseUrl'] === 'string' ? connectionConfig['baseUrl'] : undefined;
   const applyImport = (result: OpenApiImportResult) => {
     form.setFieldValue('endpoints', [...result.endpoints]);
+    resetEndpointIds(result.endpoints.length);
+    setOpenEndpoints([]);
     if (result.baseUrl !== undefined || result.auth !== undefined) {
       form.setFieldValue('config', {
         ...connectionConfig,
@@ -270,6 +374,7 @@ export function ConnectionFormFields({
             key: endpoint.key,
             name: endpoint.name,
             type: ref.type,
+            config: ref.config,
             provider: choices[kind].find((p) => p.type === ref.type),
           },
         ]
@@ -289,6 +394,96 @@ export function ConnectionFormFields({
           : endpoint,
       ),
     );
+
+  const switchType = (type: string) => {
+    const restored = stash.get(type);
+    setStash(
+      new Map(stash).set(values.type, {
+        config: values.config,
+        endpoints: values.endpoints,
+        overlays: values.overlays,
+      }),
+    );
+    form.setFieldValue('type', type);
+    form.setFieldValue('config', restored?.config ?? {});
+    setEndpoints(restored?.endpoints ?? []);
+    resetEndpointIds(restored?.endpoints.length ?? 0);
+    form.setFieldValue('overlays', restored?.overlays ?? []);
+    setOpenEndpoints([]);
+  };
+  const changeType = (type: string) => {
+    const lost = [
+      ...(values.endpoints.length > 0 ? [plural(values.endpoints.length, 'endpoint')] : []),
+      ...(values.overlays.length > 0 ? [plural(values.overlays.length, 'overlay')] : []),
+    ];
+    if (lost.length === 0) {
+      switchType(type);
+
+      return;
+    }
+    const name = connectionTypes.find((p) => p.type === type)?.displayName ?? type;
+    void confirmAction({
+      title: `Switch to ${name}?`,
+      message: `Endpoints and overlays belong to one connection type, so this clears ${lost.join(' and ')} from the form. Switch back before saving to get them back.`,
+      confirmLabel: 'Switch type',
+      onConfirm: () => switchType(type),
+    });
+  };
+  const removeEndpoint = (index: number) => {
+    moveEndpoint(index, null);
+    const removed = ids[index];
+    const neighbour = ids[index + 1] ?? ids[index - 1];
+    window.setTimeout(() => {
+      const target =
+        (neighbour === undefined ? undefined : removeButtons.current.get(neighbour)) ??
+        addEndpointButton.current;
+      target?.focus();
+    }, FOCUS_AFTER_REMOVE_MS);
+    setEndpoints(values.endpoints.filter((_, i) => i !== index));
+    setEndpointIds(ids.filter((_, i) => i !== index));
+    setOpenEndpoints((open) => open.filter((id) => id !== removed));
+    setFocusEndpoint((focused) => (focused === removed ? null : focused));
+  };
+  const confirmRemoveEndpoint = (index: number) => {
+    const endpoint = values.endpoints[index];
+    if (!endpoint) {
+      return;
+    }
+    const { ref } = endpointProvider(endpoint);
+    const blank =
+      endpoint.key === '' &&
+      endpoint.name === '' &&
+      endpoint.description === '' &&
+      !hasValue(ref.config);
+    if (blank) {
+      removeEndpoint(index);
+
+      return;
+    }
+    const shared = values.endpoints.some((other, i) => i !== index && other.key === endpoint.key);
+    const patched = shared
+      ? 0
+      : values.overlays.filter((overlay) =>
+          overlay.endpoints.some((patch) => patch.key === endpoint.key),
+        ).length;
+    const label = endpoint.name || endpoint.key || 'this endpoint';
+    void confirmAction({
+      title: `Remove ${label}?`,
+      message: `${patched > 0 ? `Its overrides in ${plural(patched, 'overlay')} go too. ` : ''}Jobs that pick this endpoint stop working once you save the connection.`,
+      confirmLabel: 'Remove endpoint',
+      onConfirm: () => removeEndpoint(index),
+    });
+  };
+  const addEndpoint = () => {
+    const id = newEndpointId();
+    setEndpoints([
+      ...values.endpoints,
+      blankEndpoint({ key: '', name: '', description: '' }, kinds[0] ?? 'target'),
+    ]);
+    setEndpointIds([...ids, id]);
+    setOpenEndpoints((open) => [...open, id]);
+    setFocusEndpoint(id);
+  };
 
   return (
     <Stack spacing="lg">
@@ -316,12 +511,7 @@ export function ConnectionFormFields({
           type={values.type}
           config={values.config}
           configIssues={issuesAt(errors, 'config')}
-          onTypeChange={(type) => {
-            form.setFieldValue('type', type);
-            form.setFieldValue('config', {});
-            setEndpoints([]);
-            form.setFieldValue('overlays', []);
-          }}
+          onTypeChange={changeType}
           onConfigChange={(config) => form.setFieldValue('config', config)}
         />
         <ConnectionTestButton
@@ -342,78 +532,108 @@ export function ConnectionFormFields({
             {values.type === 'http' && ' Have an OpenAPI document? Import its operations below.'}
           </Text>
         ) : (
-          <Accordion variant="separated" multiple>
+          <Accordion
+            variant="separated"
+            multiple
+            value={shownEndpoints}
+            onChange={(open) => {
+              setOpenEndpoints(open);
+              setFocusEndpoint(null);
+            }}
+          >
             {values.endpoints.map((endpoint, index) => {
               const { kind, ref } = endpointProvider(endpoint);
               const path = `endpoints.${index}.${KIND[kind].field}`;
               const base = `endpoints.${index}`;
+              const id = ids[index] ?? `loaded-${String(index)}`;
+              const open = shownEndpoints.includes(id);
+              const invalid = Object.keys(errors).some((key) => key.startsWith(`${base}.`));
+              const label = endpoint.name || endpoint.key || 'New endpoint';
 
               return (
-                <Accordion.Item key={index} value={String(index)}>
-                  <Accordion.Control>
-                    <Text size="sm" weight={600}>
-                      {endpoint.name || endpoint.key || 'New endpoint'}
-                      <Text span color="dimmed" weight={400} ml="xs">
-                        {ref.type}
-                        {KIND[kind].suffix}
+                <Accordion.Item key={id} value={id}>
+                  <Group spacing={4} noWrap pr="sm">
+                    <Accordion.Control style={{ flex: 1, minWidth: 0 }}>
+                      <Text size="sm" weight={600}>
+                        {label}
+                        <Text span color="dimmed" weight={400} ml="xs">
+                          {ref.type}
+                          {KIND[kind].suffix}
+                        </Text>
+                        {invalid && (
+                          <Text span color="red" weight={400} ml="xs">
+                            Needs attention
+                          </Text>
+                        )}
                       </Text>
-                    </Text>
-                  </Accordion.Control>
+                    </Accordion.Control>
+                    <ActionIcon
+                      color="red"
+                      variant="subtle"
+                      size="lg"
+                      aria-label={`Remove endpoint ${label}`}
+                      ref={(node) => {
+                        if (node === null) {
+                          removeButtons.current.delete(id);
+                        } else {
+                          removeButtons.current.set(id, node);
+                        }
+                      }}
+                      onClick={() => confirmRemoveEndpoint(index)}
+                    >
+                      <IconTrash size={16} />
+                    </ActionIcon>
+                  </Group>
                   <Accordion.Panel>
-                    <Stack spacing="sm">
-                      <Group align="flex-end" grow>
-                        <TextInput
-                          label="Key"
-                          required
-                          {...form.getInputProps(`${base}.key`)}
-                          onChange={(event) => {
-                            moveEndpoint(index, event.currentTarget.value);
-                            form.setFieldValue(`${base}.key`, event.currentTarget.value);
-                          }}
-                        />
-                        <TextInput label="Display name" {...form.getInputProps(`${base}.name`)} />
-                        <Group position="right" style={{ flexGrow: 0 }}>
-                          <ActionIcon
-                            color="red"
-                            variant="subtle"
-                            aria-label={`Remove ${endpoint.key}`}
-                            onClick={() => {
-                              moveEndpoint(index, null);
-                              setEndpoints(values.endpoints.filter((_, i) => i !== index));
+                    {open && (
+                      <Stack spacing="sm">
+                        <SimpleGrid cols={2} breakpoints={[{ maxWidth: 'sm', cols: 1 }]}>
+                          <TextInput
+                            label="Key"
+                            required
+                            autoComplete="off"
+                            {...(focusEndpoint === id && { ref: focusOnMount })}
+                            {...form.getInputProps(`${base}.key`)}
+                            onChange={(event) => {
+                              moveEndpoint(index, event.currentTarget.value);
+                              form.setFieldValue(`${base}.key`, event.currentTarget.value);
                             }}
-                          >
-                            <IconTrash size={16} />
-                          </ActionIcon>
-                        </Group>
-                      </Group>
-                      <Textarea
-                        label="Description"
-                        autosize
-                        minRows={1}
-                        maxRows={6}
-                        {...form.getInputProps(`${base}.description`)}
-                      />
-                      {kinds.length > 1 && (
-                        <SegmentedControl
-                          value={kind}
-                          onChange={(next) => {
-                            if (isEndpointKind(next)) {
-                              setKind(index, next);
-                            }
-                          }}
-                          data={kinds.map((k) => ({ value: k, label: KIND[k].label }))}
+                          />
+                          <TextInput
+                            label="Display name"
+                            autoComplete="off"
+                            {...form.getInputProps(`${base}.name`)}
+                          />
+                        </SimpleGrid>
+                        <Textarea
+                          label="Description"
+                          autosize
+                          minRows={1}
+                          maxRows={6}
+                          {...form.getInputProps(`${base}.description`)}
                         />
-                      )}
-                      <ProviderConfigForm
-                        label={KIND[kind].form}
-                        providers={choices[kind]}
-                        type={ref.type}
-                        config={ref.config}
-                        configIssues={issuesAt(errors, `${path}.config`)}
-                        onTypeChange={(type) => form.setFieldValue(path, { type, config: {} })}
-                        onConfigChange={(config) => form.setFieldValue(`${path}.config`, config)}
-                      />
-                    </Stack>
+                        {kinds.length > 1 && (
+                          <SegmentedControl
+                            value={kind}
+                            onChange={(next) => {
+                              if (isEndpointKind(next)) {
+                                setKind(index, next);
+                              }
+                            }}
+                            data={kinds.map((k) => ({ value: k, label: KIND[k].label }))}
+                          />
+                        )}
+                        <ProviderConfigForm
+                          label={KIND[kind].form}
+                          providers={choices[kind]}
+                          type={ref.type}
+                          config={ref.config}
+                          configIssues={issuesAt(errors, `${path}.config`)}
+                          onTypeChange={(type) => form.setFieldValue(path, { type, config: {} })}
+                          onConfigChange={(config) => form.setFieldValue(`${path}.config`, config)}
+                        />
+                      </Stack>
+                    )}
                   </Accordion.Panel>
                 </Accordion.Item>
               );
@@ -425,12 +645,8 @@ export function ConnectionFormFields({
             variant="light"
             leftIcon={<IconPlus size={16} />}
             disabled={kinds.length === 0}
-            onClick={() =>
-              setEndpoints([
-                ...values.endpoints,
-                blankEndpoint({ key: '', name: '', description: '' }, kinds[0] ?? 'target'),
-              ])
-            }
+            ref={addEndpointButton}
+            onClick={addEndpoint}
           >
             Add endpoint
           </Button>
@@ -465,6 +681,7 @@ export function ConnectionFormFields({
         <OverlaysSection
           overlays={values.overlays}
           connectionProvider={connectionTypes.find((p) => p.type === values.type)}
+          baseConfig={values.config}
           endpoints={overlayEndpoints}
           issuesAt={(prefix) => issuesAt(errors, prefix)}
           onChange={(overlays) => form.setFieldValue('overlays', overlays)}

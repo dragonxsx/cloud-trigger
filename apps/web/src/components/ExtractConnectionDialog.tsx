@@ -13,8 +13,8 @@ import {
 } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
 import { useInvalidate } from '@refinedev/core';
-import { IconPlugConnected } from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { sentenceCase } from 'change-case';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 
@@ -72,19 +72,37 @@ export const extractableSlots = (
 const optional = (value: string): string | undefined =>
   value.trim() === '' ? undefined : value.trim();
 
-export function ExtractConnectionDialog({ job }: { job: JobDto }) {
-  const [opened, setOpened] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [key, setKey] = useState('');
-  const [name, setName] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const invalidate = useInvalidate();
+export function useExtractableSlots(job: JobDto): readonly SlotOption[] {
   const providers = useQuery({
     queryKey: ['providers'],
     queryFn: () => client.providers.list({}),
     staleTime: 300_000,
   });
-  const slots = useMemo(() => extractableSlots(job, providers.data ?? []), [job, providers.data]);
+
+  return useMemo(() => extractableSlots(job, providers.data ?? []), [job, providers.data]);
+}
+
+const issueLabel = (path: string): string => {
+  const last = path.split('.').findLast((segment) => !/^\d+$/.test(segment)) ?? path;
+
+  return sentenceCase(last);
+};
+
+export function ExtractConnectionDialog({
+  job,
+  opened,
+  onClose,
+}: {
+  job: JobDto;
+  opened: boolean;
+  onClose: () => void;
+}) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [key, setKey] = useState('');
+  const [name, setName] = useState('');
+  const [baseUrl, setBaseUrl] = useState('');
+  const invalidate = useInvalidate();
+  const slots = useExtractableSlots(job);
   const current = slots.find((s) => s.value === selected) ?? slots[0];
   const request = (dryRun: boolean, expectedVersion: number) => {
     if (!current) {
@@ -115,7 +133,7 @@ export function ExtractConnectionDialog({ job }: { job: JobDto }) {
         color: 'green',
         message: `Created connection "${result.connection.key}" and moved the job onto it`,
       });
-      setOpened(false);
+      onClose();
       preview.reset();
       await Promise.all([
         invalidate({ resource: 'jobs', invalidates: ['detail', 'list'], id: job.id }),
@@ -137,126 +155,110 @@ export function ExtractConnectionDialog({ job }: { job: JobDto }) {
   }
 
   return (
-    <>
-      <Button
-        variant="default"
-        leftIcon={<IconPlugConnected size={16} />}
-        onClick={() => setOpened(true)}
-      >
-        Extract connection
-      </Button>
-      <Modal
-        opened={opened}
-        onClose={() => setOpened(false)}
-        title="Extract a connection"
-        size="lg"
-      >
-        <Stack spacing="md">
-          <Text size="sm" color="dimmed">
-            Moves the address and credentials of an inline config onto a new connection with one
-            endpoint, then points the job at it. The job keeps sending the same requests.
-          </Text>
-          <Select
-            label="Move"
-            data={slots.map((s) => ({ value: s.value, label: s.label }))}
-            value={current?.value ?? null}
-            onChange={(value) => {
-              setSelected(value);
-              preview.reset();
-            }}
+    <Modal opened={opened} onClose={onClose} title="Extract a connection" size="lg">
+      <Stack spacing="md">
+        <Text size="sm" color="dimmed">
+          Moves the address and credentials of an inline config onto a new connection with one
+          endpoint, then points the job at it. The job keeps sending the same requests.
+        </Text>
+        <Select
+          label="Move"
+          data={slots.map((s) => ({ value: s.value, label: s.label }))}
+          value={current?.value ?? null}
+          onChange={(value) => {
+            setSelected(value);
+            preview.reset();
+          }}
+        />
+        <Group grow>
+          <TextInput
+            label="Connection key"
+            placeholder="From the host"
+            value={key}
+            error={issueAt('key')}
+            onChange={(e) => changed(setKey)(e.currentTarget.value)}
           />
-          <Group grow>
-            <TextInput
-              label="Connection key"
-              placeholder="From the host"
-              value={key}
-              error={issueAt('key')}
-              onChange={(e) => changed(setKey)(e.currentTarget.value)}
-            />
-            <TextInput
-              label="Name"
-              placeholder="From the host"
-              value={name}
-              onChange={(e) => changed(setName)(e.currentTarget.value)}
-            />
-          </Group>
-          {current?.connectionType === 'http' && (
-            <TextInput
-              label="Base URL"
-              description="Part of the URL to keep on the connection. Defaults to the scheme and host."
-              placeholder="https://api.example.com/v1"
-              value={baseUrl}
-              error={issueAt('baseUrl')}
-              onChange={(e) => changed(setBaseUrl)(e.currentTarget.value)}
-            />
-          )}
-          {preview.isError && (
-            <Alert color="red">
-              {issues.length > 0 ? (
+          <TextInput
+            label="Name"
+            placeholder="From the host"
+            value={name}
+            onChange={(e) => changed(setName)(e.currentTarget.value)}
+          />
+        </Group>
+        {current?.connectionType === 'http' && (
+          <TextInput
+            label="Base URL"
+            description="Part of the URL to keep on the connection. Defaults to the scheme and host."
+            placeholder="https://api.example.com/v1"
+            value={baseUrl}
+            error={issueAt('baseUrl')}
+            onChange={(e) => changed(setBaseUrl)(e.currentTarget.value)}
+          />
+        )}
+        {preview.isError && (
+          <Alert color="red">
+            {issues.length > 0 ? (
+              <List size="sm">
+                {issues.map((issue) => (
+                  <List.Item key={`${issue.path}:${issue.message}`}>
+                    {issue.path ? `${issueLabel(issue.path)}: ` : ''}
+                    {issue.message}
+                  </List.Item>
+                ))}
+              </List>
+            ) : (
+              errorMessage(preview.error)
+            )}
+          </Alert>
+        )}
+        {preview.data && (
+          <Stack spacing="xs">
+            <Text size="sm">
+              Connection <Code>{preview.data.connection.key}</Code> with endpoint{' '}
+              <Code>{preview.data.endpoint}</Code>
+            </Text>
+            <Code block>{JSON.stringify(preview.data.connection.config, null, 2)}</Code>
+            {preview.data.warnings.length > 0 && (
+              <Alert color="yellow" title="Check before saving">
                 <List size="sm">
-                  {issues.map((issue) => (
-                    <List.Item key={`${issue.path}:${issue.message}`}>
-                      {issue.path ? `${issue.path}: ` : ''}
-                      {issue.message}
+                  {preview.data.warnings.map((w) => (
+                    <List.Item key={`${w.path}:${w.message}`}>{w.message}</List.Item>
+                  ))}
+                </List>
+              </Alert>
+            )}
+            {preview.data.similar.length > 0 && (
+              <Alert color="blue" title="Similar connections exist">
+                <List size="sm">
+                  {preview.data.similar.map((s) => (
+                    <List.Item key={s.key}>
+                      <Anchor component={Link} to={`/connections/show/${s.key}`} size="sm">
+                        {s.name || s.key}
+                      </Anchor>{' '}
+                      {s.match === 'identical' ? 'has the same settings' : 'uses the same address'}
                     </List.Item>
                   ))}
                 </List>
-              ) : (
-                errorMessage(preview.error)
-              )}
-            </Alert>
-          )}
-          {preview.data && (
-            <Stack spacing="xs">
-              <Text size="sm">
-                Connection <Code>{preview.data.connection.key}</Code> with endpoint{' '}
-                <Code>{preview.data.endpoint}</Code>
-              </Text>
-              <Code block>{JSON.stringify(preview.data.connection.config, null, 2)}</Code>
-              {preview.data.warnings.length > 0 && (
-                <Alert color="yellow" title="Check before saving">
-                  <List size="sm">
-                    {preview.data.warnings.map((w) => (
-                      <List.Item key={`${w.path}:${w.message}`}>{w.message}</List.Item>
-                    ))}
-                  </List>
-                </Alert>
-              )}
-              {preview.data.similar.length > 0 && (
-                <Alert color="blue" title="Similar connections exist">
-                  <List size="sm">
-                    {preview.data.similar.map((s) => (
-                      <List.Item key={s.key}>
-                        <Anchor component={Link} to={`/connections/show/${s.key}`} size="sm">
-                          {s.name || s.key}
-                        </Anchor>{' '}
-                        {s.match === 'identical'
-                          ? 'has the same settings'
-                          : 'uses the same address'}
-                      </List.Item>
-                    ))}
-                  </List>
-                </Alert>
-              )}
-            </Stack>
-          )}
-          {stale && (
-            <Alert color="yellow">The job changed since the preview. Preview it again.</Alert>
-          )}
-          <Group position="right">
-            <Button variant="default" loading={preview.isPending} onClick={() => preview.mutate()}>
-              Preview
-            </Button>
-            <Button
-              disabled={!preview.data || stale}
-              loading={confirm.isPending}
-              onClick={() => confirm.mutate()}
-            >
-              Create connection
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
-    </>
+              </Alert>
+            )}
+          </Stack>
+        )}
+        {stale && (
+          <Alert color="yellow">The job changed since the preview. Preview it again.</Alert>
+        )}
+        <Group position="right">
+          <Button variant="default" loading={preview.isPending} onClick={() => preview.mutate()}>
+            Preview
+          </Button>
+          <Button
+            disabled={!preview.data || stale}
+            loading={confirm.isPending}
+            onClick={() => confirm.mutate()}
+          >
+            Create connection
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
   );
 }

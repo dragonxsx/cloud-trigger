@@ -1,6 +1,8 @@
 import {
+  Alert,
+  Anchor,
   Button,
-  Center,
+  Collapse,
   Divider,
   PasswordInput,
   Stack,
@@ -8,13 +10,20 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { useGetIdentity, useLogin } from '@refinedev/core';
-import { IconKey } from '@tabler/icons-react';
+import {
+  useGetIdentity,
+  useGo,
+  useInvalidateAuthStore,
+  useLogin,
+  useParsed,
+} from '@refinedev/core';
+import { IconAlertCircle, IconKey } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Navigate } from 'react-router';
 
-import { BrandMark } from '../components/Brand';
+import { AuthShell, BrandMark, useFocusOnMount } from '../components/Brand';
+import { errorMessage } from '../lib/errors';
 import { authConfig } from '../lib/oidc';
 
 type LoginVariables =
@@ -22,22 +31,38 @@ type LoginVariables =
   | { apiKey: string }
   | { method: 'oidc' };
 
+type Method = 'password' | 'key' | 'oidc';
+
+const methodOf = (variables: LoginVariables): Method =>
+  'username' in variables ? 'password' : 'apiKey' in variables ? 'key' : 'oidc';
+
 function PasswordForm({
   login,
   pending,
-  error,
+  failed,
+  onEdit,
 }: {
   login: (variables: LoginVariables) => void;
   pending: boolean;
-  error: string | undefined;
+  failed: boolean;
+  onEdit: () => void;
 }) {
+  const focusRef = useFocusOnMount<HTMLInputElement>();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const usernameError = submitted && username.trim() === '' ? 'Enter your username' : undefined;
+  const passwordError = submitted && password === '' ? 'Enter your password' : undefined;
 
   return (
     <form
+      noValidate
       onSubmit={(e) => {
         e.preventDefault();
+        setSubmitted(true);
+        if (username.trim() === '' || password === '') {
+          return;
+        }
         login({ username, password });
       }}
     >
@@ -45,19 +70,26 @@ function PasswordForm({
         <TextInput
           label="Username"
           autoComplete="username"
+          ref={focusRef}
           value={username}
-          onChange={(e) => setUsername(e.currentTarget.value)}
-          required
+          onChange={(e) => {
+            onEdit();
+            setUsername(e.currentTarget.value);
+          }}
+          error={usernameError ?? failed}
         />
         <PasswordInput
           label="Password"
           autoComplete="current-password"
+          toggleTabIndex={0}
           value={password}
-          onChange={(e) => setPassword(e.currentTarget.value)}
-          {...(error ? { error } : {})}
-          required
+          onChange={(e) => {
+            onEdit();
+            setPassword(e.currentTarget.value);
+          }}
+          error={passwordError ?? failed}
         />
-        <Button type="submit" loading={pending} disabled={username.trim() === '' || !password}>
+        <Button type="submit" loading={pending}>
           Sign in
         </Button>
       </Stack>
@@ -68,20 +100,30 @@ function PasswordForm({
 function ApiKeyForm({
   login,
   pending,
-  error,
+  failed,
+  onEdit,
   primary,
 }: {
   login: (variables: LoginVariables) => void;
   pending: boolean;
-  error: string | undefined;
+  failed: boolean;
+  onEdit: () => void;
   primary: boolean;
 }) {
+  const focusRef = useFocusOnMount<HTMLInputElement>();
   const [apiKey, setApiKey] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+  const keyError = submitted && apiKey.trim() === '' ? 'Paste your API key' : undefined;
 
   return (
     <form
+      noValidate
       onSubmit={(e) => {
         e.preventDefault();
+        setSubmitted(true);
+        if (apiKey.trim() === '') {
+          return;
+        }
         login({ apiKey });
       }}
     >
@@ -91,17 +133,17 @@ function ApiKeyForm({
         </Text>
         <PasswordInput
           label="API key"
+          autoComplete="off"
+          ref={primary ? focusRef : undefined}
+          toggleTabIndex={0}
           value={apiKey}
-          onChange={(e) => setApiKey(e.currentTarget.value)}
-          {...(error ? { error } : {})}
-          required
+          onChange={(e) => {
+            onEdit();
+            setApiKey(e.currentTarget.value);
+          }}
+          error={keyError ?? failed}
         />
-        <Button
-          type="submit"
-          variant={primary ? 'filled' : 'default'}
-          loading={pending}
-          disabled={apiKey.trim() === ''}
-        >
+        <Button type="submit" variant={primary ? 'filled' : 'default'} loading={pending}>
           Sign in with key
         </Button>
       </Stack>
@@ -110,8 +152,34 @@ function ApiKeyForm({
 }
 
 export function Login() {
-  const [method, setMethod] = useState<'password' | 'key' | 'oidc'>('password');
-  const { mutate, isPending, error } = useLogin<LoginVariables>();
+  const [method, setMethod] = useState<Method>('password');
+  const [failure, setFailure] = useState<{ method: Method; message: string } | null>(null);
+  const [showKey, setShowKey] = useState(false);
+  const go = useGo();
+  const parsed = useParsed();
+  const invalidateAuth = useInvalidateAuthStore();
+  const { mutate, isPending } = useLogin<LoginVariables>({
+    mutationOptions: {
+      onSuccess: async ({ success, redirectTo, error }, variables) => {
+        if (!success) {
+          setFailure({
+            method: methodOf(variables),
+            message: error?.message ?? 'Sign in failed. Check your details and try again.',
+          });
+
+          return;
+        }
+        await invalidateAuth();
+        const target: unknown = parsed.params?.['to'];
+        const to = typeof target === 'string' ? target : redirectTo;
+        if (to !== undefined) {
+          go({ to, type: 'replace' });
+        }
+      },
+      onError: (error, variables) =>
+        setFailure({ method: methodOf(variables), message: errorMessage(error) }),
+    },
+  });
   const config = useQuery({
     queryKey: ['auth', 'config'],
     queryFn: authConfig,
@@ -127,45 +195,79 @@ export function Login() {
   const sso = config.data?.oidc !== null && config.data?.oidc !== undefined;
   const local = config.data?.local !== false;
   const keys = config.data?.apiKeys !== false || (!local && !sso);
+  const keyOnly = !sso && !local;
   const login = (variables: LoginVariables) => {
-    setMethod('username' in variables ? 'password' : 'apiKey' in variables ? 'key' : 'oidc');
+    setFailure(null);
+    setMethod(methodOf(variables));
     mutate(variables);
   };
-  const errorFor = (m: typeof method) => (error && method === m ? error.message : undefined);
+  const clearFailure = () => setFailure(null);
+  const failedWith = (m: Method) => failure?.method === m;
 
   return (
-    <Center mih="100vh" p="md" style={{ background: 'var(--ct-paper)' }}>
-      <Stack w="100%" maw={380} className="ct-panel" p="xl" spacing="md">
-        <BrandMark size={32} />
-        <Title order={3}>Sign in to Cloud Trigger</Title>
-        {sso && (
-          <Button
-            leftIcon={<IconKey size={16} />}
-            loading={isPending && method === 'oidc'}
-            variant={local ? 'default' : 'filled'}
-            onClick={() => login({ method: 'oidc' })}
+    <AuthShell>
+      <BrandMark size={32} />
+      <Title order={1} size="h3">
+        Sign in to Cloud Trigger
+      </Title>
+      {failure && (
+        <Alert color="red" icon={<IconAlertCircle size={16} />} title="Sign in failed" role="alert">
+          {failure.message}
+        </Alert>
+      )}
+      {sso && (
+        <Button
+          leftIcon={<IconKey size={16} />}
+          loading={isPending && method === 'oidc'}
+          variant={local ? 'default' : 'filled'}
+          onClick={() => login({ method: 'oidc' })}
+        >
+          Sign in with SSO
+        </Button>
+      )}
+      {sso && local && <Divider label="or with your password" labelPosition="center" />}
+      {local && (
+        <PasswordForm
+          login={login}
+          pending={isPending && method === 'password'}
+          failed={failedWith('password')}
+          onEdit={clearFailure}
+        />
+      )}
+      {keys && keyOnly && (
+        <ApiKeyForm
+          login={login}
+          pending={isPending && method === 'key'}
+          failed={failedWith('key')}
+          onEdit={clearFailure}
+          primary
+        />
+      )}
+      {keys && !keyOnly && (
+        <>
+          <Anchor
+            component="button"
+            type="button"
+            size="sm"
+            align="center"
+            aria-expanded={showKey}
+            onClick={() => setShowKey((open) => !open)}
           >
-            Sign in with SSO
-          </Button>
-        )}
-        {sso && local && <Divider label="or with your password" labelPosition="center" />}
-        {local && (
-          <PasswordForm
-            login={login}
-            pending={isPending && method === 'password'}
-            error={errorFor('password')}
-          />
-        )}
-        {keys && (sso || local) && <Divider label="or use an API key" labelPosition="center" />}
-        {keys && (
-          <ApiKeyForm
-            login={login}
-            pending={isPending && method === 'key'}
-            error={errorFor('key')}
-            primary={!sso && !local}
-          />
-        )}
-      </Stack>
-    </Center>
+            {showKey ? 'Hide API key sign-in' : 'Use an API key instead'}
+          </Anchor>
+          <Collapse in={showKey}>
+            {showKey && (
+              <ApiKeyForm
+                login={login}
+                pending={isPending && method === 'key'}
+                failed={failedWith('key')}
+                onEdit={clearFailure}
+                primary={false}
+              />
+            )}
+          </Collapse>
+        </>
+      )}
+    </AuthShell>
   );
 }

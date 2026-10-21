@@ -41,19 +41,25 @@ export function NotificationRulesEditor({ rules, providers, errors, path, onChan
       )}
       {rules.map((rule, index) => {
         const notifierPath = `${path}.${index}.notifier`;
+        const eventsError =
+          fieldError(errors, `${path}.${index}.on`) ??
+          (rule.on.length === 0 ? 'Pick at least one event' : undefined);
 
         return (
           <Stack key={index} spacing="sm" className="ct-subpanel" p="md">
             <Group position="apart" align="flex-end" noWrap>
               <MultiSelect
                 label="When"
+                required
                 style={{ flex: 1 }}
                 data={[...EVENTS]}
                 value={rule.on}
+                error={eventsError}
                 onChange={(values) => replace(index, { ...rule, on: toEvents(values) })}
               />
               <ActionIcon
-                aria-label="Remove notification"
+                aria-label={`Remove notification ${index + 1}`}
+                mb={eventsError ? 22 : 0}
                 color="red"
                 variant="subtle"
                 size="lg"

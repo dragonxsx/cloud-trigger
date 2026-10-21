@@ -1,4 +1,4 @@
-import { Anchor, Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Anchor, Group, SimpleGrid, Stack, Text, Title } from '@mantine/core';
 import { IconArrowDownRight, IconArrowUpRight } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
@@ -43,15 +43,19 @@ export function JobDependencies({ job }: { job: JobDto }) {
     <SimpleGrid cols={2} breakpoints={[{ maxWidth: 'sm', cols: 1 }]} className="ct-panel" p="lg">
       <Stack spacing="xs">
         <Group spacing={6}>
-          <IconArrowUpRight size={16} />
-          <Text weight={600}>Runs after</Text>
+          <IconArrowUpRight size={16} aria-hidden />
+          <Title order={2} size="h5">
+            Runs after
+          </Title>
         </Group>
         <JobLinks jobs={upstream} empty="Nothing; this job runs on its own schedule." />
       </Stack>
       <Stack spacing="xs">
         <Group spacing={6}>
-          <IconArrowDownRight size={16} />
-          <Text weight={600}>Starts next</Text>
+          <IconArrowDownRight size={16} aria-hidden />
+          <Title order={2} size="h5">
+            Starts next
+          </Title>
         </Group>
         <JobLinks jobs={downstream} empty="No jobs run after this one." />
       </Stack>

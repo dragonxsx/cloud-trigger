@@ -18,21 +18,24 @@ import {
   WorkflowId,
   WorkflowRunId,
   WorkflowSpec,
-  toError,
 } from '@cloud-trigger/core';
-import { ORPCError } from '@orpc/client';
-import type { BaseRecord, CrudFilter, DataProvider, HttpError } from '@refinedev/core';
+import type { BaseRecord, CrudFilter, DataProvider } from '@refinedev/core';
 import { z } from 'zod';
 
 import { client } from '../lib/api';
-import { configIssues } from '../lib/errors';
+import { toHttpError } from '../lib/errors';
+
+interface ListParams {
+  limit: number;
+  offset: number;
+  filters: Record<string, unknown>;
+  signal: AbortSignal | undefined;
+}
+
+const withSignal = (signal: AbortSignal | undefined) => (signal ? { signal } : {});
 
 interface ResourceAdapter {
-  readonly list: (p: {
-    limit: number;
-    offset: number;
-    filters: Record<string, unknown>;
-  }) => Promise<{ data: readonly BaseRecord[]; total: number }>;
+  readonly list: (p: ListParams) => Promise<{ data: readonly BaseRecord[]; total: number }>;
   readonly getOne: (id: string) => Promise<BaseRecord>;
   readonly create?: (variables: unknown) => Promise<BaseRecord>;
   readonly update?: (id: string, variables: unknown) => Promise<BaseRecord>;
@@ -53,11 +56,18 @@ const RunFilters = RunListQuery.pick({
   reason: true,
   late: true,
   acknowledged: true,
+}).extend({
+  late: z
+    .union([z.boolean(), z.enum(['true', 'false']).transform((value) => value === 'true')])
+    .optional(),
 });
 
 const jobs: ResourceAdapter = {
-  list: async ({ limit, offset, filters }) => {
-    const page = await client.jobs.list({ limit, offset, ...JobFilters.parse(filters) });
+  list: async ({ limit, offset, filters, signal }) => {
+    const page = await client.jobs.list(
+      { limit, offset, ...JobFilters.parse(filters) },
+      withSignal(signal),
+    );
 
     return { data: page.items, total: page.total };
   },
@@ -78,8 +88,11 @@ const jobs: ResourceAdapter = {
 const GroupFilters = z.object({ search: z.string().optional() });
 
 const groups: ResourceAdapter = {
-  list: async ({ limit, offset, filters }) => {
-    const page = await client.groups.list({ limit, offset, ...GroupFilters.parse(filters) });
+  list: async ({ limit, offset, filters, signal }) => {
+    const page = await client.groups.list(
+      { limit, offset, ...GroupFilters.parse(filters) },
+      withSignal(signal),
+    );
 
     return { data: page.items, total: page.total };
   },
@@ -100,12 +113,11 @@ const groups: ResourceAdapter = {
 const ConnectionFilters = ConnectionListQuery.pick({ search: true, type: true });
 
 const connections: ResourceAdapter = {
-  list: async ({ limit, offset, filters }) => {
-    const page = await client.connections.list({
-      limit,
-      offset,
-      ...ConnectionFilters.parse(filters),
-    });
+  list: async ({ limit, offset, filters, signal }) => {
+    const page = await client.connections.list(
+      { limit, offset, ...ConnectionFilters.parse(filters) },
+      withSignal(signal),
+    );
 
     return { data: page.items.map((c) => ({ ...c, id: c.key })), total: page.total };
   },
@@ -134,17 +146,20 @@ const connections: ResourceAdapter = {
 };
 
 const runs: ResourceAdapter = {
-  list: async ({ limit, offset, filters }) => {
+  list: async ({ limit, offset, filters, signal }) => {
     const parsed = RunFilters.parse(filters);
-    const page = await client.runs.list({
-      limit,
-      offset,
-      ...(parsed.jobId !== undefined && { jobId: parsed.jobId }),
-      ...(parsed.status !== undefined && { status: parsed.status }),
-      ...(parsed.reason !== undefined && { reason: parsed.reason }),
-      ...(parsed.late !== undefined && { late: parsed.late }),
-      ...(parsed.acknowledged !== undefined && { acknowledged: parsed.acknowledged }),
-    });
+    const page = await client.runs.list(
+      {
+        limit,
+        offset,
+        ...(parsed.jobId !== undefined && { jobId: parsed.jobId }),
+        ...(parsed.status !== undefined && { status: parsed.status }),
+        ...(parsed.reason !== undefined && { reason: parsed.reason }),
+        ...(parsed.late !== undefined && { late: parsed.late }),
+        ...(parsed.acknowledged !== undefined && { acknowledged: parsed.acknowledged }),
+      },
+      withSignal(signal),
+    );
 
     return { data: page.items, total: page.total };
   },
@@ -154,8 +169,11 @@ const runs: ResourceAdapter = {
 const WorkflowFilters = z.object({ search: z.string().optional() });
 
 const workflows: ResourceAdapter = {
-  list: async ({ limit, offset, filters }) => {
-    const page = await client.workflows.list({ limit, offset, ...WorkflowFilters.parse(filters) });
+  list: async ({ limit, offset, filters, signal }) => {
+    const page = await client.workflows.list(
+      { limit, offset, ...WorkflowFilters.parse(filters) },
+      withSignal(signal),
+    );
 
     return { data: page.items, total: page.total };
   },
@@ -176,14 +194,17 @@ const workflows: ResourceAdapter = {
 const WorkflowRunFilters = WorkflowRunListQuery.pick({ workflowId: true, status: true });
 
 const workflowRuns: ResourceAdapter = {
-  list: async ({ limit, offset, filters }) => {
+  list: async ({ limit, offset, filters, signal }) => {
     const parsed = WorkflowRunFilters.parse(filters);
-    const page = await client.workflowRuns.list({
-      limit,
-      offset,
-      ...(parsed.workflowId !== undefined && { workflowId: parsed.workflowId }),
-      ...(parsed.status !== undefined && { status: parsed.status }),
-    });
+    const page = await client.workflowRuns.list(
+      {
+        limit,
+        offset,
+        ...(parsed.workflowId !== undefined && { workflowId: parsed.workflowId }),
+        ...(parsed.status !== undefined && { status: parsed.status }),
+      },
+      withSignal(signal),
+    );
 
     return { data: page.items, total: page.total };
   },
@@ -215,27 +236,21 @@ const filterObject = (filters: readonly CrudFilter[] | undefined): Record<string
     ),
   );
 
-function toHttpError(error: unknown): HttpError {
-  if (error instanceof ORPCError) {
-    const issues = configIssues(error);
+const QueryMeta = z.object({
+  queryContext: z.object({ signal: z.instanceof(AbortSignal).optional() }).optional(),
+});
 
-    return {
-      message: error.message,
-      statusCode: error.status,
-      ...(issues.length > 0 && {
-        errors: Object.fromEntries(issues.map((i) => [i.path, [i.message]])),
-      }),
-    };
-  }
+const signalOf = (meta: unknown): AbortSignal | undefined => {
+  const parsed = QueryMeta.safeParse(meta);
 
-  return { message: toError(error).message, statusCode: 500 };
-}
+  return parsed.success ? parsed.data.queryContext?.signal : undefined;
+};
 
-async function call<T>(fn: () => Promise<T>): Promise<T> {
+async function call<T>(fn: () => Promise<T>, notFoundOnInvalid = false): Promise<T> {
   try {
     return await fn();
   } catch (error: unknown) {
-    throw toHttpError(error);
+    throw toHttpError(error, { notFoundOnInvalid });
   }
 }
 
@@ -253,7 +268,7 @@ const asCallerType = <T>(value: unknown): T => value as T;
 export const dataProvider: DataProvider = {
   getApiUrl: () => `${window.location.origin}/api`,
 
-  getList: ({ resource, pagination, filters }) =>
+  getList: ({ resource, pagination, filters, meta }) =>
     call(async () => {
       const pageSize = pagination?.pageSize ?? 20;
       const currentPage = pagination?.currentPage ?? 1;
@@ -262,13 +277,14 @@ export const dataProvider: DataProvider = {
         limit: off ? 200 : pageSize,
         offset: off ? 0 : (currentPage - 1) * pageSize,
         filters: filterObject(filters),
+        signal: signalOf(meta),
       });
 
       return { data: asCallerType([...data]), total };
     }),
 
   getOne: ({ resource, id }) =>
-    call(async () => ({ data: asCallerType(await adapter(resource).getOne(String(id))) })),
+    call(async () => ({ data: asCallerType(await adapter(resource).getOne(String(id))) }), true),
 
   create: ({ resource, variables }) =>
     call(async () => ({

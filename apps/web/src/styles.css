@@ -5,7 +5,22 @@
   --ct-muted: #66738a;
   --ct-line: #dce2ea;
 }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ct-paper: #10151d;
+    --ct-surface: #161d27;
+    --ct-ink: #e6ebf2;
+    --ct-muted: #93a0b4;
+    --ct-line: #273141;
+  }
+  :root:not([data-theme="light"]) body {
+    background: #10151d;
+    color: #e6ebf2;
+  }
+}
 :root[data-theme="dark"] {
+  color-scheme: dark;
   --ct-paper: #10151d;
   --ct-surface: #161d27;
   --ct-ink: #e6ebf2;
@@ -35,4 +50,38 @@
   background: var(--ct-paper);
   border: 1px solid var(--ct-line);
   border-radius: 6px;
+}
+.ct-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 1000;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background: var(--ct-surface);
+  color: var(--ct-ink);
+  border: 1px solid var(--ct-line);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+.ct-skip-link:focus {
+  transform: none;
+}
+#content:focus {
+  outline: none;
+}
+.ct-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.ct-panel .react-flow {
+  --xy-background-color: var(--ct-surface);
 }

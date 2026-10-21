@@ -10,12 +10,16 @@ import {
   Text,
   TextInput,
   Textarea,
+  Title,
 } from '@mantine/core';
 import type { UseFormReturnType } from '@mantine/form';
 import { useDebouncedValue } from '@mantine/hooks';
 import { IconAlertCircle, IconInfoCircle } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
+import { sentenceCase } from 'change-case';
+import cronstrue from 'cronstrue';
 import { type ReactNode, useMemo } from 'react';
+import { z } from 'zod';
 
 import { ConnectedProviderPicker } from '../../components/ConnectedProviderPicker';
 import { EnvironmentSelect } from '../../components/EnvironmentSelect';
@@ -23,8 +27,14 @@ import { NotificationRulesEditor } from '../../components/NotificationRulesEdito
 import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
 import { type JobCreateInput, type JobDto, type ProviderDto, client } from '../../lib/api';
-import { configIssues, configIssuesFor, errorMessage, fieldError } from '../../lib/errors';
-import { dateTime } from '../../lib/format';
+import {
+  type ConfigIssueDto,
+  configIssues,
+  configIssuesFor,
+  errorMessage,
+  fieldError,
+} from '../../lib/errors';
+import { dateTime, dateTimeWithLocal } from '../../lib/format';
 
 export type JobFormValues = Pick<
   JobDto,
@@ -61,6 +71,13 @@ export const blankJob: JobFormValues = {
   policy: {},
 };
 
+export const validateJob = {
+  name: (name: string) => (name.trim() === '' ? 'Required' : null),
+  notifications: {
+    on: (on: readonly string[]) => (on.length === 0 ? 'Pick at least one event' : null),
+  },
+};
+
 export const toSpec = ({
   version,
   ...v
@@ -83,7 +100,9 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   return (
     <Stack className="ct-panel" p="lg" spacing="md">
       <div>
-        <Text weight={650}>{title}</Text>
+        <Title order={2} size="h5">
+          {title}
+        </Title>
         {hint && (
           <Text size="sm" color="dimmed">
             {hint}
@@ -100,23 +119,96 @@ const withPlaceholderName = (spec: JobCreateInput): JobCreateInput => ({
   name: spec.name.trim() || 'Untitled job',
 });
 
-function SchedulePreview({ spec }: { spec: JobCreateInput }) {
+export const DEFAULT_TRIGGER_ZONE = 'UTC';
+
+const ZonedConfig = z.object({ timezone: z.string().min(1) });
+const CronConfig = z.object({ expression: z.string() });
+const CronError = z.string().catch('');
+
+const CRON_PART: Record<string, string> = {
+  seconds: 'Seconds',
+  minutes: 'Minute',
+  hours: 'Hour',
+  DOM: 'Day of month',
+  month: 'Month',
+  DOW: 'Day of week',
+  year: 'Year',
+};
+
+const cronProblem = (expression: string): string | undefined => {
+  try {
+    cronstrue.toString(expression);
+
+    return undefined;
+  } catch (e) {
+    const text = CronError.parse(e instanceof Error ? e.message : e).replace(/^Error: /, '');
+    const range = /^(\w+) part must be >= (\d+) and <= (\d+)$/.exec(text);
+    if (range) {
+      const [, part = '', min = '', max = ''] = range;
+
+      return `${CRON_PART[part] ?? sentenceCase(part)} must be between ${min} and ${max}`;
+    }
+
+    return text === '' ? undefined : text;
+  }
+};
+
+const issueLabel = (path: string): string => {
+  const last = path.split('.').findLast((segment) => !/^\d+$/.test(segment)) ?? path;
+
+  return last === '' ? 'Schedule' : sentenceCase(last);
+};
+
+const TRIGGER_CONFIG = 'trigger.config';
+
+function previewIssues(error: unknown, trigger: JobCreateInput['trigger']): ConfigIssueDto[] {
+  return configIssues(error).map((issue) => {
+    const cron = trigger.type === 'cron' ? CronConfig.safeParse(trigger.config) : undefined;
+    const specific =
+      issue.path === `${TRIGGER_CONFIG}.expression` && cron?.success
+        ? cronProblem(cron.data.expression)
+        : undefined;
+
+    return specific === undefined ? issue : { ...issue, message: specific };
+  });
+}
+
+const triggerIssues = (issues: readonly ConfigIssueDto[]): ConfigIssueDto[] =>
+  issues.flatMap((issue) =>
+    issue.path.startsWith(TRIGGER_CONFIG)
+      ? [{ ...issue, path: issue.path.slice(TRIGGER_CONFIG.length).replace(/^\./, '') }]
+      : [],
+  );
+
+function useSchedulePreview(spec: JobCreateInput) {
   const [debounced] = useDebouncedValue(withPlaceholderName(spec), 400);
-  const preview = useQuery({
+
+  return useQuery({
     queryKey: ['jobs', 'validate', debounced],
     queryFn: () => client.jobs.validate(debounced),
     retry: false,
   });
-  if (preview.isError) {
-    const issues = configIssues(preview.error);
+}
 
+type SchedulePreviewQuery = ReturnType<typeof useSchedulePreview>;
+
+function SchedulePreview({
+  preview,
+  issues,
+  zone,
+}: {
+  preview: SchedulePreviewQuery;
+  issues: readonly ConfigIssueDto[];
+  zone: string | undefined;
+}) {
+  if (preview.isError) {
     return (
       <Alert color="red" icon={<IconAlertCircle size={18} />} title="Fix these before saving">
         {issues.length > 0 ? (
           <List size="sm">
             {issues.map((i) => (
               <List.Item key={i.path}>
-                <b>{i.path}</b>: {i.message}
+                <b>{issueLabel(i.path)}</b>: {i.message}
               </List.Item>
             ))}
           </List>
@@ -144,7 +236,9 @@ function SchedulePreview({ spec }: { spec: JobCreateInput }) {
       ) : (
         <List size="sm" spacing={2}>
           {preview.data.nextFireTimes.map((t) => (
-            <List.Item key={t}>{dateTime(t)}</List.Item>
+            <List.Item key={t}>
+              {zone === undefined ? dateTime(t) : dateTimeWithLocal(t, zone)}
+            </List.Item>
           ))}
         </List>
       )}
@@ -161,6 +255,15 @@ function SchedulePreview({ spec }: { spec: JobCreateInput }) {
     </Stack>
   );
 }
+
+export const triggerZone = (trigger: Pick<JobDto, 'trigger'>['trigger']): string | undefined => {
+  const zoned = ZonedConfig.safeParse(trigger.config);
+  if (zoned.success) {
+    return zoned.data.timezone;
+  }
+
+  return trigger.type === 'cron' || trigger.type === 'rrule' ? DEFAULT_TRIGGER_ZONE : undefined;
+};
 
 export function JobFormFields({ form }: { form: JobForm }) {
   const providers = useQuery({
@@ -188,6 +291,18 @@ export function JobFormFields({ form }: { form: JobForm }) {
   const group = groups.data?.items.find((g) => g.id === values.groupId);
   const groupEnvironment = group?.environment ?? null;
   const spec = useMemo(() => toSpec(values), [values]);
+  const preview = useSchedulePreview(spec);
+  const issuesFromPreview = useMemo(
+    () => (preview.isError ? previewIssues(preview.error, spec.trigger) : []),
+    [preview.isError, preview.error, spec.trigger],
+  );
+  const savedTriggerIssues = configIssuesFor(errors, 'trigger');
+  const triggerConfigIssues = [
+    ...savedTriggerIssues,
+    ...triggerIssues(issuesFromPreview).filter(
+      (issue) => !savedTriggerIssues.some((saved) => saved.path === issue.path),
+    ),
+  ];
   const num =
     (path: Parameters<JobForm['setFieldValue']>[0], fallback: number | undefined) =>
     (v: number | undefined) =>
@@ -234,7 +349,11 @@ export function JobFormFields({ form }: { form: JobForm }) {
           />
         </SimpleGrid>
         <Textarea label="Description" autosize minRows={2} {...form.getInputProps('description')} />
-        <Switch label="Enabled" {...form.getInputProps('enabled', { type: 'checkbox' })} />
+        <Switch
+          label="Enabled"
+          description="When off, the job never runs on its schedule. To stop it for a while, use Pause on the job page instead."
+          {...form.getInputProps('enabled', { type: 'checkbox' })}
+        />
       </Section>
 
       <SimpleGrid cols={2} spacing="lg" breakpoints={[{ maxWidth: 'md', cols: 1 }]}>
@@ -243,7 +362,7 @@ export function JobFormFields({ form }: { form: JobForm }) {
             kind="trigger"
             providers={byKind.trigger}
             value={values.trigger}
-            configIssues={configIssuesFor(errors, 'trigger')}
+            configIssues={triggerConfigIssues}
             connectionError={fieldError(errors, 'trigger.connection.key')}
             endpointError={fieldError(errors, 'trigger.connection.endpoint')}
             onChange={(trigger) =>
@@ -262,7 +381,11 @@ export function JobFormFields({ form }: { form: JobForm }) {
           title="Upcoming runs"
           hint="Calculated by the server from the settings on this page."
         >
-          <SchedulePreview spec={spec} />
+          <SchedulePreview
+            preview={preview}
+            issues={issuesFromPreview}
+            zone={triggerZone(values.trigger)}
+          />
         </Section>
       </SimpleGrid>
 

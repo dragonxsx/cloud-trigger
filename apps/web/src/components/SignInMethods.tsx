@@ -2,21 +2,30 @@ import type { Scope } from '@cloud-trigger/api-contract';
 import {
   Alert,
   Button,
-  Chip,
   Collapse,
   Group,
   NumberInput,
+  Radio,
   SimpleGrid,
   Stack,
   Switch,
-  Text,
   TextInput,
 } from '@mantine/core';
 import { IconAlertTriangle, IconCheck, IconPlugConnected } from '@tabler/icons-react';
 import { useState } from 'react';
+import { z } from 'zod';
 
+import {
+  LEVEL_DESCRIPTIONS,
+  LEVEL_LABELS,
+  accessLevel,
+  levelColor,
+  levelDescription,
+  topScope,
+} from '../lib/access';
 import type { AuthMethodsInput, AuthSettingsDto } from '../lib/api';
 import { errorMessage } from '../lib/errors';
+import { HintBadge } from '../lib/status';
 
 export const SCOPES: readonly Scope[] = ['read', 'write', 'admin'];
 
@@ -91,44 +100,131 @@ export const fromAuthSettings = (settings: AuthSettingsDto): SignInMethodsValue 
 
 type OidcTest = { ok: boolean; error: string | null; jwksUri: string | null };
 
-export function ScopeChips({
+export type MethodErrors = Readonly<Record<string, string>>;
+
+const NONE = 'none';
+
+export function ScopeLevel({
+  label,
+  description,
   value,
   onChange,
+  noneLabel,
+  noneDescription,
+  error,
 }: {
+  label: string;
+  description?: string | undefined;
   value: readonly Scope[];
   onChange: (scopes: Scope[]) => void;
+  noneLabel?: string | undefined;
+  noneDescription?: string | undefined;
+  error?: string | undefined;
 }) {
   return (
-    <Chip.Group
-      multiple
-      value={[...value]}
-      onChange={(next) => onChange(next.filter(isScope))}
+    <Radio.Group
+      label={label}
+      {...(description === undefined ? {} : { description })}
+      {...(error === undefined ? {} : { error })}
+      orientation="vertical"
       spacing="xs"
+      value={topScope(value) ?? NONE}
+      onChange={(next) => onChange(isScope(next) ? [next] : [])}
     >
+      {noneLabel !== undefined && (
+        <Radio
+          value={NONE}
+          label={noneLabel}
+          {...(noneDescription === undefined ? {} : { description: noneDescription })}
+        />
+      )}
       {SCOPES.map((scope) => (
-        <Chip key={scope} value={scope} size="sm">
-          {scope}
-        </Chip>
+        <Radio
+          key={scope}
+          value={scope}
+          label={LEVEL_LABELS[scope]}
+          description={LEVEL_DESCRIPTIONS[scope]}
+        />
       ))}
-    </Chip.Group>
+    </Radio.Group>
   );
 }
+
+export function ScopeBadge({ scopes }: { scopes: readonly Scope[] }) {
+  return (
+    <HintBadge
+      label={accessLevel(scopes)}
+      hint={levelDescription(scopes)}
+      color={levelColor(scopes)}
+    />
+  );
+}
+
+const ISSUER_URL = z.url();
+
+export function methodsErrors(value: SignInMethodsValue): MethodErrors {
+  const errors: Record<string, string> = {};
+  if (value.oidcEnabled) {
+    const issuer = value.oidc.issuer.trim();
+    if (issuer === '') {
+      errors['oidc.issuer'] = 'Enter the issuer URL, or turn single sign-on off';
+    } else if (!ISSUER_URL.safeParse(issuer).success) {
+      errors['oidc.issuer'] = 'Enter a full URL, e.g. https://id.example.com/realms/main';
+    }
+    const jwks = value.oidc.jwksUri.trim();
+    if (jwks !== '' && !ISSUER_URL.safeParse(jwks).success) {
+      errors['oidc.jwksUri'] = 'Enter a full URL, or leave it empty';
+    }
+  }
+  if (!Number.isFinite(value.sessionTtlHours) || value.sessionTtlHours < 1) {
+    errors['local.sessionTtlMinutes'] = 'Use at least 1 hour';
+  }
+
+  return errors;
+}
+
+export const METHOD_FIELDS: readonly string[] = [
+  'local.sessionTtlMinutes',
+  'oidc.issuer',
+  'oidc.clientId',
+  'oidc.audience',
+  'oidc.scopePrefix',
+  'oidc.uiScope',
+  'oidc.jwksUri',
+  'oidc.defaultScopes',
+  'anonymous.scopes',
+];
+
+export const methodField = (path: string): string | undefined => {
+  const bare = path.replace(/^methods\./, '');
+
+  return METHOD_FIELDS.find((field) => bare === field || bare.startsWith(`${field}.`));
+};
+
+const fieldError = (errors: MethodErrors, path: string) => {
+  const message = errors[path];
+
+  return message === undefined ? {} : { error: message };
+};
 
 export function SignInMethodsFields({
   value,
   onChange,
   testOidc,
   localLocked = false,
+  errors = {},
 }: {
   value: SignInMethodsValue;
   onChange: (value: SignInMethodsValue) => void;
   testOidc: (issuer: string) => Promise<OidcTest>;
   localLocked?: boolean;
+  errors?: MethodErrors;
 }) {
   const [test, setTest] = useState<OidcTest | null>(null);
   const [testing, setTesting] = useState(false);
   const oidc = (patch: Partial<SignInMethodsValue['oidc']>) =>
     onChange({ ...value, oidc: { ...value.oidc, ...patch } });
+  const anonymous = topScope(value.anonymousScopes);
 
   return (
     <Stack spacing="lg">
@@ -151,6 +247,7 @@ export function SignInMethodsFields({
           w={200}
           value={value.sessionTtlHours}
           onChange={(hours) => onChange({ ...value, sessionTtlHours: hours ?? 12 })}
+          {...fieldError(errors, 'local.sessionTtlMinutes')}
         />
       </Stack>
 
@@ -163,7 +260,7 @@ export function SignInMethodsFields({
         />
         <Collapse in={value.oidcEnabled}>
           <Stack spacing="sm" pl="xl" pt="xs">
-            <Group align="flex-end" spacing="xs" noWrap>
+            <Group align="flex-start" spacing="xs" noWrap>
               <TextInput
                 label="Issuer URL"
                 placeholder="https://id.example.com/realms/main"
@@ -173,10 +270,12 @@ export function SignInMethodsFields({
                   setTest(null);
                   oidc({ issuer: e.currentTarget.value });
                 }}
-                required
+                {...fieldError(errors, 'oidc.issuer')}
+                withAsterisk
               />
               <Button
                 variant="default"
+                mt={22}
                 leftIcon={<IconPlugConnected size={16} />}
                 loading={testing}
                 disabled={value.oidc.issuer.trim() === ''}
@@ -209,59 +308,71 @@ export function SignInMethodsFields({
                 description="Public client with PKCE. Leave empty for API-only tokens."
                 value={value.oidc.clientId}
                 onChange={(e) => oidc({ clientId: e.currentTarget.value })}
+                {...fieldError(errors, 'oidc.clientId')}
               />
               <TextInput
                 label="Audience"
                 description="Required aud claim, if any."
                 value={value.oidc.audience}
                 onChange={(e) => oidc({ audience: e.currentTarget.value })}
+                {...fieldError(errors, 'oidc.audience')}
               />
               <TextInput
                 label="Scope prefix"
                 description="Token scopes like cloud-trigger:write map to write."
                 value={value.oidc.scopePrefix}
                 onChange={(e) => oidc({ scopePrefix: e.currentTarget.value })}
+                {...fieldError(errors, 'oidc.scopePrefix')}
               />
               <TextInput
                 label="Scopes the UI requests"
                 value={value.oidc.uiScope}
                 onChange={(e) => oidc({ uiScope: e.currentTarget.value })}
+                {...fieldError(errors, 'oidc.uiScope')}
               />
               <TextInput
                 label="JWKS URL override"
                 description="Optional; discovery finds it otherwise."
                 value={value.oidc.jwksUri}
                 onChange={(e) => oidc({ jwksUri: e.currentTarget.value })}
+                {...fieldError(errors, 'oidc.jwksUri')}
               />
-              <Stack spacing={4}>
-                <Text size="sm" weight={500}>
-                  Default scopes
-                </Text>
-                <Text size="xs" color="dimmed">
-                  For valid tokens that carry no Cloud Trigger scope.
-                </Text>
-                <ScopeChips
-                  value={value.oidc.defaultScopes}
-                  onChange={(defaultScopes) => oidc({ defaultScopes })}
-                />
-              </Stack>
             </SimpleGrid>
+            <ScopeLevel
+              label="Default access"
+              description="For valid tokens that carry no Cloud Trigger scope."
+              value={value.oidc.defaultScopes}
+              onChange={(defaultScopes) => oidc({ defaultScopes })}
+              noneLabel="No access"
+              noneDescription="Tokens without a Cloud Trigger scope are refused."
+              error={errors['oidc.defaultScopes']}
+            />
           </Stack>
         </Collapse>
       </Stack>
 
-      <Stack spacing={4}>
-        <Text size="sm" weight={500}>
-          Anonymous access
-        </Text>
-        <Text size="xs" color="dimmed">
-          Scopes for visitors who are not signed in. Select none to require sign-in.
-        </Text>
-        <ScopeChips
+      <Stack spacing="xs">
+        <ScopeLevel
+          label="Anonymous access"
+          description="What visitors who are not signed in can do."
           value={value.anonymousScopes}
           onChange={(anonymousScopes) => onChange({ ...value, anonymousScopes })}
+          noneLabel="None"
+          noneDescription="Everyone must sign in."
+          error={errors['anonymous.scopes']}
         />
-        {value.anonymousScopes.some((scope) => scope !== 'read') && (
+        {anonymous === 'admin' && (
+          <Alert
+            color="red"
+            icon={<IconAlertTriangle size={16} />}
+            title="Anyone gets full control"
+            mt="xs"
+          >
+            Anyone who can reach this server can manage users, API keys and sign-in methods, and
+            change or delete every job. Only use this on an isolated machine.
+          </Alert>
+        )}
+        {anonymous === 'write' && (
           <Alert color="yellow" icon={<IconAlertTriangle size={16} />} mt="xs">
             Anyone who can reach this server will be able to change jobs. Use this only on a trusted
             network.

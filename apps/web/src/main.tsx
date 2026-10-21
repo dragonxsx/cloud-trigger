@@ -5,6 +5,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
+import { applyColorScheme, initialColorScheme } from './lib/color-scheme';
+
+applyColorScheme(initialColorScheme());
 
 const root = document.getElementById('root');
 if (!root) {

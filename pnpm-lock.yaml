@@ -6,6 +6,12 @@ settings:
 
 catalogs:
   default:
+    '@mantine/modals':
+      specifier: 5.10.5
+      version: 5.10.5
+    '@mantine/nprogress':
+      specifier: 5.10.5
+      version: 5.10.5
     '@orpc/client':
       specifier: 1.15.7
       version: 1.15.7
@@ -24,6 +30,9 @@ catalogs:
     '@types/node':
       specifier: 24.19.2
       version: 24.19.2
+    cronstrue:
+      specifier: 3.36.0
+      version: 3.36.0
     drizzle-kit:
       specifier: 0.31.11
       version: 0.31.11
@@ -270,8 +279,14 @@ importers:
       '@mantine/hooks':
         specifier: 5.10.5
         version: 5.10.5(react@18.3.1)
+      '@mantine/modals':
+        specifier: 'catalog:'
+        version: 5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@mantine/notifications':
         specifier: 5.10.5
+        version: 5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@mantine/nprogress':
+        specifier: 'catalog:'
         version: 5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@orpc/client':
         specifier: 'catalog:'
@@ -315,6 +330,9 @@ importers:
       change-case:
         specifier: 5.4.4
         version: 5.4.4
+      cronstrue:
+        specifier: 'catalog:'
+        version: 3.36.0
       dayjs:
         specifier: 1.11.23
         version: 1.11.23
@@ -1713,8 +1731,24 @@ packages:
     peerDependencies:
       react: '>=16.8.0'
 
+  '@mantine/modals@5.10.5':
+    resolution: {integrity: sha512-q3BCqAxulcIZCL48vUrwSaXDhxDng/2daVky8K1mTPYNlcm9iN1mqVTUC4uFWhn4b2UmPu4UdbNePEgLuhK4Mw==}
+    peerDependencies:
+      '@mantine/core': 5.10.5
+      '@mantine/hooks': 5.10.5
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
+
   '@mantine/notifications@5.10.5':
     resolution: {integrity: sha512-IzTAXA7Zb9DcI94Mv5O2OinhLmI7fvs/VutDw9uCpp6OHtLuF/XN1d262jrsGhMZT0c4nuUsotSLFZF3GWZwXg==}
+    peerDependencies:
+      '@mantine/core': 5.10.5
+      '@mantine/hooks': 5.10.5
+      react: '>=16.8.0'
+      react-dom: '>=16.8.0'
+
+  '@mantine/nprogress@5.10.5':
+    resolution: {integrity: sha512-zvETS7NKQCwCBL/e6hvZF4HoA2SqNomRyozSY5S1Tvlyd4g89nA5ZClMeTHOWcy+EWaS6DaY7Mobjh7mYrAVsg==}
     peerDependencies:
       '@mantine/core': 5.10.5
       '@mantine/hooks': 5.10.5
@@ -3866,6 +3900,10 @@ packages:
 
   cronstrue@3.32.0:
     resolution: {integrity: sha512-OHTec7+5nosN4UsitwgBDQ0bofGZF3H4pLqgqa93NR3nExNlhtVHcO2JY3jRognrFH8Bl9oAooT0hyCjSyOU+Q==}
+    hasBin: true
+
+  cronstrue@3.36.0:
+    resolution: {integrity: sha512-uk3Wi80f8SNqrXmreyBAP1E4PudFU+9wg91+v+6ZYeb5a2ajR9rRwuNB1Bt/bjgh7hQM9+6FgyTUz2NDA3uKaw==}
     hasBin: true
 
   cross-spawn@7.0.6:
@@ -7636,6 +7674,14 @@ snapshots:
     dependencies:
       react: 18.3.1
 
+  '@mantine/modals@5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@mantine/core': 5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@mantine/hooks': 5.10.5(react@18.3.1)
+      '@mantine/utils': 5.10.5(react@18.3.1)
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
+
   '@mantine/notifications@5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@mantine/core': 5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -7644,6 +7690,14 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
       react-transition-group: 4.4.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+
+  '@mantine/nprogress@5.10.5(@mantine/core@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@mantine/core': 5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(@mantine/hooks@5.10.5(react@18.3.1))(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@mantine/hooks': 5.10.5(react@18.3.1)
+      '@mantine/utils': 5.10.5(react@18.3.1)
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
 
   '@mantine/styles@5.10.5(@emotion/react@11.14.0(@types/react@18.3.31)(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
@@ -9778,6 +9832,8 @@ snapshots:
   croner@10.0.1: {}
 
   cronstrue@3.32.0: {}
+
+  cronstrue@3.36.0: {}
 
   cross-spawn@7.0.6:
     dependencies:

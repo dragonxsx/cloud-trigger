@@ -1,7 +1,22 @@
-import { Badge, Code, Pagination, ScrollArea, Stack, Table, Text } from '@mantine/core';
-import { useTable } from '@refinedev/core';
-import { EditButton, List, ShowButton } from '@refinedev/mantine';
+import {
+  ActionIcon,
+  Anchor,
+  Badge,
+  Code,
+  Group,
+  Pagination,
+  ScrollArea,
+  Stack,
+  Table,
+  Text,
+} from '@mantine/core';
+import { useCan, useTable } from '@refinedev/core';
+import { List } from '@refinedev/mantine';
+import { IconChevronRight, IconPencil } from '@tabler/icons-react';
+import { Link } from 'react-router';
 
+import { PageHeading } from '../../components/page-chrome';
+import { LoadError } from '../../components/PageState';
 import type { ConnectionDto } from '../../lib/api';
 import { connectionAddress } from './summary';
 
@@ -11,11 +26,18 @@ export function ConnectionList() {
     pagination: { pageSize: 50 },
   });
   const connections = tableQuery.data?.data ?? [];
+  const canEdit = useCan({ resource: 'connections', action: 'edit' }).data?.can === true;
 
   return (
-    <List title="Connections">
+    <List title={<PageHeading>Connections</PageHeading>}>
       <Stack spacing="md">
-        {connections.length === 0 && !tableQuery.isLoading ? (
+        {tableQuery.isError ? (
+          <LoadError
+            error={tableQuery.error}
+            what="connections"
+            onRetry={() => void tableQuery.refetch()}
+          />
+        ) : connections.length === 0 && !tableQuery.isLoading ? (
           <Text color="dimmed" p="lg" align="center">
             No connections yet. A connection keeps an API&apos;s address and credentials in one
             place, with named endpoints that jobs pick.
@@ -25,7 +47,7 @@ export function ConnectionList() {
             <Table highlightOnHover verticalSpacing="xs" className="ct-table" miw={720}>
               <thead>
                 <tr>
-                  <th>Key</th>
+                  <th>Connection</th>
                   <th>Type</th>
                   <th>Address</th>
                   <th style={{ textAlign: 'right' }}>Endpoints</th>
@@ -36,9 +58,14 @@ export function ConnectionList() {
                 {connections.map((connection) => (
                   <tr key={connection.key}>
                     <td>
-                      <Text size="sm" weight={600}>
+                      <Anchor
+                        component={Link}
+                        to={`/connections/show/${connection.key}`}
+                        size="sm"
+                        weight={600}
+                      >
                         {connection.name || connection.key}
-                      </Text>
+                      </Anchor>
                       {connection.name && (
                         <Text size="xs" color="dimmed" ff="monospace">
                           {connection.key}
@@ -57,8 +84,28 @@ export function ConnectionList() {
                       <Text size="sm">{connection.endpoints.length}</Text>
                     </td>
                     <td>
-                      <ShowButton hideText size="xs" recordItemId={connection.key} />
-                      <EditButton hideText size="xs" recordItemId={connection.key} />
+                      <Group spacing={4} noWrap position="right">
+                        {canEdit && (
+                          <ActionIcon
+                            component={Link}
+                            to={`/connections/edit/${connection.key}`}
+                            size="lg"
+                            variant="subtle"
+                            aria-label={`Edit ${connection.name || connection.key}`}
+                          >
+                            <IconPencil size={18} />
+                          </ActionIcon>
+                        )}
+                        <ActionIcon
+                          component={Link}
+                          to={`/connections/show/${connection.key}`}
+                          size="lg"
+                          variant="subtle"
+                          aria-label={`Open ${connection.name || connection.key}`}
+                        >
+                          <IconChevronRight size={18} />
+                        </ActionIcon>
+                      </Group>
                     </td>
                   </tr>
                 ))}

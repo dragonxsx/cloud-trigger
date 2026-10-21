@@ -1,5 +1,6 @@
-import { Group, Text } from '@mantine/core';
+import { Center, Group, Stack, Text } from '@mantine/core';
 import type { RefineLayoutThemedTitleProps } from '@refinedev/mantine';
+import { type ReactNode, type RefObject, useEffect, useRef } from 'react';
 import { Link } from 'react-router';
 
 export function BrandMark({ size = 22 }: { size?: number }) {
@@ -31,4 +32,29 @@ export function BrandTitle({ collapsed }: RefineLayoutThemedTitleProps) {
       </Group>
     </Link>
   );
+}
+
+export function AuthShell({
+  width = 380,
+  children,
+}: {
+  readonly width?: number;
+  readonly children: ReactNode;
+}) {
+  return (
+    <Center component="main" mih="100vh" p="md" style={{ background: 'var(--ct-paper)' }}>
+      <Stack w="100%" maw={width} miw={0} className="ct-panel" p="xl" spacing="md">
+        {children}
+      </Stack>
+    </Center>
+  );
+}
+
+export function useFocusOnMount<T extends HTMLElement>(): RefObject<T> {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+
+  return ref;
 }

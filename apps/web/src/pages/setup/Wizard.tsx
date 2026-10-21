@@ -19,10 +19,16 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Navigate, useNavigate } from 'react-router';
 
-import { BrandMark } from '../../components/Brand';
-import { SignInMethodsFields, blankMethods, toAuthMethods } from '../../components/SignInMethods';
+import { AuthShell, BrandMark, useFocusOnMount } from '../../components/Brand';
+import { NewPasswordFields, passwordValid } from '../../components/NewPasswordFields';
+import {
+  SignInMethodsFields,
+  blankMethods,
+  methodsErrors,
+  toAuthMethods,
+} from '../../components/SignInMethods';
 import { type SetupStatusDto, client } from '../../lib/api';
-import { configIssues, errorMessage } from '../../lib/errors';
+import { configIssues, errorMessage, focusFirstInvalidField } from '../../lib/errors';
 import { resetAuthConfig } from '../../lib/oidc';
 import { setupToken } from '../../lib/session';
 import { startPasswordSession } from '../../providers/auth-provider';
@@ -30,17 +36,28 @@ import { startPasswordSession } from '../../providers/auth-provider';
 type Driver = 'sqlite' | 'postgres' | 'mongo';
 type DatabaseTest = Awaited<ReturnType<typeof client.setup.testDatabase>>;
 
-const MIN_PASSWORD = 12;
-
-function TokenStep({ onVerified }: { onVerified: (token: string) => void }) {
+function TokenStep({
+  expired,
+  onVerified,
+}: {
+  expired: boolean;
+  onVerified: (token: string) => void;
+}) {
+  const focusRef = useFocusOnMount<HTMLInputElement>();
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
 
   return (
     <form
+      noValidate
       onSubmit={(e) => {
         e.preventDefault();
+        if (token.trim() === '') {
+          setError('Paste the setup token from the server log');
+
+          return;
+        }
         setChecking(true);
         client.setup
           .verifyToken({ token: token.trim() })
@@ -50,19 +67,35 @@ function TokenStep({ onVerified }: { onVerified: (token: string) => void }) {
       }}
     >
       <Stack spacing="sm">
+        {expired && (
+          <Alert
+            color="yellow"
+            icon={<IconAlertTriangle size={16} />}
+            title="New setup token needed"
+          >
+            The server restarted and issued a new setup token. Copy it from the server log (look for
+            “Setup required”) and paste it below.
+          </Alert>
+        )}
         <Text size="sm" color="dimmed">
           The server printed a one-time setup token in its log when it started (look for “Setup
           required”). If you set <Code>SETUP_TOKEN</Code>, use that value.
         </Text>
         <PasswordInput
           label="Setup token"
+          autoComplete="off"
+          ref={focusRef}
+          toggleTabIndex={0}
           value={token}
-          onChange={(e) => setToken(e.currentTarget.value)}
+          onChange={(e) => {
+            setError(null);
+            setToken(e.currentTarget.value);
+          }}
           {...(error ? { error } : {})}
-          required
+          withAsterisk
         />
         <Group position="right">
-          <Button type="submit" loading={checking} disabled={token.trim() === ''}>
+          <Button type="submit" loading={checking}>
             Continue
           </Button>
         </Group>
@@ -76,6 +109,15 @@ const envText = (env: Record<string, string>) =>
     .map(([key, value]) => `${key}=${value}`)
     .join('\n');
 
+const POSTGRES_HINT =
+  'Check the host, port, user name and password, and that the database exists and accepts connections from the server.';
+const MONGO_HINT =
+  'Check the host and port, that MongoDB runs as a replica set, and that the user can reach the database.';
+const SQLITE_HINT = 'Check that the folder exists and the server process can write to it.';
+
+const failureHint = (driver: Driver): string =>
+  driver === 'postgres' ? POSTGRES_HINT : driver === 'mongo' ? MONGO_HINT : SQLITE_HINT;
+
 function DatabaseStep({
   status,
   token,
@@ -85,18 +127,18 @@ function DatabaseStep({
   status: SetupStatusDto;
   token: string;
   onNext: () => void;
-  onRecheck: () => void;
+  onRecheck: () => Promise<boolean>;
 }) {
   const [driver, setDriver] = useState<Driver>(status.database.driver ?? 'sqlite');
   const [mongoUri, setMongoUri] = useState('mongodb://localhost:27017/?replicaSet=rs0');
   const [mongoDb, setMongoDb] = useState('cloud_trigger');
-  const [postgresUrl, setPostgresUrl] = useState(
-    'postgres://user:password@localhost:5432/cloud_trigger',
-  );
+  const [postgresUrl, setPostgresUrl] = useState('');
   const [sqlitePath, setSqlitePath] = useState('./data/cloud-trigger.db');
   const [result, setResult] = useState<DatabaseTest | null>(null);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rechecking, setRechecking] = useState(false);
+  const [stillMissing, setStillMissing] = useState(false);
 
   if (status.stage !== 'database') {
     return (
@@ -112,6 +154,12 @@ function DatabaseStep({
     );
   }
 
+  const edit = (apply: () => void) => {
+    setResult(null);
+    setError(null);
+    setStillMissing(false);
+    apply();
+  };
   const database =
     driver === 'mongo'
       ? { driver, uri: mongoUri, database: mongoDb }
@@ -119,28 +167,53 @@ function DatabaseStep({
         ? { driver, url: postgresUrl }
         : { driver, path: sqlitePath };
   const test = () => {
+    if (driver === 'postgres' && postgresUrl.trim() === '') {
+      setError('Enter the connection URL');
+
+      return;
+    }
     setTesting(true);
     setError(null);
+    setStillMissing(false);
     client.setup
       .testDatabase({ token, database })
       .then(setResult)
       .catch((failure: unknown) => setError(errorMessage(failure)))
       .finally(() => setTesting(false));
   };
+  const recheck = () => {
+    setRechecking(true);
+    setStillMissing(false);
+    onRecheck()
+      .then((connected) => setStillMissing(!connected))
+      .catch(() => setStillMissing(true))
+      .finally(() => setRechecking(false));
+  };
+  const works = result?.ok === true;
 
   return (
     <Stack spacing="sm">
-      {status.database.issues.map((issue) => (
-        <Alert key={issue.path} color="yellow" icon={<IconAlertTriangle size={16} />}>
-          {issue.path}: {issue.message}
+      <Text size="sm" color="dimmed">
+        Cloud Trigger needs a database. Pick one and test the connection. You then set a few
+        environment variables on the server and restart it.
+      </Text>
+      {!works && status.database.issues.length > 0 && (
+        <Alert color="gray" title="Current server settings">
+          <Stack spacing={2}>
+            {status.database.issues.map((issue) => (
+              <Text key={issue.path} size="sm">
+                <Code>{issue.path}</Code> {issue.message}
+              </Text>
+            ))}
+          </Stack>
         </Alert>
-      ))}
+      )}
       <SegmentedControl
+        aria-label="Database"
         value={driver}
-        onChange={(value) => {
-          setResult(null);
-          setDriver(value === 'mongo' || value === 'postgres' ? value : 'sqlite');
-        }}
+        onChange={(value) =>
+          edit(() => setDriver(value === 'mongo' || value === 'postgres' ? value : 'sqlite'))
+        }
         data={[
           { value: 'sqlite', label: 'SQLite' },
           { value: 'postgres', label: 'PostgreSQL' },
@@ -152,14 +225,24 @@ function DatabaseStep({
           label="Database file"
           description="Single node only: every role runs in one process."
           value={sqlitePath}
-          onChange={(e) => setSqlitePath(e.currentTarget.value)}
+          onChange={(e) => {
+            const next = e.currentTarget.value;
+            edit(() => setSqlitePath(next));
+          }}
         />
       )}
       {driver === 'postgres' && (
         <TextInput
           label="Connection URL"
+          description="Include the user, password, host, port and database name."
+          placeholder="postgres://user:password@localhost:5432/cloud_trigger"
+          autoComplete="off"
           value={postgresUrl}
-          onChange={(e) => setPostgresUrl(e.currentTarget.value)}
+          onChange={(e) => {
+            const next = e.currentTarget.value;
+            edit(() => setPostgresUrl(next));
+          }}
+          withAsterisk
         />
       )}
       {driver === 'mongo' && (
@@ -167,20 +250,34 @@ function DatabaseStep({
           <TextInput
             label="Connection string"
             description="MongoDB must run as a replica set; change streams need it."
+            autoComplete="off"
             value={mongoUri}
-            onChange={(e) => setMongoUri(e.currentTarget.value)}
+            onChange={(e) => {
+              const next = e.currentTarget.value;
+              edit(() => setMongoUri(next));
+            }}
           />
           <TextInput
             label="Database name"
             value={mongoDb}
-            onChange={(e) => setMongoDb(e.currentTarget.value)}
+            onChange={(e) => {
+              const next = e.currentTarget.value;
+              edit(() => setMongoDb(next));
+            }}
           />
         </>
       )}
-      {error && <Alert color="red">{error}</Alert>}
+      {error && (
+        <Alert color="red" role="alert">
+          {error}
+        </Alert>
+      )}
       {result && !result.ok && (
-        <Alert color="red" title="Could not connect">
-          {result.error}
+        <Alert color="red" title="Could not connect" role="alert">
+          <Stack spacing={4}>
+            <Text size="sm">{result.error}</Text>
+            <Text size="sm">{failureHint(driver)}</Text>
+          </Stack>
         </Alert>
       )}
       {result?.ok && (
@@ -206,22 +303,31 @@ function DatabaseStep({
                   </Button>
                 )}
               </CopyButton>
-              <Button
-                size="xs"
-                variant="light"
-                leftIcon={<IconRefresh size={14} />}
-                onClick={onRecheck}
-              >
-                I restarted the server
-              </Button>
             </Group>
           </Stack>
         </Alert>
       )}
-      <Group position="right">
-        <Button onClick={test} loading={testing}>
+      {stillMissing && (
+        <Alert
+          color="yellow"
+          icon={<IconAlertTriangle size={16} />}
+          title="Still no database"
+          role="alert"
+        >
+          The server still runs without a database. Check that the environment variables are set
+          where the server reads them, restart it, and wait until it has started before checking
+          again.
+        </Alert>
+      )}
+      <Group position="right" spacing="xs">
+        <Button onClick={test} loading={testing} variant={works ? 'default' : 'filled'}>
           Test connection
         </Button>
+        {works && (
+          <Button leftIcon={<IconRefresh size={16} />} loading={rechecking} onClick={recheck}>
+            I restarted the server, check again
+          </Button>
+        )}
       </Group>
     </Stack>
   );
@@ -238,17 +344,20 @@ function AdminStep({
   onBack: () => void;
   onNext: () => void;
 }) {
-  const tooShort = admin.password.length > 0 && admin.password.length < MIN_PASSWORD;
-  const mismatch = admin.confirm.length > 0 && admin.confirm !== admin.password;
-  const valid =
-    admin.username.trim() !== '' &&
-    admin.password.length >= MIN_PASSWORD &&
-    admin.password === admin.confirm;
+  const [submitted, setSubmitted] = useState(false);
+  const usernameError = submitted && admin.username.trim() === '' ? 'Enter a username' : undefined;
 
   return (
     <form
+      noValidate
       onSubmit={(e) => {
         e.preventDefault();
+        setSubmitted(true);
+        if (admin.username.trim() === '' || !passwordValid(admin.password, admin.confirm)) {
+          focusFirstInvalidField(e.currentTarget);
+
+          return;
+        }
         onNext();
       }}
     >
@@ -262,32 +371,22 @@ function AdminStep({
           autoComplete="username"
           value={admin.username}
           onChange={(e) => onChange({ ...admin, username: e.currentTarget.value })}
-          required
+          {...(usernameError === undefined ? {} : { error: usernameError })}
+          withAsterisk
         />
-        <PasswordInput
+        <NewPasswordFields
           label="Password"
-          description={`At least ${MIN_PASSWORD} characters.`}
-          autoComplete="new-password"
-          value={admin.password}
-          onChange={(e) => onChange({ ...admin, password: e.currentTarget.value })}
-          {...(tooShort ? { error: `Use at least ${MIN_PASSWORD} characters` } : {})}
-          required
-        />
-        <PasswordInput
-          label="Confirm password"
-          autoComplete="new-password"
-          value={admin.confirm}
-          onChange={(e) => onChange({ ...admin, confirm: e.currentTarget.value })}
-          {...(mismatch ? { error: 'The passwords differ' } : {})}
-          required
+          password={admin.password}
+          onPasswordChange={(password) => onChange({ ...admin, password })}
+          confirm={admin.confirm}
+          onConfirmChange={(confirm) => onChange({ ...admin, confirm })}
+          submitted={submitted}
         />
         <Group position="apart">
           <Button variant="default" onClick={onBack}>
             Back
           </Button>
-          <Button type="submit" disabled={!valid}>
-            Continue
-          </Button>
+          <Button type="submit">Continue</Button>
         </Group>
       </Stack>
     </form>
@@ -307,6 +406,8 @@ export function SetupWizard() {
   const [admin, setAdmin] = useState({ username: 'admin', password: '', confirm: '' });
   const [finishing, setFinishing] = useState(false);
   const [failure, setFailure] = useState<{ message: string; issues: string[] } | null>(null);
+  const [tokenExpired, setTokenExpired] = useState(false);
+  const [methodsSubmitted, setMethodsSubmitted] = useState(false);
   const stage = status.data?.stage;
 
   useEffect(() => {
@@ -316,14 +417,28 @@ export function SetupWizard() {
     client.setup.verifyToken({ token }).catch(() => {
       setupToken.set(null);
       setToken(null);
+      setTokenExpired(true);
       setStep(0);
     });
   }, [token, stage]);
 
   if (status.isLoading || !status.data) {
     return (
-      <Center mih="100vh">
-        {status.error ? <Alert color="red">{errorMessage(status.error)}</Alert> : <Loader />}
+      <Center component="main" mih="100vh" p="md">
+        {status.error ? (
+          <Alert color="red" title="Couldn't reach the server" role="alert" maw={420}>
+            <Stack spacing="sm">
+              <Text size="sm">{errorMessage(status.error)}</Text>
+              <Group>
+                <Button size="xs" color="red" onClick={() => void status.refetch()}>
+                  Try again
+                </Button>
+              </Group>
+            </Stack>
+          </Alert>
+        ) : (
+          <Loader aria-label="Loading setup" />
+        )}
       </Center>
     );
   }
@@ -357,108 +472,124 @@ export function SetupWizard() {
     }
   };
   const authReady = status.data.stage === 'auth';
+  const methodProblems = methodsSubmitted ? methodsErrors(methods) : {};
 
   return (
-    <Center mih="100vh" p="md" style={{ background: 'var(--ct-paper)' }}>
-      <Stack w="100%" maw={720} miw={0} className="ct-panel" p="xl" spacing="lg">
-        <Group spacing="sm">
-          <BrandMark size={32} />
-          <div>
-            <Title order={3}>Set up Cloud Trigger</Title>
-            <Text size="sm" color="dimmed">
-              Choose where data lives, how people sign in, and create the first admin.
+    <AuthShell width={720}>
+      <Group spacing="sm" noWrap>
+        <BrandMark size={32} />
+        <div>
+          <Title order={1} size="h3">
+            Set up Cloud Trigger
+          </Title>
+          <Text size="sm" color="dimmed">
+            Choose where data lives, how people sign in, and create the first admin.
+          </Text>
+        </div>
+      </Group>
+      <Stepper active={step} breakpoint="sm" size="sm">
+        <Stepper.Step label="Setup token">
+          <TokenStep
+            expired={tokenExpired}
+            onVerified={(verified) => {
+              setupToken.set(verified);
+              setToken(verified);
+              setTokenExpired(false);
+              setStep(1);
+            }}
+          />
+        </Stepper.Step>
+        <Stepper.Step label="Database">
+          {token !== null && (
+            <DatabaseStep
+              status={status.data}
+              token={token}
+              onNext={() => setStep(2)}
+              onRecheck={async () => (await status.refetch()).data?.stage !== 'database'}
+            />
+          )}
+        </Stepper.Step>
+        <Stepper.Step label="Sign-in methods">
+          <Stack spacing="sm">
+            <SignInMethodsFields
+              value={methods}
+              onChange={setMethods}
+              errors={methodProblems}
+              testOidc={(issuer) =>
+                client.setup.testOidc({ issuer, ...(token !== null && { token }) })
+              }
+              localLocked
+            />
+            <Group position="apart">
+              <Button variant="default" onClick={() => setStep(1)}>
+                Back
+              </Button>
+              <Button
+                onClick={() => {
+                  setMethodsSubmitted(true);
+                  if (Object.keys(methodsErrors(methods)).length > 0) {
+                    focusFirstInvalidField();
+
+                    return;
+                  }
+                  setStep(3);
+                }}
+              >
+                Continue
+              </Button>
+            </Group>
+          </Stack>
+        </Stepper.Step>
+        <Stepper.Step label="Admin account">
+          <AdminStep
+            admin={admin}
+            onChange={setAdmin}
+            onBack={() => setStep(2)}
+            onNext={() => setStep(4)}
+          />
+        </Stepper.Step>
+        <Stepper.Step label="Review">
+          <Stack spacing="sm">
+            <Text size="sm">
+              Database: <b>{status.data.database.driver}</b>
             </Text>
-          </div>
-        </Group>
-        <Stepper active={step} breakpoint="sm" size="sm">
-          <Stepper.Step label="Setup token">
-            <TokenStep
-              onVerified={(verified) => {
-                setupToken.set(verified);
-                setToken(verified);
-                setStep(1);
-              }}
-            />
-          </Stepper.Step>
-          <Stepper.Step label="Database">
-            {token !== null && (
-              <DatabaseStep
-                status={status.data}
-                token={token}
-                onNext={() => setStep(2)}
-                onRecheck={() => void status.refetch()}
-              />
-            )}
-          </Stepper.Step>
-          <Stepper.Step label="Sign-in methods">
-            <Stack spacing="sm">
-              <SignInMethodsFields
-                value={methods}
-                onChange={setMethods}
-                testOidc={(issuer) =>
-                  client.setup.testOidc({ issuer, ...(token !== null && { token }) })
-                }
-                localLocked
-              />
-              <Group position="apart">
-                <Button variant="default" onClick={() => setStep(1)}>
-                  Back
-                </Button>
-                <Button onClick={() => setStep(3)}>Continue</Button>
-              </Group>
-            </Stack>
-          </Stepper.Step>
-          <Stepper.Step label="Admin account">
-            <AdminStep
-              admin={admin}
-              onChange={setAdmin}
-              onBack={() => setStep(2)}
-              onNext={() => setStep(4)}
-            />
-          </Stepper.Step>
-          <Stepper.Step label="Review">
-            <Stack spacing="sm">
-              <Text size="sm">
-                Database: <b>{status.data.database.driver}</b>
-              </Text>
-              <Text size="sm">
-                Sign-in: <b>password</b>
-                {methods.oidcEnabled && (
-                  <>
-                    , <b>SSO</b> via {methods.oidc.issuer}
-                  </>
-                )}
-                {methods.anonymousScopes.length > 0 && (
-                  <>
-                    , anonymous <b>{methods.anonymousScopes.join(', ')}</b>
-                  </>
-                )}
-              </Text>
-              <Text size="sm">
-                Admin: <b>{admin.username}</b>
-              </Text>
-              {failure && (
-                <Alert color="red" title="Setup failed">
-                  {failure.message}
-                  {failure.issues.map((issue) => (
-                    <Text key={issue} size="sm">
-                      {issue}
-                    </Text>
-                  ))}
-                </Alert>
+            <Text size="sm">
+              Sign-in: <b>password</b>
+              {methods.oidcEnabled && (
+                <>
+                  , <b>SSO</b> via {methods.oidc.issuer}
+                </>
               )}
-              <Group position="apart">
-                <Button variant="default" onClick={() => setStep(3)}>
-                  Back
-                </Button>
-                <Button onClick={() => void finish()} loading={finishing} disabled={!authReady}>
-                  Finish setup
-                </Button>
-              </Group>
-            </Stack>
-          </Stepper.Step>
-        </Stepper>
-      </Stack>
-    </Center>
+              {methods.anonymousScopes.length > 0 && (
+                <>
+                  , anonymous <b>{methods.anonymousScopes.join(', ')}</b>
+                </>
+              )}
+            </Text>
+            <Text size="sm">
+              Admin: <b>{admin.username}</b>
+            </Text>
+            {failure && (
+              <Alert color="red" title="Setup failed" role="alert">
+                {failure.message}
+                {failure.issues.map((issue) => (
+                  <Text key={issue} size="sm">
+                    {issue}
+                  </Text>
+                ))}
+              </Alert>
+            )}
+            <Group position="apart">
+              <Button variant="default" onClick={() => setStep(3)}>
+                Back
+              </Button>
+              <Button onClick={() => void finish()} loading={finishing} disabled={!authReady}>
+                Finish setup
+              </Button>
+            </Group>
+          </Stack>
+        </Stepper.Step>
+      </Stepper>
+    </AuthShell>
   );
 }

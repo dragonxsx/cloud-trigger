@@ -1,26 +1,75 @@
-import { Alert, Button, Group, PasswordInput, Stack, Text } from '@mantine/core';
+import { Alert, Badge, Button, Group, PasswordInput, Stack, Text, Title } from '@mantine/core';
 import { showNotification } from '@mantine/notifications';
-import { useGetIdentity } from '@refinedev/core';
 import { List } from '@refinedev/mantine';
 import { useState } from 'react';
 
+import { NewPasswordFields, passwordValid } from '../components/NewPasswordFields';
+import { PageHeading } from '../components/page-chrome';
+import {
+  type IdentityDto,
+  accessLevel,
+  levelColor,
+  levelDescription,
+  useIdentity,
+} from '../lib/access';
 import { client } from '../lib/api';
-import { errorMessage } from '../lib/errors';
+import { errorMessage, focusFirstInvalidField, isUnauthorized } from '../lib/errors';
 import { startPasswordSession } from '../providers/auth-provider';
 
-const MIN_PASSWORD = 12;
+const VIA_LABELS: Record<IdentityDto['via'], string> = {
+  local: 'a username and password',
+  oidc: 'single sign-on',
+  api_key: 'an API key',
+  anonymous: 'anonymous access',
+};
 
-export function AccountPage() {
-  const identity = useGetIdentity<{ name: string; via: string }>();
+function AccessSummary() {
+  const { identity } = useIdentity();
+  if (!identity) {
+    return null;
+  }
+  const level = accessLevel(identity.scopes);
+
+  return (
+    <Stack spacing="xs">
+      <Text size="sm">
+        Signed in as <b>{identity.name}</b> with {VIA_LABELS[identity.via]}.
+      </Text>
+      <Group spacing="xs">
+        <Text size="sm" weight={500}>
+          Access:
+        </Text>
+        <Badge size="sm" variant="filled" color={levelColor(identity.scopes)} tt="none">
+          {level}
+        </Badge>
+      </Group>
+      <Text size="sm" color="dimmed">
+        {levelDescription(identity.scopes)}
+      </Text>
+    </Stack>
+  );
+}
+
+function ChangePasswordForm() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [currentError, setCurrentError] = useState<string | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const local = identity.data?.via === 'local';
-  const submit = async () => {
+  const currentProblem =
+    currentError ?? (submitted && current === '' ? 'Enter your current password' : undefined);
+  const submit = async (form: HTMLFormElement) => {
+    setSubmitted(true);
+    setCurrentError(null);
+    setFailure(null);
+    if (current === '' || !passwordValid(next, confirm)) {
+      focusFirstInvalidField(form);
+
+      return;
+    }
     setSaving(true);
-    setError(null);
     try {
       startPasswordSession(
         await client.auth.changePassword({ currentPassword: current, newPassword: next }),
@@ -28,72 +77,86 @@ export function AccountPage() {
       setCurrent('');
       setNext('');
       setConfirm('');
+      setSubmitted(false);
       showNotification({
         color: 'teal',
         title: 'Password changed',
-        message: 'Your other sessions were signed out',
+        message: 'Your other sessions were signed out.',
       });
-    } catch (failure: unknown) {
-      setError(errorMessage(failure));
+    } catch (error: unknown) {
+      if (isUnauthorized(error)) {
+        setCurrentError(errorMessage(error));
+        focusFirstInvalidField(form);
+      } else {
+        setFailure(errorMessage(error));
+      }
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <List title="Your account" canCreate={false}>
-      <Stack spacing="md" maw={420}>
-        <Text size="sm">
-          Signed in as <b>{identity.data?.name}</b>
-        </Text>
-        {!local ? (
-          <Alert color="gray">
-            You signed in with SSO or an API key, so there is no password to change here.
+    <form
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit(e.currentTarget);
+      }}
+    >
+      <Stack spacing="sm">
+        <Title order={3} size="h4">
+          Change password
+        </Title>
+        <PasswordInput
+          label="Current password"
+          autoComplete="current-password"
+          toggleTabIndex={0}
+          value={current}
+          onChange={(e) => {
+            setCurrentError(null);
+            setCurrent(e.currentTarget.value);
+          }}
+          {...(currentProblem === undefined ? {} : { error: currentProblem })}
+          withAsterisk
+        />
+        <NewPasswordFields
+          password={next}
+          onPasswordChange={setNext}
+          confirm={confirm}
+          onConfirmChange={setConfirm}
+          submitted={submitted}
+        />
+        {failure && (
+          <Alert color="red" title="Password not changed" role="alert">
+            {failure}
           </Alert>
-        ) : (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-          >
-            <Stack spacing="sm">
-              <PasswordInput
-                label="Current password"
-                autoComplete="current-password"
-                value={current}
-                onChange={(e) => setCurrent(e.currentTarget.value)}
-                {...(error ? { error } : {})}
-                required
-              />
-              <PasswordInput
-                label="New password"
-                description={`At least ${MIN_PASSWORD} characters.`}
-                autoComplete="new-password"
-                value={next}
-                onChange={(e) => setNext(e.currentTarget.value)}
-                required
-              />
-              <PasswordInput
-                label="Confirm new password"
-                autoComplete="new-password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.currentTarget.value)}
-                {...(confirm && confirm !== next ? { error: 'The passwords differ' } : {})}
-                required
-              />
-              <Group position="right">
-                <Button
-                  type="submit"
-                  loading={saving}
-                  disabled={!current || next.length < MIN_PASSWORD || next !== confirm}
-                >
-                  Change password
-                </Button>
-              </Group>
-            </Stack>
-          </form>
         )}
+        <Group position="right">
+          <Button type="submit" loading={saving}>
+            Change password
+          </Button>
+        </Group>
+      </Stack>
+    </form>
+  );
+}
+
+export function AccountPage() {
+  const { identity } = useIdentity();
+  const local = identity?.via === 'local';
+
+  return (
+    <List title={<PageHeading>Your account</PageHeading>} canCreate={false}>
+      <Stack spacing="xl" maw={520}>
+        <AccessSummary />
+        {identity &&
+          (local ? (
+            <ChangePasswordForm />
+          ) : (
+            <Alert color="gray">
+              You signed in with {VIA_LABELS[identity.via]}, so there is no password to change here.
+            </Alert>
+          ))}
       </Stack>
     </List>
   );
