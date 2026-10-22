@@ -18,7 +18,7 @@ Self-hosted service that triggers remote endpoints on a schedule and records eve
   - SLAs (start delay, duration, time since last success) that flag runs and jobs as late.
   - Idempotent backfill of past fire times.
 - **Workflows:** DAGs of jobs, with edges conditioned on success, failure or any outcome, inline steps, approval gates with timeouts (approve or reject through the API or UI), optional schedules, and a live graph view.
-- **Notifications:** webhook (signed, with an `Idempotency-Key` header), Slack and email on success, failure, permanent failure or late. Delivery goes through a retried Mongo outbox.
+- **Notifications:** webhook (signed, with an `Idempotency-Key` header), Slack and email on success, failure, permanent failure or late. Delivery goes through a retried outbox.
 - **Operations:** OpenTelemetry tracing (a span per run attempt, with `traceparent` forwarded to every target), run history, live updates over SSE, a dashboard (outcomes, p50/p95 latency, late runs, top errors), a failed-runs inbox with bulk replay and dismiss, a "Why didn't it run?" explainer, YAML import and export (`/api/jobs/export`, admin scope), status badges (`/badges/jobs/<id>.svg`), an iCal feed of upcoming runs (`/calendar.ics`), Prometheus `/metrics`, and OpenAPI docs at `/docs`.
 - **MCP:** an MCP server at `/mcp` (Streamable HTTP, same API keys and OIDC scopes) lets AI agents list, create, run, pause and explain jobs, read runs and analytics, and approve workflow gates.
 - **Security:** sign-in is configured in the UI and stored in the database: username and password accounts (argon2), OIDC (the UI signs in with authorization code + PKCE) and hashed API keys, with `read`/`write`/`admin` scopes. Anonymous `read` access serves wallboards. A first-run wizard picks the database and creates the first admin. Secrets are referenced as `{{secret:NAME}}` and redacted in every response and export.
@@ -36,6 +36,7 @@ packages/providers-grpc      gRPC target (inline proto or reflection)
 packages/providers-aws       SQS / SNS / EventBridge targets · SQS consumer
 packages/providers-kafka     Kafka target and consumer
 packages/providers-nats      NATS target and JetStream consumer
+packages/openapi        OpenAPI 2.0–3.2 analysis for importing http connection endpoints
 packages/persistence-mongo   MongoDB adapter (repositories, lease queue, change streams, analytics)
 packages/persistence-sql     Shared SQL repositories (Drizzle sql templates, dialects, unit of work)
 packages/persistence-postgres  Postgres adapter (drizzle-kit migrations, SKIP LOCKED claims, LISTEN/NOTIFY)
@@ -111,6 +112,8 @@ Fields that providers mark secret (tokens, passwords, secret headers) and the se
 | `pnpm format`    | oxfmt formatter (also sorts imports)                                                           |
 
 Pinned exceptions to "latest": the web app uses `@refinedev/mantine`, which requires Mantine 5. That in turn means React 18 and React Router 7. Everything else tracks the latest releases; Renovate keeps them current.
+
+Before contributing, read [CONTRIBUTING.md](CONTRIBUTING.md). The rest of the docs are indexed in [docs/README.md](docs/README.md).
 
 ## License
 
