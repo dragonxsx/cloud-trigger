@@ -3,8 +3,10 @@ import { Badge, Group, Stack, Text, useMantineColorScheme } from '@mantine/core'
 import { IconUserCheck } from '@tabler/icons-react';
 import {
   Background,
+  BaseEdge,
   Controls,
   type Edge,
+  type EdgeProps,
   Handle,
   MarkerType,
   type Node,
@@ -19,18 +21,15 @@ import { useMemo } from 'react';
 
 import type { NodeStatusDto } from '../lib/api';
 import { countOf } from '../lib/format';
-
-interface GraphNode {
-  readonly key: string;
-  readonly label?: string | undefined;
-  readonly kind: 'job' | 'inline' | 'approval';
-}
-
-interface GraphEdge {
-  readonly from: string;
-  readonly to: string;
-  readonly on: 'succeeded' | 'failed' | 'any';
-}
+import {
+  type EdgeRoute,
+  type GraphEdge,
+  type GraphNode,
+  NODE_WIDTH,
+  edgeId,
+  layoutGraph,
+  routedPath,
+} from '../lib/graph-layout';
 
 interface Props {
   readonly nodes: readonly GraphNode[];
@@ -80,35 +79,6 @@ const EDGE_STYLE: Record<
 };
 
 const APPROVAL_COLOR = RUN_STATUS_STYLE.timed_out.color;
-const COLUMN_WIDTH = 340;
-const ROW_HEIGHT = 110;
-
-export function layeredLayout(
-  keys: readonly string[],
-  edges: readonly GraphEdge[],
-): Map<string, { x: number; y: number }> {
-  const depth = new Map(keys.map((key) => [key, 0]));
-  for (let pass = 0; pass < keys.length; pass++) {
-    for (const edge of edges) {
-      const next = (depth.get(edge.from) ?? 0) + 1;
-      if (next > (depth.get(edge.to) ?? 0)) {
-        depth.set(edge.to, next);
-      }
-    }
-  }
-  const rows = new Map<number, number>();
-
-  return new Map(
-    keys.map((key) => {
-      const column = depth.get(key) ?? 0;
-      const row = rows.get(column) ?? 0;
-      rows.set(column, row + 1);
-
-      return [key, { x: column * COLUMN_WIDTH, y: row * ROW_HEIGHT }];
-    }),
-  );
-}
-
 export function NodeStatusBadge({ status }: { status: NodeStatusDto }) {
   const style = NODE_STATUS[status];
 
@@ -161,7 +131,7 @@ function StepNodeView({ data }: NodeProps<StepNode>) {
   return (
     <div
       style={{
-        width: 190,
+        width: NODE_WIDTH,
         padding: '8px 10px',
         textAlign: 'left',
         color: 'var(--ct-ink)',
@@ -213,6 +183,38 @@ function StepNodeView({ data }: NodeProps<StepNode>) {
 
 const NODE_TYPES = { step: StepNodeView };
 
+type RoutedEdge = Edge<EdgeRoute & { readonly text: string }, 'routed'>;
+
+function RoutedEdgeView({
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  data,
+  markerEnd,
+  style,
+}: EdgeProps<RoutedEdge>) {
+  const path = routedPath({ x: sourceX, y: sourceY }, data?.bends ?? [], {
+    x: targetX,
+    y: targetY,
+  });
+
+  return (
+    <BaseEdge
+      path={path}
+      {...(markerEnd !== undefined && { markerEnd })}
+      {...(style !== undefined && { style })}
+      {...(data !== undefined && { label: data.text, labelX: data.label.x, labelY: data.label.y })}
+      labelStyle={{ fill: 'var(--ct-ink)', fontSize: 12 }}
+      labelBgStyle={{ fill: 'var(--ct-surface)' }}
+      labelBgPadding={[4, 2]}
+      labelBgBorderRadius={4}
+    />
+  );
+}
+
+const EDGE_TYPES = { routed: RoutedEdgeView };
+
 function EdgeLegend({ edges }: { edges: readonly GraphEdge[] }) {
   const present = (['succeeded', 'failed', 'any'] as const).filter((on) =>
     edges.some((edge) => edge.on === on),
@@ -249,43 +251,39 @@ export function WorkflowGraph({ nodes, edges, statuses, onNodeClick }: Props) {
   const { colorScheme } = useMantineColorScheme();
   const clickable = onNodeClick !== undefined;
   const flow = useMemo(() => {
-    const positions = layeredLayout(
-      nodes.map((node) => node.key),
-      edges,
-    );
+    const layout = layoutGraph(nodes, edges, statuses);
     const flowNodes: StepNode[] = nodes.map((node) => ({
       id: node.key,
       type: 'step',
-      position: positions.get(node.key) ?? { x: 0, y: 0 },
+      position: layout.positions.get(node.key) ?? { x: 0, y: 0 },
       data: { node, status: statuses?.[node.key] },
       style: { cursor: clickable ? 'pointer' : 'default' },
     }));
-    const flowEdges: Edge[] = edges.map((edge, index) => {
+    const flowEdges: RoutedEdge[] = edges.flatMap((edge, index) => {
+      const id = edgeId(edge, index);
+      const route = layout.routes.get(id);
+      if (route === undefined) {
+        return [];
+      }
       const style = EDGE_STYLE[edge.on];
 
-      return {
-        id: `${edge.from}->${edge.to}:${edge.on}:${String(index)}`,
-        source: edge.from,
-        target: edge.to,
-        label: style.label,
-        labelStyle: { fill: 'var(--ct-ink)', fontSize: 12 },
-        labelBgStyle: { fill: 'var(--ct-surface)' },
-        labelBgPadding: [4, 2],
-        labelBgBorderRadius: 4,
-        markerEnd: { type: MarkerType.ArrowClosed, color: style.color },
-        style: {
-          stroke: style.color,
-          strokeWidth: 2,
-          ...(style.dash !== undefined && { strokeDasharray: style.dash }),
+      return [
+        {
+          id,
+          type: 'routed',
+          source: edge.from,
+          target: edge.to,
+          data: { ...route, text: style.label },
+          markerEnd: { type: MarkerType.ArrowClosed, color: style.color },
+          style: {
+            stroke: style.color,
+            strokeWidth: 2,
+            ...(style.dash !== undefined && { strokeDasharray: style.dash }),
+          },
         },
-      };
+      ];
     });
-    const rowsPerColumn = new Map<number, number>();
-    for (const position of positions.values()) {
-      rowsPerColumn.set(position.x, (rowsPerColumn.get(position.x) ?? 0) + 1);
-    }
-    const tallest = Math.max(1, ...rowsPerColumn.values());
-    const height = Math.min(480, Math.max(200, tallest * ROW_HEIGHT + 90));
+    const height = Math.min(480, Math.max(200, layout.height + 90));
     const shape = [
       nodes.map((node) => node.key).join(','),
       edges.map((edge) => `${edge.from}>${edge.to}`).join(','),
@@ -303,6 +301,7 @@ export function WorkflowGraph({ nodes, edges, statuses, onNodeClick }: Props) {
             nodes={flow.flowNodes}
             edges={flow.flowEdges}
             nodeTypes={NODE_TYPES}
+            edgeTypes={EDGE_TYPES}
             colorMode={colorScheme}
             fitView
             fitViewOptions={{ padding: 0.2, minZoom: 0.8, maxZoom: 1.1 }}
