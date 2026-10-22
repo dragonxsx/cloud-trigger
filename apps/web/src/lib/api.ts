@@ -4,6 +4,7 @@ import { ClientRetryPlugin, type ClientRetryPluginContext } from '@orpc/client/p
 import type { ContractRouterClient } from '@orpc/contract';
 import type { JsonifiedClient } from '@orpc/openapi-client';
 import { OpenAPILink } from '@orpc/openapi-client/fetch';
+import { createTanstackQueryUtils } from '@orpc/tanstack-query';
 
 import { accessToken } from './oidc';
 import { passwordSession } from './session';
@@ -33,6 +34,8 @@ const link = new OpenAPILink<ClientRetryPluginContext>(contract, {
 });
 
 export const client: ApiClient = createORPCClient(link);
+
+export const orpc = createTanstackQueryUtils(client);
 
 type Out<F extends (...args: never[]) => Promise<unknown>> = Awaited<ReturnType<F>>;
 export type JobDto = Out<ApiClient['jobs']['get']>;

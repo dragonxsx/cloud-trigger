@@ -31,7 +31,7 @@ import { NotFoundPage, PageLoader } from './components/PageState';
 import { RequireAccess } from './components/RequireAccess';
 import { UnauthorizedWatcher } from './components/UnauthorizedWatcher';
 import { APP_TITLE, pageTitle } from './components/usePageTitle';
-import { client } from './lib/api';
+import { orpc } from './lib/api';
 import {
   type ColorScheme,
   type ColorSchemePreference,
@@ -81,12 +81,9 @@ const AccountPage = lazyNamed(() => import('./pages/Account'), 'AccountPage');
 const liveProvider = createSharedRunStreamLiveProvider();
 
 function SetupGate() {
-  const status = useQuery({
-    queryKey: ['setup', 'status'],
-    queryFn: () => client.setup.status({}),
-    staleTime: Infinity,
-    retry: false,
-  });
+  const status = useQuery(
+    orpc.setup.status.queryOptions({ input: {}, staleTime: Infinity, retry: false }),
+  );
   if (status.isLoading) {
     return <PageLoader />;
   }

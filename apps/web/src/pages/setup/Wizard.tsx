@@ -28,7 +28,7 @@ import {
   methodsErrors,
   toAuthMethods,
 } from '../../components/SignInMethods';
-import { type SetupStatusDto, client } from '../../lib/api';
+import { type SetupStatusDto, client, orpc } from '../../lib/api';
 import { configIssues, errorMessage, focusFirstInvalidField } from '../../lib/errors';
 import { resetAuthConfig } from '../../lib/oidc';
 import { setupToken } from '../../lib/session';
@@ -394,16 +394,11 @@ function AdminStep({
   );
 }
 
-const SETUP_STATUS_KEY = ['setup', 'status'] as const;
-
 export function SetupWizard() {
   const go = useGo();
   const queryClient = useQueryClient();
   const invalidateAuthStore = useInvalidateAuthStore();
-  const status = useQuery({
-    queryKey: SETUP_STATUS_KEY,
-    queryFn: () => client.setup.status({}),
-  });
+  const status = useQuery(orpc.setup.status.queryOptions({ input: {} }));
   const [token, setToken] = useState<string | null>(() => setupToken.get());
   const [step, setStep] = useState(token === null ? 0 : 1);
   const [methods, setMethods] = useState(blankMethods);
@@ -467,7 +462,7 @@ export function SetupWizard() {
       resetAuthConfig();
       await Promise.all([
         invalidateAuthStore(),
-        queryClient.invalidateQueries({ queryKey: SETUP_STATUS_KEY }),
+        queryClient.invalidateQueries({ queryKey: orpc.setup.status.key() }),
       ]);
       go({ to: '/', type: 'replace' });
     } catch (error: unknown) {

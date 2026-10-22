@@ -15,7 +15,7 @@ import { IconHelpCircle } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
-import { type ApiClient, type JobDto, client } from '../lib/api';
+import { type ApiClient, type JobDto, orpc } from '../lib/api';
 import { errorMessage } from '../lib/errors';
 import { dateTime } from '../lib/format';
 
@@ -40,19 +40,20 @@ const localizeNarrative = (line: string): string =>
 export function ExplainPanel({ job }: { job: JobDto }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const explanation = useQuery({
-    queryKey: [
-      'jobs',
-      job.id,
-      'explain',
-      job.version,
-      job.updatedAt,
-      job.enabled,
-      job.pausedReason,
-    ],
-    queryFn: () => client.jobs.explain({ id: job.id }),
-    enabled: open,
-  });
+  const input = { id: job.id };
+  const explanation = useQuery(
+    orpc.jobs.explain.queryOptions({
+      input,
+      queryKey: [
+        ...orpc.jobs.explain.queryKey({ input }),
+        job.version,
+        job.updatedAt,
+        job.enabled,
+        job.pausedReason,
+      ],
+      enabled: open,
+    }),
+  );
   const data = explanation.data;
 
   return (

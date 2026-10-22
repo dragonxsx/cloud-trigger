@@ -26,7 +26,7 @@ import { EnvironmentSelect } from '../../components/EnvironmentSelect';
 import { NotificationRulesEditor } from '../../components/NotificationRulesEditor';
 import { PolicyFields } from '../../components/PolicyFields';
 import { ProviderConfigForm } from '../../components/ProviderConfigForm';
-import { type JobCreateInput, type JobDto, type ProviderDto, client } from '../../lib/api';
+import { type JobCreateInput, type JobDto, type ProviderDto, orpc } from '../../lib/api';
 import {
   type ConfigIssueDto,
   configIssues,
@@ -185,11 +185,7 @@ const triggerIssues = (issues: readonly ConfigIssueDto[]): ConfigIssueDto[] =>
 function useSchedulePreview(spec: JobCreateInput) {
   const [debounced] = useDebouncedValue(withPlaceholderName(spec), 400);
 
-  return useQuery({
-    queryKey: ['jobs', 'validate', debounced],
-    queryFn: () => client.jobs.validate(debounced),
-    retry: false,
-  });
+  return useQuery(orpc.jobs.validate.queryOptions({ input: debounced, retry: false }));
 }
 
 type SchedulePreviewQuery = ReturnType<typeof useSchedulePreview>;

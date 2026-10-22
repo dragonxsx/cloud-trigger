@@ -1,7 +1,7 @@
 import { Badge, ScrollArea, Stack, Table, Text, Tooltip } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 
-import { type ApiClient, type RunDto, client } from '../lib/api';
+import { type ApiClient, type RunDto, orpc } from '../lib/api';
 import { errorMessage } from '../lib/errors';
 import { dateTime, fromNow } from '../lib/format';
 
@@ -22,12 +22,15 @@ const EVENT_LABEL: Record<DeliveryDto['event'], string> = {
 };
 
 export function RunNotifications({ run }: { run: RunDto }) {
-  const deliveries = useQuery({
-    queryKey: ['runs', run.id, 'notifications', run.updatedAt],
-    queryFn: () => client.runs.notifications({ id: run.id }),
-    refetchInterval: (q) =>
-      q.state.data?.some((d) => d.status === 'pending' || d.status === 'sending') ? 3_000 : false,
-  });
+  const input = { id: run.id };
+  const deliveries = useQuery(
+    orpc.runs.notifications.queryOptions({
+      input,
+      queryKey: [...orpc.runs.notifications.queryKey({ input }), run.updatedAt],
+      refetchInterval: (q) =>
+        q.state.data?.some((d) => d.status === 'pending' || d.status === 'sending') ? 3_000 : false,
+    }),
+  );
   const rows = deliveries.data ?? [];
 
   return (

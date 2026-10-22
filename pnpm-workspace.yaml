@@ -10,11 +10,29 @@ allowBuilds:
   protobufjs: false
 minimumReleaseAgeExclude:
   - "@scalar/json-magic@0.16.1"
+  - "@orpc/client@1.16.0"
+  - "@orpc/contract@1.16.0"
+  - "@orpc/interop@1.16.0"
+  - "@orpc/json-schema@1.16.0"
+  - "@orpc/nest@1.16.0"
+  - "@orpc/openapi-client@1.16.0"
+  - "@orpc/openapi@1.16.0"
+  - "@orpc/server@1.16.0"
+  - "@orpc/shared@1.16.0"
+  - "@orpc/standard-server-aws-lambda@1.16.0"
+  - "@orpc/standard-server-fastify@1.16.0"
+  - "@orpc/standard-server-fetch@1.16.0"
+  - "@orpc/standard-server-node@1.16.0"
+  - "@orpc/standard-server-peer@1.16.0"
+  - "@orpc/standard-server@1.16.0"
+  - "@orpc/tanstack-query@1.16.0"
+  - "@orpc/zod@1.16.0"
 catalogMode: prefer
 catalog:
-  "@orpc/client": 1.15.7
-  "@orpc/contract": 1.15.7
-  "@orpc/openapi-client": 1.15.7
+  "@orpc/client": 1.16.0
+  "@orpc/contract": 1.16.0
+  "@orpc/openapi-client": 1.16.0
+  "@orpc/tanstack-query": 1.16.0
   "@testcontainers/mongodb": 12.2.1
   "@testcontainers/postgresql": 12.2.1
   "@types/node": 24.19.2

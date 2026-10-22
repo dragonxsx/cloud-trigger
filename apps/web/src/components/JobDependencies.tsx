@@ -3,7 +3,7 @@ import { IconArrowDownRight, IconArrowUpRight } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router';
 
-import { type ApiClient, type JobDto, client } from '../lib/api';
+import { type ApiClient, type JobDto, orpc } from '../lib/api';
 
 type Summary = Awaited<ReturnType<ApiClient['jobs']['dependencies']>>['upstream'][number];
 
@@ -29,10 +29,13 @@ function JobLinks({ jobs, empty }: { jobs: readonly Summary[]; empty: string }) 
 }
 
 export function JobDependencies({ job }: { job: JobDto }) {
-  const deps = useQuery({
-    queryKey: ['jobs', job.id, 'dependencies', job.version],
-    queryFn: () => client.jobs.dependencies({ id: job.id }),
-  });
+  const input = { id: job.id };
+  const deps = useQuery(
+    orpc.jobs.dependencies.queryOptions({
+      input,
+      queryKey: [...orpc.jobs.dependencies.queryKey({ input }), job.version],
+    }),
+  );
   const upstream = deps.data?.upstream ?? [];
   const downstream = deps.data?.downstream ?? [];
   if (upstream.length === 0 && downstream.length === 0) {

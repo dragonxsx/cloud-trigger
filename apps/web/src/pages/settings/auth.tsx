@@ -18,11 +18,9 @@ import {
   toAuthMethods,
 } from '../../components/SignInMethods';
 import { topScope } from '../../lib/access';
-import { type AuthSettingsDto, client } from '../../lib/api';
+import { type AuthSettingsDto, client, orpc } from '../../lib/api';
 import { configIssues, errorMessage, focusFirstInvalidField, notifyError } from '../../lib/errors';
 import { resetAuthConfig } from '../../lib/oidc';
-
-const SETTINGS_KEY = ['auth-settings'];
 
 function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
   const queryClient = useQueryClient();
@@ -55,7 +53,7 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
     form.setValues(values);
     form.resetDirty(values);
     setWarnWhen(false);
-    queryClient.setQueryData(SETTINGS_KEY, next);
+    queryClient.setQueryData(orpc.authSettings.get.queryKey({ input: {} }), next);
     resetAuthConfig();
     void queryClient.invalidateQueries({ queryKey: ['auth', 'config'] });
   };
@@ -198,10 +196,7 @@ function SettingsForm({ settings }: { settings: AuthSettingsDto }) {
 }
 
 export function AuthSettingsPage() {
-  const settings = useQuery({
-    queryKey: SETTINGS_KEY,
-    queryFn: () => client.authSettings.get({}),
-  });
+  const settings = useQuery(orpc.authSettings.get.queryOptions({ input: {} }));
 
   return (
     <List

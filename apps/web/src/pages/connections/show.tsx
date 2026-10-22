@@ -9,7 +9,7 @@ import { Link } from 'react-router';
 import { PageHeading, backIcon, pageBreadcrumb } from '../../components/page-chrome';
 import { RecordLoadError } from '../../components/PageState';
 import { usePageTitle } from '../../components/usePageTitle';
-import { type ConnectionDto, type ConnectionUsagesDto, client } from '../../lib/api';
+import { type ConnectionDto, type ConnectionUsagesDto, orpc } from '../../lib/api';
 import { environmentLabel, useEnvironments } from '../../lib/environments';
 import { countOf } from '../../lib/format';
 import { ConnectionTestButton } from './form';
@@ -108,10 +108,9 @@ export function ConnectionShow() {
   const title = connection ? connection.name || connection.key : undefined;
   usePageTitle(title, 'Connections');
   const key = connection?.key;
-  const usages = useQuery({
-    queryKey: ['connections', 'usages', key],
-    queryFn: key === undefined ? skipToken : () => client.connections.usages({ key }),
-  });
+  const usages = useQuery(
+    orpc.connections.usages.queryOptions({ input: key === undefined ? skipToken : { key } }),
+  );
 
   if (query.isError) {
     return (

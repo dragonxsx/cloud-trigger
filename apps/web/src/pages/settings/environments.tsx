@@ -26,8 +26,8 @@ import type { ChangeEvent } from 'react';
 import { confirmAction } from '../../components/confirm';
 import { PageHeading, pageBreadcrumb } from '../../components/page-chrome';
 import { LoadError } from '../../components/PageState';
-import type { EnvironmentDto } from '../../lib/api';
-import { ENVIRONMENTS_KEY, environmentLabel } from '../../lib/environments';
+import { type EnvironmentDto, orpc } from '../../lib/api';
+import { environmentLabel } from '../../lib/environments';
 import { focusFirstInvalidField } from '../../lib/errors';
 import { unfieldedError } from './form-errors';
 
@@ -174,7 +174,8 @@ function useEnvironmentForm(action: 'create' | 'edit'): EnvironmentForm {
                 description: `${environmentLabel(saved)} was updated.`,
               };
       },
-      onMutationSuccess: () => void queryClient.invalidateQueries({ queryKey: ENVIRONMENTS_KEY }),
+      onMutationSuccess: () =>
+        void queryClient.invalidateQueries({ queryKey: orpc.environments.key() }),
     },
   });
 }
@@ -217,7 +218,9 @@ export function EnvironmentList() {
           description: error?.message ?? 'Something went wrong',
         }),
       },
-      { onSuccess: () => void queryClient.invalidateQueries({ queryKey: ENVIRONMENTS_KEY }) },
+      {
+        onSuccess: () => void queryClient.invalidateQueries({ queryKey: orpc.environments.key() }),
+      },
     );
   const editingKey = editForm.refineCore.id;
 

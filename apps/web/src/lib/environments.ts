@@ -1,8 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 
-import { type EnvironmentDto, client } from './api';
-
-export const ENVIRONMENTS_KEY = ['environments'];
+import { type EnvironmentDto, client, orpc } from './api';
 
 export async function listAllEnvironments(cursor?: string): Promise<EnvironmentDto[]> {
   const page = await client.environments.list({
@@ -26,7 +24,7 @@ export const environmentLabel = (environment: Pick<EnvironmentDto, 'key' | 'name
 
 export function useEnvironments() {
   return useQuery({
-    queryKey: ENVIRONMENTS_KEY,
+    queryKey: orpc.environments.list.key({ type: 'query' }),
     queryFn: () => listAllEnvironments(),
     staleTime: 60_000,
   });

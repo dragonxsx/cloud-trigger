@@ -21,7 +21,7 @@ import { NextFire, useNow } from '../components/NextFire';
 import { LoadError } from '../components/PageState';
 import { errorCodeText } from '../components/RunsTable';
 import { useLiveAnalyticsRefresh } from '../components/useLiveAnalyticsRefresh';
-import { type JobDto, client } from '../lib/api';
+import { type JobDto, client, orpc } from '../lib/api';
 import { duration, percent } from '../lib/format';
 import { STATUS } from '../lib/status';
 
@@ -126,13 +126,13 @@ export function Dashboard() {
   };
 
   const summary = useQuery({
-    queryKey: ['analytics', 'summary', range],
+    queryKey: [...orpc.analytics.summary.key({ type: 'query' }), range],
     queryFn: () => client.analytics.summary(windowFor(range)),
     refetchInterval: REFRESH_MS,
     placeholderData: keepPreviousData,
   });
   const series = useQuery({
-    queryKey: ['analytics', 'timeseries', range],
+    queryKey: [...orpc.analytics.timeseries.key({ type: 'query' }), range],
     queryFn: async () => {
       const span = windowFor(range);
       const points = await client.analytics.timeseries({ ...span, bucket: RANGES[range].bucket });
@@ -143,7 +143,7 @@ export function Dashboard() {
     placeholderData: keepPreviousData,
   });
   const errors = useQuery({
-    queryKey: ['analytics', 'errors', range],
+    queryKey: [...orpc.analytics.topErrors.key({ type: 'query' }), range],
     queryFn: () => client.analytics.topErrors({ ...windowFor(range), limit: 8 }),
     refetchInterval: REFRESH_MS,
     placeholderData: keepPreviousData,

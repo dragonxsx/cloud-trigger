@@ -55,7 +55,7 @@ import { RunsTable } from '../../components/RunsTable';
 import { copyWithFallback } from '../../components/ShareButtons';
 import { useLiveAnalyticsRefresh } from '../../components/useLiveAnalyticsRefresh';
 import { usePageTitle } from '../../components/usePageTitle';
-import { type JobDto, type RunDto, client } from '../../lib/api';
+import { type JobDto, type RunDto, client, orpc } from '../../lib/api';
 import { errorMessage, notifyError } from '../../lib/errors';
 import { dateTime, dateTimeWithLocal, duration, fromNow, percent } from '../../lib/format';
 import { useGroupsById } from '../../lib/groups';
@@ -100,8 +100,12 @@ function useJobRefresh(job: JobDto) {
     Promise.all([
       invalidate({ resource: 'jobs', invalidates: ['detail', 'list'], id: job.id }),
       invalidate({ resource: 'runs', invalidates: ['list'] }),
-      queryClient.invalidateQueries({ queryKey: ['analytics'] }),
-      queryClient.invalidateQueries({ queryKey: ['jobs', job.id] }),
+      queryClient.invalidateQueries({ queryKey: orpc.analytics.key() }),
+      queryClient.invalidateQueries({ queryKey: orpc.jobs.explain.key({ input: { id: job.id } }) }),
+      queryClient.invalidateQueries({
+        queryKey: orpc.jobs.dependencies.key({ input: { id: job.id } }),
+      }),
+      queryClient.invalidateQueries({ queryKey: orpc.jobs.validate.key() }),
     ]);
 }
 
@@ -291,7 +295,7 @@ const lastWeek = (jobId: string) => ({
 
 function useSchedulePreview(job: JobDto) {
   return useQuery({
-    queryKey: ['jobs', 'validate', job.id, job.version],
+    queryKey: [...orpc.jobs.validate.key({ type: 'query' }), job.id, job.version],
     queryFn: () => client.jobs.validate(toSpec(job)),
     retry: false,
   });
@@ -319,7 +323,7 @@ function NextRun({ job }: { job: JobDto }) {
 
 function JobOverview({ job, description }: { job: JobDto; description: string | undefined }) {
   const summary = useQuery({
-    queryKey: ['analytics', 'summary', job.id],
+    queryKey: [...orpc.analytics.summary.key({ type: 'query' }), job.id],
     queryFn: () => client.analytics.summary(lastWeek(job.id)),
   });
   const s = summary.data;
@@ -396,7 +400,7 @@ function UpcomingRuns({ job, times }: { job: JobDto; times: readonly string[] })
 
 function RunsChart({ job }: { job: JobDto }) {
   const series = useQuery({
-    queryKey: ['analytics', 'series', job.id],
+    queryKey: [...orpc.analytics.timeseries.key({ type: 'query' }), job.id],
     queryFn: () => client.analytics.timeseries({ ...lastWeek(job.id), bucket: 'hour' }),
   });
   const points = series.data ?? [];

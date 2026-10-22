@@ -2,6 +2,8 @@ import { useSubscription } from '@refinedev/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 
+import { orpc } from '../lib/api';
+
 export function useLiveAnalyticsRefresh(intervalMs: number): void {
   const queryClient = useQueryClient();
   const last = useRef(0);
@@ -18,7 +20,7 @@ export function useLiveAnalyticsRefresh(intervalMs: number): void {
       timer.current = window.setTimeout(() => {
         timer.current = undefined;
         last.current = Date.now();
-        void queryClient.invalidateQueries({ queryKey: ['analytics'] });
+        void queryClient.invalidateQueries({ queryKey: orpc.analytics.key() });
       }, wait);
     },
   });
