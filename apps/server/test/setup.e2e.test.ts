@@ -1,69 +1,37 @@
 import 'reflect-metadata';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { Server, createServer } from 'node:http';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { type Server, createServer } from 'node:http';
 
-import { type Contract, contract } from '@cloud-trigger/api-contract';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { createORPCClient, safe } from '@orpc/client';
-import type { ContractRouterClient } from '@orpc/contract';
-import type { JsonifiedClient } from '@orpc/openapi-client';
-import { OpenAPILink } from '@orpc/openapi-client/fetch';
 import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 import { pino } from 'pino';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { z } from 'zod';
 
 import { loadConfig } from '../src/config/config.js';
 import { SetupAppModule } from '../src/setup-app.module.js';
-import { createTestApp, TEST_ENCRYPTION_KEY } from './support/app.js';
-
-type Client = JsonifiedClient<ContractRouterClient<Contract>>;
+import {
+  createTestApp,
+  listen,
+  listenNest,
+  TEST_ENCRYPTION_KEY,
+  testConfig,
+} from './support/app.js';
+import { type Client, createClient, errorCode } from './support/client.js';
+import { tempSqlite } from './support/databases.js';
 
 const TOKEN = 'setup-token-for-tests';
 const PASSWORD = 'correct horse battery';
-const dir = mkdtempSync(join(tmpdir(), 'ct-setup-'));
+const sqlite = tempSqlite('setup');
 let app: INestApplication;
 let baseUrl = '';
 let issuerServer: Server;
 let issuer = '';
 let signToken: (claims: Record<string, unknown>) => Promise<string>;
-
-interface Listenable {
-  listen(port: number, host: string, cb: () => void): unknown;
-  address(): ReturnType<Server['address']>;
-}
-
-const listen = async (server: Listenable): Promise<string> => {
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (address === null || typeof address === 'string') {
-    throw new Error('tcp');
-  }
-
-  return `http://127.0.0.1:${address.port}`;
-};
-
-const listenNest = async (nest: INestApplication): Promise<string> => {
-  const http: unknown = nest.getHttpServer();
-  if (!(http instanceof Server)) {
-    throw new Error('Expected a node:http server');
-  }
-
-  return listen(http);
-};
+let rootToken = '';
 
 const client = (headers: Record<string, string> = {}, url = baseUrl): Client =>
-  createORPCClient(new OpenAPILink(contract, { url, headers }));
+  createClient(url, headers);
 const bearer = (token: string) => client({ authorization: `Bearer ${token}` });
-const ErrorCode = z.object({ code: z.string() });
-const errorCode = async (call: Promise<unknown>) => {
-  const { error } = await safe(call);
-
-  return ErrorCode.safeParse(error).data?.code ?? error;
-};
 
 beforeAll(async () => {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
@@ -86,22 +54,17 @@ beforeAll(async () => {
       .setExpirationTime('5m')
       .sign(privateKey);
 
-  const config = loadConfig({
-    DATA_ENCRYPTION_KEY: TEST_ENCRYPTION_KEY,
-    DB_DRIVER: 'sqlite',
-    SQLITE_PATH: join(dir, 'setup.db'),
-    SETUP_TOKEN: TOKEN,
-    WORKER_POLL_MS: '100',
-  });
-  ({ app } = await createTestApp(config, { auth: false }));
+  ({ app } = await createTestApp(testConfig({ ...sqlite.env, SETUP_TOKEN: TOKEN }), {
+    auth: false,
+  }));
   await app.init();
   baseUrl = await listenNest(app);
-}, 60_000);
+});
 
 afterAll(async () => {
   await app.close();
   await new Promise<void>((resolve) => issuerServer.close(() => resolve()));
-  rmSync(dir, { recursive: true, force: true });
+  sqlite.cleanup();
 });
 
 describe('first-run setup', () => {
@@ -118,7 +81,7 @@ describe('first-run setup', () => {
   });
 
   it('tests a database connection and returns the env snippet', async () => {
-    const path = join(dir, 'probe.db');
+    const path = sqlite.path('probe.db');
     expect(
       await client().setup.testDatabase({ token: TOKEN, database: { driver: 'sqlite', path } }),
     ).toEqual({ ok: true, error: null, env: { DB_DRIVER: 'sqlite', SQLITE_PATH: path } });
@@ -140,14 +103,15 @@ describe('first-run setup', () => {
   });
 
   it('rejects settings that would lock everyone out', async () => {
-    const invalid = await safe(
-      client().setup.complete({
-        token: TOKEN,
-        admin: { username: 'root', password: PASSWORD },
-        methods: { local: { enabled: false } },
-      }),
-    );
-    expect(invalid.isDefined && invalid.error.code).toBe('INVALID_CONFIG');
+    expect(
+      await errorCode(
+        client().setup.complete({
+          token: TOKEN,
+          admin: { username: 'root', password: PASSWORD },
+          methods: { local: { enabled: false } },
+        }),
+      ),
+    ).toBe('INVALID_CONFIG');
     expect(
       await errorCode(
         client().setup.complete({
@@ -167,6 +131,7 @@ describe('first-run setup', () => {
         oidc: { enabled: true, issuer, audience: 'cloud-trigger', clientId: 'ui' },
       },
     });
+    rootToken = session.token;
     expect(await bearer(session.token).auth.me({})).toMatchObject({
       subject: 'user:root',
       name: 'root',
@@ -232,10 +197,8 @@ describe('signing in', () => {
 describe('access administration', () => {
   let admin: Client;
 
-  beforeAll(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
-    const session = await client().auth.login({ username: 'root', password: PASSWORD });
-    admin = bearer(session.token);
+  beforeAll(() => {
+    admin = bearer(rootToken);
   });
 
   it('issues API keys that work once and stop after revocation', async () => {
@@ -288,15 +251,16 @@ describe('access administration', () => {
       expectedVersion: settings.version,
     });
     expect(localOnly.version).toBe(settings.version + 1);
-    const demote = await safe(
-      admin.users.update({
-        id: root.id,
-        expectedVersion: root.version,
-        scopes: ['read'],
-        disabled: false,
-      }),
-    );
-    expect(demote.isDefined && demote.error.code).toBe('INVALID_CONFIG');
+    expect(
+      await errorCode(
+        admin.users.update({
+          id: root.id,
+          expectedVersion: root.version,
+          scopes: ['read'],
+          disabled: false,
+        }),
+      ),
+    ).toBe('INVALID_CONFIG');
     expect(await errorCode(admin.users.delete({ id: root.id }))).toBe('INVALID_CONFIG');
     expect(
       await errorCode(
@@ -343,7 +307,7 @@ describe('database stage', () => {
           issues: [{ path: 'DB_DRIVER', message: 'No database is configured' }],
         },
       });
-      const path = join(dir, 'chosen.db');
+      const path = sqlite.path('chosen.db');
       expect(
         (await anonymous.setup.testDatabase({ token: TOKEN, database: { driver: 'sqlite', path } }))
           .env,

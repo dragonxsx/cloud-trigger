@@ -1,14 +1,13 @@
-import { createServer, type Server } from 'node:http';
-
+import { type TestHttpServer, startTestHttpServer } from '@cloud-trigger/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createSpecFetcher, isPublicAddress } from '../src/infra/http/spec-fetcher.js';
 
-let server: Server;
-let port = 0;
+let server: TestHttpServer;
+let port = '';
 
 beforeAll(async () => {
-  server = createServer((req, res) => {
+  server = await startTestHttpServer((req, res) => {
     if (req.url === '/redirect') {
       res.writeHead(302, { location: '/spec.yaml' }).end();
     } else if (req.url === '/loop') {
@@ -21,14 +20,9 @@ beforeAll(async () => {
       res.writeHead(404).end();
     }
   });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (address === null || typeof address === 'string') {
-    throw new Error('Expected a TCP address');
-  }
-  port = address.port;
+  port = new URL(server.url).port;
 });
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+afterAll(() => server.close());
 
 const options = { maxBytes: 1_000, timeoutMs: 2_000 };
 const guarded = createSpecFetcher({ ...options, allowPrivate: false });

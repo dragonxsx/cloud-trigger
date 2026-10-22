@@ -164,11 +164,8 @@ describe('last admin guard', () => {
   it('lets only one of two concurrent admin deletions through', async () => {
     const persistence = await openStore();
     const access = await setUp(persistence);
-    const rootId = (await persistence.users.findByUsername('root'))?.id;
+    const rootId = required(await persistence.users.findByUsername('root')).id;
     const otherId = await addAdmin(access, 'other');
-    if (rootId === undefined) {
-      throw new Error('root missing');
-    }
 
     const results = await Promise.all([access.deleteUser(rootId), access.deleteUser(otherId)]);
 
@@ -179,11 +176,8 @@ describe('last admin guard', () => {
   it('serializes demotions with turning OIDC off', async () => {
     const persistence = await openStore();
     const access = await setUp(persistence, { oidc: { enabled: true, issuer: ISSUER } });
-    const root = await persistence.users.findByUsername('root');
-    const settings = await persistence.authSettings.get();
-    if (!root || !settings) {
-      throw new Error('setup missing');
-    }
+    const root = required(await persistence.users.findByUsername('root'));
+    const settings = required(await persistence.authSettings.get());
 
     const [demoted, oidcOff] = await Promise.all([
       access.updateUser({
@@ -203,11 +197,8 @@ describe('last admin guard', () => {
   it('undoes a removal that raced with another server', async () => {
     const persistence = await openStore();
     await setUp(persistence);
-    const rootId = (await persistence.users.findByUsername('root'))?.id;
+    const rootId = required(await persistence.users.findByUsername('root')).id;
     const otherId = await addAdmin(serviceFor(persistence), 'other');
-    if (rootId === undefined) {
-      throw new Error('root missing');
-    }
 
     await Promise.all([
       serviceFor(persistence).deleteUser(rootId),
