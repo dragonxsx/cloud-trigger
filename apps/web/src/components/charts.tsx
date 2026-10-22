@@ -38,13 +38,6 @@ const LIGHT = {
   surface: '#ffffff',
   latency: '#2a5bd7',
   latencyArea: 'rgba(42, 91, 215, 0.08)',
-  status: {
-    succeeded: '#2f9e44',
-    failed: '#c92a2a',
-    timed_out: '#b35900',
-    cancelled: '#495057',
-    skipped: '#868e96',
-  },
 } as const;
 
 const DARK = {
@@ -54,13 +47,6 @@ const DARK = {
   surface: '#161d27',
   latency: '#74a0ff',
   latencyArea: 'rgba(116, 160, 255, 0.12)',
-  status: {
-    succeeded: '#51cf66',
-    failed: '#ff8787',
-    timed_out: '#fcc419',
-    cancelled: '#ced4da',
-    skipped: '#7d8896',
-  },
 } as const;
 
 type Ink = typeof LIGHT | typeof DARK;
@@ -291,7 +277,7 @@ export function RunsOverTimeChart({
           stack: 'runs',
           barMaxWidth: 18,
           itemStyle: {
-            color: ink.status[status],
+            color: STATUS[status].color,
             borderColor: ink.surface,
             borderWidth: 1,
             ...(decal && { decal: { ...decal, color: 'rgba(255, 255, 255, 0.45)' } }),
