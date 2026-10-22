@@ -10,6 +10,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
+import { useForm } from '@mantine/form';
 import {
   useGetIdentity,
   useGo,
@@ -23,7 +24,7 @@ import { useState } from 'react';
 import { Navigate } from 'react-router';
 
 import { AuthShell, BrandMark, useFocusOnMount } from '../components/Brand';
-import { errorMessage } from '../lib/errors';
+import { errorMessage, fieldError } from '../lib/errors';
 import { authConfig } from '../lib/oidc';
 
 type LoginVariables =
@@ -48,46 +49,38 @@ function PasswordForm({
   onEdit: () => void;
 }) {
   const focusRef = useFocusOnMount<HTMLInputElement>();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [submitted, setSubmitted] = useState(false);
-  const usernameError = submitted && username.trim() === '' ? 'Enter your username' : undefined;
-  const passwordError = submitted && password === '' ? 'Enter your password' : undefined;
+  const form = useForm({
+    initialValues: { username: '', password: '' },
+    validate: {
+      username: (value) => (value.trim() === '' ? 'Enter your username' : null),
+      password: (value) => (value === '' ? 'Enter your password' : null),
+    },
+  });
 
   return (
-    <form
-      noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        setSubmitted(true);
-        if (username.trim() === '' || password === '') {
-          return;
-        }
-        login({ username, password });
-      }}
-    >
+    <form noValidate onSubmit={form.onSubmit((values) => login(values))}>
       <Stack spacing="sm">
         <TextInput
           label="Username"
           autoComplete="username"
           ref={focusRef}
-          value={username}
+          value={form.values.username}
           onChange={(e) => {
             onEdit();
-            setUsername(e.currentTarget.value);
+            form.setFieldValue('username', e.currentTarget.value);
           }}
-          error={usernameError ?? failed}
+          error={fieldError(form.errors, 'username') ?? failed}
         />
         <PasswordInput
           label="Password"
           autoComplete="current-password"
           toggleTabIndex={0}
-          value={password}
+          value={form.values.password}
           onChange={(e) => {
             onEdit();
-            setPassword(e.currentTarget.value);
+            form.setFieldValue('password', e.currentTarget.value);
           }}
-          error={passwordError ?? failed}
+          error={fieldError(form.errors, 'password') ?? failed}
         />
         <Button type="submit" loading={pending}>
           Sign in
@@ -111,22 +104,13 @@ function ApiKeyForm({
   primary: boolean;
 }) {
   const focusRef = useFocusOnMount<HTMLInputElement>();
-  const [apiKey, setApiKey] = useState('');
-  const [submitted, setSubmitted] = useState(false);
-  const keyError = submitted && apiKey.trim() === '' ? 'Paste your API key' : undefined;
+  const form = useForm({
+    initialValues: { apiKey: '' },
+    validate: { apiKey: (value) => (value.trim() === '' ? 'Paste your API key' : null) },
+  });
 
   return (
-    <form
-      noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        setSubmitted(true);
-        if (apiKey.trim() === '') {
-          return;
-        }
-        login({ apiKey });
-      }}
-    >
+    <form noValidate onSubmit={form.onSubmit((values) => login(values))}>
       <Stack spacing="sm">
         <Text size="sm" color="dimmed">
           Paste an API key issued by your administrator. It stays in this browser only.
@@ -136,12 +120,12 @@ function ApiKeyForm({
           autoComplete="off"
           ref={primary ? focusRef : undefined}
           toggleTabIndex={0}
-          value={apiKey}
+          value={form.values.apiKey}
           onChange={(e) => {
             onEdit();
-            setApiKey(e.currentTarget.value);
+            form.setFieldValue('apiKey', e.currentTarget.value);
           }}
-          error={keyError ?? failed}
+          error={fieldError(form.errors, 'apiKey') ?? failed}
         />
         <Button type="submit" variant={primary ? 'filled' : 'default'} loading={pending}>
           Sign in with key

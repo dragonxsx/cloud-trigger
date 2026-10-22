@@ -14,6 +14,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
+import { type UseFormReturnType, useForm } from '@mantine/form';
 import { useGo, useInvalidateAuthStore } from '@refinedev/core';
 import { IconAlertTriangle, IconCheck, IconCopy, IconRefresh } from '@tabler/icons-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -21,9 +22,10 @@ import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router';
 
 import { AuthShell, BrandMark, useFocusOnMount } from '../../components/Brand';
-import { NewPasswordFields, passwordValid } from '../../components/NewPasswordFields';
+import { NewPasswordFields, confirmError, passwordError } from '../../components/NewPasswordFields';
 import {
   SignInMethodsFields,
+  type SignInMethodsValue,
   blankMethods,
   methodsErrors,
   toAuthMethods,
@@ -36,6 +38,22 @@ import { startPasswordSession } from '../../providers/auth-provider';
 
 type Driver = 'sqlite' | 'postgres' | 'mongo';
 type DatabaseTest = Awaited<ReturnType<typeof client.setup.testDatabase>>;
+type DatabaseOutcome = { key: string; result: DatabaseTest } | { key: string; error: string };
+
+interface DatabaseValues {
+  driver: Driver;
+  sqlitePath: string;
+  postgresUrl: string;
+  mongoUri: string;
+  mongoDb: string;
+}
+
+const toDatabase = ({ driver, sqlitePath, postgresUrl, mongoUri, mongoDb }: DatabaseValues) =>
+  driver === 'mongo'
+    ? { driver, uri: mongoUri, database: mongoDb }
+    : driver === 'postgres'
+      ? { driver, url: postgresUrl }
+      : { driver, path: sqlitePath };
 
 function TokenStep({
   expired,
@@ -45,27 +63,25 @@ function TokenStep({
   onVerified: (token: string) => void;
 }) {
   const focusRef = useFocusOnMount<HTMLInputElement>();
-  const [token, setToken] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const form = useForm({
+    initialValues: { token: '' },
+    validate: {
+      token: (value) => (value.trim() === '' ? 'Paste the setup token from the server log' : null),
+    },
+  });
   const [checking, setChecking] = useState(false);
 
   return (
     <form
       noValidate
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (token.trim() === '') {
-          setError('Paste the setup token from the server log');
-
-          return;
-        }
+      onSubmit={form.onSubmit(({ token }) => {
         setChecking(true);
         client.setup
           .verifyToken({ token: token.trim() })
           .then(() => onVerified(token.trim()))
-          .catch((failure: unknown) => setError(errorMessage(failure)))
+          .catch((failure: unknown) => form.setFieldError('token', errorMessage(failure)))
           .finally(() => setChecking(false));
-      }}
+      })}
     >
       <Stack spacing="sm">
         {expired && (
@@ -87,12 +103,7 @@ function TokenStep({
           autoComplete="off"
           ref={focusRef}
           toggleTabIndex={0}
-          value={token}
-          onChange={(e) => {
-            setError(null);
-            setToken(e.currentTarget.value);
-          }}
-          {...(error ? { error } : {})}
+          {...form.getInputProps('token')}
           withAsterisk
         />
         <Group position="right">
@@ -130,14 +141,21 @@ function DatabaseStep({
   onNext: () => void;
   onRecheck: () => Promise<boolean>;
 }) {
-  const [driver, setDriver] = useState<Driver>(status.database.driver ?? 'sqlite');
-  const [mongoUri, setMongoUri] = useState('mongodb://localhost:27017/?replicaSet=rs0');
-  const [mongoDb, setMongoDb] = useState('cloud_trigger');
-  const [postgresUrl, setPostgresUrl] = useState('');
-  const [sqlitePath, setSqlitePath] = useState('./data/cloud-trigger.db');
-  const [result, setResult] = useState<DatabaseTest | null>(null);
+  const form = useForm<DatabaseValues>({
+    initialValues: {
+      driver: status.database.driver ?? 'sqlite',
+      sqlitePath: './data/cloud-trigger.db',
+      postgresUrl: '',
+      mongoUri: 'mongodb://localhost:27017/?replicaSet=rs0',
+      mongoDb: 'cloud_trigger',
+    },
+    validate: {
+      postgresUrl: (value, values) =>
+        values.driver === 'postgres' && value.trim() === '' ? 'Enter the connection URL' : null,
+    },
+  });
+  const [outcome, setOutcome] = useState<DatabaseOutcome | null>(null);
   const [testing, setTesting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [rechecking, setRechecking] = useState(false);
   const [stillMissing, setStillMissing] = useState(false);
 
@@ -155,31 +173,26 @@ function DatabaseStep({
     );
   }
 
-  const edit = (apply: () => void) => {
-    setResult(null);
-    setError(null);
-    setStillMissing(false);
-    apply();
-  };
-  const database =
-    driver === 'mongo'
-      ? { driver, uri: mongoUri, database: mongoDb }
-      : driver === 'postgres'
-        ? { driver, url: postgresUrl }
-        : { driver, path: sqlitePath };
+  const { driver } = form.values;
+  const database = toDatabase(form.values);
+  const key = JSON.stringify(database);
+  // An outcome only describes the settings it was tested with; editing a field hides it.
+  const current = outcome?.key === key ? outcome : null;
+  const result = current !== null && 'result' in current ? current.result : null;
+  const error = current !== null && 'error' in current ? current.error : null;
   const test = () => {
-    if (driver === 'postgres' && postgresUrl.trim() === '') {
-      setError('Enter the connection URL');
+    if (form.validate().hasErrors) {
+      focusFirstInvalidField();
 
       return;
     }
     setTesting(true);
-    setError(null);
+    setOutcome(null);
     setStillMissing(false);
     client.setup
       .testDatabase({ token, database })
-      .then(setResult)
-      .catch((failure: unknown) => setError(errorMessage(failure)))
+      .then((tested) => setOutcome({ key, result: tested }))
+      .catch((failure: unknown) => setOutcome({ key, error: errorMessage(failure) }))
       .finally(() => setTesting(false));
   };
   const recheck = () => {
@@ -213,7 +226,7 @@ function DatabaseStep({
         aria-label="Database"
         value={driver}
         onChange={(value) =>
-          edit(() => setDriver(value === 'mongo' || value === 'postgres' ? value : 'sqlite'))
+          form.setFieldValue('driver', value === 'mongo' || value === 'postgres' ? value : 'sqlite')
         }
         data={[
           { value: 'sqlite', label: 'SQLite' },
@@ -225,11 +238,7 @@ function DatabaseStep({
         <TextInput
           label="Database file"
           description="Single node only: every role runs in one process."
-          value={sqlitePath}
-          onChange={(e) => {
-            const next = e.currentTarget.value;
-            edit(() => setSqlitePath(next));
-          }}
+          {...form.getInputProps('sqlitePath')}
         />
       )}
       {driver === 'postgres' && (
@@ -238,11 +247,7 @@ function DatabaseStep({
           description="Include the user, password, host, port and database name."
           placeholder="postgres://user:password@localhost:5432/cloud_trigger"
           autoComplete="off"
-          value={postgresUrl}
-          onChange={(e) => {
-            const next = e.currentTarget.value;
-            edit(() => setPostgresUrl(next));
-          }}
+          {...form.getInputProps('postgresUrl')}
           withAsterisk
         />
       )}
@@ -252,20 +257,9 @@ function DatabaseStep({
             label="Connection string"
             description="MongoDB must run as a replica set; change streams need it."
             autoComplete="off"
-            value={mongoUri}
-            onChange={(e) => {
-              const next = e.currentTarget.value;
-              edit(() => setMongoUri(next));
-            }}
+            {...form.getInputProps('mongoUri')}
           />
-          <TextInput
-            label="Database name"
-            value={mongoDb}
-            onChange={(e) => {
-              const next = e.currentTarget.value;
-              edit(() => setMongoDb(next));
-            }}
-          />
+          <TextInput label="Database name" {...form.getInputProps('mongoDb')} />
         </>
       )}
       {error && (
@@ -308,7 +302,7 @@ function DatabaseStep({
           </Stack>
         </Alert>
       )}
-      {stillMissing && (
+      {works && stillMissing && (
         <Alert
           color="yellow"
           icon={<IconAlertTriangle size={16} />}
@@ -334,32 +328,29 @@ function DatabaseStep({
   );
 }
 
+interface AdminValues {
+  username: string;
+  password: string;
+  confirm: string;
+}
+
 function AdminStep({
-  admin,
-  onChange,
+  form,
   onBack,
   onNext,
 }: {
-  admin: { username: string; password: string; confirm: string };
-  onChange: (admin: { username: string; password: string; confirm: string }) => void;
+  form: UseFormReturnType<AdminValues>;
   onBack: () => void;
   onNext: () => void;
 }) {
   const [submitted, setSubmitted] = useState(false);
-  const usernameError = submitted && admin.username.trim() === '' ? 'Enter a username' : undefined;
 
   return (
     <form
       noValidate
       onSubmit={(e) => {
-        e.preventDefault();
         setSubmitted(true);
-        if (admin.username.trim() === '' || !passwordValid(admin.password, admin.confirm)) {
-          focusFirstInvalidField(e.currentTarget);
-
-          return;
-        }
-        onNext();
+        form.onSubmit(onNext, () => focusFirstInvalidField())(e);
       }}
     >
       <Stack spacing="sm">
@@ -370,17 +361,15 @@ function AdminStep({
         <TextInput
           label="Username"
           autoComplete="username"
-          value={admin.username}
-          onChange={(e) => onChange({ ...admin, username: e.currentTarget.value })}
-          {...(usernameError === undefined ? {} : { error: usernameError })}
+          {...form.getInputProps('username')}
           withAsterisk
         />
         <NewPasswordFields
           label="Password"
-          password={admin.password}
-          onPasswordChange={(password) => onChange({ ...admin, password })}
-          confirm={admin.confirm}
-          onConfirmChange={(confirm) => onChange({ ...admin, confirm })}
+          password={form.values.password}
+          onPasswordChange={(password) => form.setFieldValue('password', password)}
+          confirm={form.values.confirm}
+          onConfirmChange={(confirm) => form.setFieldValue('confirm', confirm)}
           submitted={submitted}
         />
         <Group position="apart">
@@ -401,13 +390,25 @@ export function SetupWizard() {
   const status = useQuery(orpc.setup.status.queryOptions({ input: {} }));
   const [token, setToken] = useState<string | null>(() => setupToken.get());
   const [step, setStep] = useState(token === null ? 0 : 1);
-  const [methods, setMethods] = useState(blankMethods);
-  const [admin, setAdmin] = useState({ username: 'admin', password: '', confirm: '' });
+  const methodsForm = useForm<SignInMethodsValue>({
+    initialValues: blankMethods,
+    validate: methodsErrors,
+  });
+  const adminForm = useForm<AdminValues>({
+    initialValues: { username: 'admin', password: '', confirm: '' },
+    validate: {
+      username: (value) => (value.trim() === '' ? 'Enter a username' : null),
+      password: (value) => passwordError(value, true) ?? null,
+      confirm: (value, values) => confirmError(values.password, value, true) ?? null,
+    },
+  });
   const [finishing, setFinishing] = useState(false);
   const [failure, setFailure] = useState<{ message: string; issues: string[] } | null>(null);
   const [tokenExpired, setTokenExpired] = useState(false);
   const [methodsSubmitted, setMethodsSubmitted] = useState(false);
   const stage = status.data?.stage;
+  const methods = methodsForm.values;
+  const admin = adminForm.values;
 
   useEffect(() => {
     if (token === null || stage === undefined || stage === 'done') {
@@ -515,7 +516,7 @@ export function SetupWizard() {
           <Stack spacing="sm">
             <SignInMethodsFields
               value={methods}
-              onChange={setMethods}
+              onChange={methodsForm.setValues}
               errors={methodProblems}
               testOidc={(issuer) =>
                 client.setup.testOidc({ issuer, ...(token !== null && { token }) })
@@ -529,7 +530,7 @@ export function SetupWizard() {
               <Button
                 onClick={() => {
                   setMethodsSubmitted(true);
-                  if (Object.keys(methodsErrors(methods)).length > 0) {
+                  if (methodsForm.validate().hasErrors) {
                     focusFirstInvalidField();
 
                     return;
@@ -543,12 +544,7 @@ export function SetupWizard() {
           </Stack>
         </Stepper.Step>
         <Stepper.Step label="Admin account">
-          <AdminStep
-            admin={admin}
-            onChange={setAdmin}
-            onBack={() => setStep(2)}
-            onNext={() => setStep(4)}
-          />
+          <AdminStep form={adminForm} onBack={() => setStep(2)} onNext={() => setStep(4)} />
         </Stepper.Step>
         <Stepper.Step label="Review">
           <Stack spacing="sm">
