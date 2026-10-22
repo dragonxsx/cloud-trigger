@@ -17,6 +17,7 @@ This file holds the rules that apply everywhere. Rules for one area of the code 
    - The domain (`packages/core`) never imports a framework or a DB driver.
    - Adapters implement ports.
    - `apps/server` is the composition root. Nest provider factories wire ports to adapters there and nowhere else (see **Server modules**). Core, engine and providers never import Nest.
+   - `apps/demo` (the demo launcher, seed data and screenshot tool) is a client of the public API only. Nothing imports it, and it is not part of the server image.
 5. **No code comments.** If code needs a comment, rename or restructure it until it doesn't.
    - The only exception is the required `oxlint-disable-next-line <rules> -- <reason>` line, and the reason goes there.
    - Document schema fields with `.describe()` or `.meta({ description })`, so the text reaches OpenAPI and the provider forms.

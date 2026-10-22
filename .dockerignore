@@ -6,3 +6,5 @@
 deploy/helm
 *.log
 .env
+apps/demo/.data
+site/assets

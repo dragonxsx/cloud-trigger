@@ -8,3 +8,5 @@ coverage/
 !.env.example
 .DS_Store
 CLAUDE.local.md
+apps/demo/.data/
+site/assets/

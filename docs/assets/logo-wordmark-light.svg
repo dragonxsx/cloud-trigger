@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="64" viewBox="0 0 360 64" role="img" aria-label="Cloud Trigger">
+  <g transform="translate(4 4) scale(1.75)">
+    <rect width="32" height="32" rx="7" fill="#2a5bd7"/>
+    <path d="M7 20h5l3-9 3 13 3-8h4" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="76" y="44" fill="#1b2230" font-family="'Hanken Grotesk', 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="34" font-weight="700" letter-spacing="-0.5">Cloud Trigger</text>
+</svg>
