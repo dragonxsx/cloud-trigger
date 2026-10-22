@@ -21,14 +21,16 @@ import {
   GroupId,
   GroupSpec,
   JobId,
+  JobSortField,
   JobSpec,
   RunId,
+  SortOrder,
   WorkflowId,
   WorkflowRunId,
   WorkflowSpec,
 } from '@cloud-trigger/core';
 import { ORPCError } from '@orpc/client';
-import type { BaseRecord, CrudFilter, DataProvider } from '@refinedev/core';
+import type { BaseRecord, CrudFilter, CrudSort, DataProvider } from '@refinedev/core';
 import { z } from 'zod';
 
 import { client } from '../lib/api';
@@ -38,6 +40,7 @@ interface ListParams {
   limit: number;
   offset: number;
   filters: Record<string, unknown>;
+  sorters: readonly CrudSort[];
   signal: AbortSignal | undefined;
 }
 
@@ -45,7 +48,7 @@ const MAX_PAGE_SIZE = 200;
 
 async function listAll(
   source: ResourceAdapter,
-  params: Pick<ListParams, 'filters' | 'signal'>,
+  params: Pick<ListParams, 'filters' | 'sorters' | 'signal'>,
 ): Promise<{ data: readonly BaseRecord[]; total: number }> {
   const data: BaseRecord[] = [];
   let total = 0;
@@ -91,10 +94,18 @@ const RunFilters = RunListQuery.pick({
     .optional(),
 });
 
+const JobSorter = z.object({ field: JobSortField, order: SortOrder });
+
+const jobSort = (sorters: readonly CrudSort[]) => {
+  const parsed = JobSorter.safeParse(sorters[0]);
+
+  return parsed.success ? { sort: parsed.data.field, order: parsed.data.order } : {};
+};
+
 const jobs: ResourceAdapter = {
-  list: async ({ limit, offset, filters, signal }) => {
+  list: async ({ limit, offset, filters, sorters, signal }) => {
     const page = await client.jobs.list(
-      { limit, offset, ...JobFilters.parse(filters) },
+      { limit, offset, ...JobFilters.parse(filters), ...jobSort(sorters) },
       withSignal(signal),
     );
 
@@ -381,12 +392,16 @@ const asCallerType = <T>(value: unknown): T => value as T;
 export const dataProvider: DataProvider = {
   getApiUrl: () => `${window.location.origin}/api`,
 
-  getList: ({ resource, pagination, filters, meta }) =>
+  getList: ({ resource, pagination, filters, sorters, meta }) =>
     call(async () => {
       const pageSize = pagination?.pageSize ?? 20;
       const currentPage = pagination?.currentPage ?? 1;
       const source = adapter(resource);
-      const params = { filters: filterObject(filters), signal: signalOf(meta) };
+      const params = {
+        filters: filterObject(filters),
+        sorters: sorters ?? [],
+        signal: signalOf(meta),
+      };
       const { data, total } =
         pagination?.mode === 'off'
           ? await listAll(source, params)

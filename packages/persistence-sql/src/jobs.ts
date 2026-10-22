@@ -4,6 +4,7 @@ import {
   type JobId,
   type JobQuery,
   type JobRepository,
+  type JobSortField,
   type JobUpdate,
   type NotFoundError,
   type PendingRun,
@@ -19,17 +20,24 @@ import {
   userEditableJobFields,
   versionConflict,
 } from '@cloud-trigger/core';
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
 import { z } from 'zod';
 
 import { decodeDoc, epochOrNull, flag } from './codec.js';
 import type { ChangeSink } from './events.js';
-import { and, containsInsensitive, newestFirstPage, sameAs } from './query.js';
+import { and, containsInsensitive, newestFirstPage, sameAs, sortedPage } from './query.js';
 import { type RowChanges, type RowValues, assignments, insertInto, rowParser } from './rows.js';
 import { insertRun } from './runs.js';
 import type { Row, SqlSession } from './session.js';
 
 const parseJobRow = rowParser('jobs');
+
+const SORT_KEYS: Record<JobSortField, SQL> = {
+  name: sql`lower(name)`,
+  nextRun: sql`CASE WHEN enabled = ${sql.raw(String(flag(true)))} AND paused_reason IS NULL THEN next_fire_at END`,
+  lastSuccess: sql`last_success_at`,
+  failures: sql`consecutive_failures`,
+};
 
 export const jobFromRow = (row: Row): Job => {
   const parsed = parseJobRow(row);
@@ -171,7 +179,16 @@ export class SqlJobRepository implements JobRepository {
           : sql`sla_breached_at IS NULL`,
     ]);
 
-    return newestFirstPage(this.session, sql`jobs`, where, query, jobFromRow);
+    return query.sort
+      ? sortedPage(
+          this.session,
+          sql`jobs`,
+          where,
+          query,
+          { key: SORT_KEYS[query.sort.field], order: query.sort.order },
+          jobFromRow,
+        )
+      : newestFirstPage(this.session, sql`jobs`, where, query, jobFromRow);
   }
 
   async update(

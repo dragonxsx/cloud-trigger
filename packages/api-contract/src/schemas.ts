@@ -21,6 +21,7 @@ import {
   GroupSpec,
   Job,
   JobId,
+  JobSortField,
   JobSpec,
   LintIssue,
   OpenApiAnalysis,
@@ -32,6 +33,7 @@ import {
   RunStatus,
   ScheduleDecision,
   SchedulePreview,
+  SortOrder,
   Workflow,
   WorkflowId,
   WorkflowRun,
@@ -159,6 +161,13 @@ export const JobListQuery = PageQuery.extend({
   enabled: z.boolean().optional(),
   slaBreached: z.boolean().optional(),
   environment: EnvironmentKey.optional().describe('Jobs that set this environment themselves.'),
+  sort: JobSortField.optional().describe(
+    'Order the whole result by this field instead of newest first. Nulls sort last, ties newest first; page with offset.',
+  ),
+  order: SortOrder.default('asc').describe('Direction for sort.'),
+}).refine((q) => q.sort === undefined || q.cursor === undefined, {
+  message: 'cursor pages newest first only; page a sorted list with offset',
+  path: ['cursor'],
 });
 
 export const UpdateJobInput = JobSpec.extend({ id: JobId, expectedVersion: z.int().min(1) });

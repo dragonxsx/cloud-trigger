@@ -4,6 +4,7 @@ import {
   type JobId,
   type JobQuery,
   type JobRepository,
+  type JobSortField,
   type JobUpdate,
   type NotFoundError,
   type PendingRun,
@@ -25,7 +26,7 @@ import {
   type MongoClient,
 } from 'mongodb';
 
-import { findNewestFirstPage } from './cursor.js';
+import { findNewestFirstPage, findSortedPage } from './cursor.js';
 import {
   type JobDocument,
   type RunDocument,
@@ -34,6 +35,19 @@ import {
   toRunDocument,
 } from './documents.js';
 import { casMissed, caseInsensitiveMatch } from './errors.js';
+
+const SORT_KEYS: Record<JobSortField, Document | string> = {
+  name: { $toLower: '$name' },
+  nextRun: {
+    $cond: [
+      { $and: ['$enabled', { $eq: [{ $ifNull: ['$pausedReason', null] }, null] }] },
+      '$schedule.nextFireAt',
+      null,
+    ],
+  },
+  lastSuccess: '$schedule.lastSuccessAt',
+  failures: '$schedule.consecutiveFailures',
+};
 
 export class MongoJobRepository implements JobRepository {
   constructor(private readonly jobs: Collection<JobDocument>) {}
@@ -69,7 +83,15 @@ export class MongoJobRepository implements JobRepository {
       filter.slaBreachedAt = query.slaBreached ? { $ne: null } : null;
     }
 
-    return findNewestFirstPage(this.jobs, filter, query, fromJobDocument);
+    return query.sort
+      ? findSortedPage(
+          this.jobs,
+          filter,
+          query,
+          { key: SORT_KEYS[query.sort.field], order: query.sort.order },
+          fromJobDocument,
+        )
+      : findNewestFirstPage(this.jobs, filter, query, fromJobDocument);
   }
 
   async update(

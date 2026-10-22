@@ -142,3 +142,6 @@ export function createJob(params: {
 }
 
 export const isSchedulable = (job: Job): boolean => job.enabled && job.pausedReason === null;
+
+export const JobSortField = z.enum(['name', 'nextRun', 'lastSuccess', 'failures']);
+export type JobSortField = z.output<typeof JobSortField>;

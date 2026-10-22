@@ -159,6 +159,27 @@ describe('API e2e (typed oRPC client)', () => {
     expect(summary.byStatus).toEqual({ succeeded: 1 });
   });
 
+  it('sorts the whole job list on the server', async () => {
+    const api = client('w-key');
+    for (const name of ['sort-b', 'Sort-a', 'sort-c']) {
+      await api.jobs.create({
+        name,
+        enabled: false,
+        trigger: { type: 'cron', config: { expression: '0 0 1 1 *' } },
+        target: { type: 'http', config: { url: targetUrl } },
+      });
+    }
+
+    const page = await api.jobs.list({ search: 'sort-', sort: 'name', order: 'desc', limit: 2 });
+    expect(page.items.map((j) => j.name)).toEqual(['sort-c', 'sort-b']);
+    expect(page.total).toBe(3);
+    const next = await api.jobs.list({ search: 'sort-', sort: 'name', limit: 2, offset: 2 });
+    expect(next.items.map((j) => j.name)).toEqual(['sort-c']);
+
+    const rejected = await safe(api.jobs.list({ sort: 'name', cursor: page.items[0]?.id ?? '' }));
+    expect(rejected.error).toMatchObject({ code: 'BAD_REQUEST', status: 400 });
+  });
+
   it('serves providers, OpenAPI, health and metrics', async () => {
     const providers = await client('r-key').providers.list({ kind: 'target' });
     expect(providers.map((p) => p.type)).toContain('http');

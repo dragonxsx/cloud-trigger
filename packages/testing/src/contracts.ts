@@ -20,6 +20,8 @@ import {
   type GroupRepository,
   GroupSpec,
   type JobRepository,
+  type JobSortField,
+  type SortOrder,
   type RateLimiter,
   createGroup,
   newGroupId,
@@ -388,6 +390,92 @@ export function describePersistenceContract(
         expect(byOffset.items.map((j) => j.name)).toEqual(['alpha']);
         expect((await jobs.list({ limit: 10, tag: 'x' })).items).toHaveLength(1);
         expect((await jobs.list({ limit: 10, search: 'ALP' })).items).toHaveLength(1);
+      });
+
+      it('sorts jobs across pages with nulls last and ties newest first', async () => {
+        const { jobs } = setup.ports();
+        const seeds = [
+          { name: 'bravo', nextFireAt: at(3_000), lastSuccessAt: at(100), failures: 0 },
+          { name: 'Alpha', nextFireAt: at(1_000), lastSuccessAt: null, failures: 2 },
+          { name: 'charlie', nextFireAt: at(500), lastSuccessAt: at(300), failures: 1 },
+          { name: 'Delta', nextFireAt: at(200), lastSuccessAt: at(200), failures: 0 },
+          { name: 'echo', nextFireAt: null, lastSuccessAt: null, failures: 0 },
+        ];
+        for (const seed of seeds) {
+          const job = makeJob(
+            { name: seed.name, enabled: seed.name !== 'charlie' },
+            seed.nextFireAt,
+          );
+          await jobs.insert(job);
+          await jobs.patchSchedule(
+            job.id,
+            { lastSuccessAt: seed.lastSuccessAt, consecutiveFailures: seed.failures },
+            seed.name === 'Delta' ? { pausedReason: 'Paused by user' } : {},
+          );
+        }
+        const names = async (field: JobSortField, order: SortOrder) =>
+          (await jobs.list({ limit: 10, sort: { field, order } })).items.map((j) => j.name);
+
+        expect(await names('name', 'asc')).toEqual(['Alpha', 'bravo', 'charlie', 'Delta', 'echo']);
+        expect(await names('name', 'desc')).toEqual(['echo', 'Delta', 'charlie', 'bravo', 'Alpha']);
+        expect(await names('nextRun', 'asc')).toEqual([
+          'Alpha',
+          'bravo',
+          'echo',
+          'Delta',
+          'charlie',
+        ]);
+        expect(await names('nextRun', 'desc')).toEqual([
+          'bravo',
+          'Alpha',
+          'echo',
+          'Delta',
+          'charlie',
+        ]);
+        expect(await names('lastSuccess', 'asc')).toEqual([
+          'bravo',
+          'Delta',
+          'charlie',
+          'echo',
+          'Alpha',
+        ]);
+        expect(await names('lastSuccess', 'desc')).toEqual([
+          'charlie',
+          'Delta',
+          'bravo',
+          'echo',
+          'Alpha',
+        ]);
+        expect(await names('failures', 'asc')).toEqual([
+          'echo',
+          'Delta',
+          'bravo',
+          'charlie',
+          'Alpha',
+        ]);
+        expect(await names('failures', 'desc')).toEqual([
+          'Alpha',
+          'charlie',
+          'echo',
+          'Delta',
+          'bravo',
+        ]);
+
+        const page = await jobs.list({
+          limit: 2,
+          offset: 2,
+          sort: { field: 'name', order: 'asc' },
+        });
+        expect(page.items.map((j) => j.name)).toEqual(['charlie', 'Delta']);
+        expect(page.total).toBe(5);
+        expect(page.nextCursor).toBeNull();
+        const filtered = await jobs.list({
+          limit: 10,
+          enabled: true,
+          sort: { field: 'name', order: 'desc' },
+        });
+        expect(filtered.items.map((j) => j.name)).toEqual(['echo', 'Delta', 'bravo', 'Alpha']);
+        expect(filtered.total).toBe(4);
       });
 
       it('enforces optimistic concurrency', async () => {

@@ -2,9 +2,10 @@ import type { Result } from 'neverthrow';
 
 import type { ConnectionRef } from '../domain/connection.js';
 import type { GroupId, JobId } from '../domain/ids.js';
-import type { Job, JobSpec, ScheduleState } from '../domain/job.js';
+import type { Job, JobSortField, JobSpec, ScheduleState } from '../domain/job.js';
 import type { PendingRun } from '../domain/run.js';
 import type { DomainError, NotFoundError, VersionConflictError } from '../shared/errors.js';
+import type { SortOrder } from '../shared/sort.js';
 import type { Page, PageRequest } from './common.js';
 
 export interface JobQuery extends PageRequest {
@@ -14,6 +15,7 @@ export interface JobQuery extends PageRequest {
   readonly enabled?: boolean | undefined;
   readonly slaBreached?: boolean | undefined;
   readonly environment?: string | undefined;
+  readonly sort?: { readonly field: JobSortField; readonly order: SortOrder } | undefined;
 }
 
 export interface JobUpdate {

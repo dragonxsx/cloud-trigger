@@ -38,8 +38,11 @@ export const jobsHandlers = ({
   };
 
   return {
-    list: jobs.list.handler(async ({ input }) => {
-      const page = await persistence.jobs.list(input);
+    list: jobs.list.handler(async ({ input: { sort, order, ...query } }) => {
+      const page = await persistence.jobs.list({
+        ...query,
+        sort: sort && { field: sort, order },
+      });
 
       return { items: page.items.map(redact), nextCursor: page.nextCursor, total: page.total };
     }),

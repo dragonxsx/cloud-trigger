@@ -1,3 +1,4 @@
+import type { JobSortField } from '@cloud-trigger/core';
 import {
   Anchor,
   Badge,
@@ -19,7 +20,7 @@ import { useDebouncedValue } from '@mantine/hooks';
 import { type CrudSort, getDefaultFilter, useNavigation, useTable } from '@refinedev/core';
 import { List, ShowButton } from '@refinedev/mantine';
 import { IconArrowDown, IconArrowUp, IconArrowsSort, IconSearch } from '@tabler/icons-react';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { z } from 'zod';
 
@@ -58,50 +59,6 @@ function MemberOf({
 
 const FilterValue = z.string().catch('');
 
-type SortKey = 'name' | 'nextRun' | 'lastSuccess' | 'failures';
-type SortValue = string | number | null;
-
-const SORT_VALUE: Record<SortKey, (job: JobDto) => SortValue> = {
-  name: (job) => job.name.toLowerCase(),
-  nextRun: (job) => (isHalted(job) ? null : job.schedule.nextFireAt),
-  lastSuccess: (job) => job.schedule.lastSuccessAt,
-  failures: (job) => job.schedule.consecutiveFailures,
-};
-
-const isSortKey = (field: string): field is SortKey => field in SORT_VALUE;
-
-const compareValues = (a: SortValue, b: SortValue): number => {
-  if (a === b) {
-    return 0;
-  }
-  if (a === null) {
-    return 1;
-  }
-  if (b === null) {
-    return -1;
-  }
-
-  return a < b ? -1 : 1;
-};
-
-const sortJobs = (jobs: readonly JobDto[], sorter: CrudSort | undefined): readonly JobDto[] => {
-  if (!sorter || !isSortKey(sorter.field)) {
-    return jobs;
-  }
-  const value = SORT_VALUE[sorter.field];
-  const direction = sorter.order === 'desc' ? -1 : 1;
-
-  return jobs.toSorted((a, b) => {
-    const left = value(a);
-    const right = value(b);
-    if (left === null || right === null) {
-      return compareValues(left, right);
-    }
-
-    return compareValues(left, right) * direction;
-  });
-};
-
 function SortHeader({
   field,
   label,
@@ -109,7 +66,7 @@ function SortHeader({
   onSort,
   align = 'left',
 }: {
-  field: SortKey;
+  field: JobSortField;
   label: string;
   sorter: CrudSort | undefined;
   onSort: (sorters: CrudSort[]) => void;
@@ -307,7 +264,7 @@ export function JobList() {
   } = useTable<JobDto>({
     resource: 'jobs',
     pagination: { pageSize: 20 },
-    sorters: { mode: 'off' },
+    sorters: { mode: 'server' },
     syncWithLocation: true,
   });
   const appliedSearch = FilterValue.parse(getDefaultFilter('search', filters, 'contains'));
@@ -319,10 +276,11 @@ export function JobList() {
     setFilters([{ field: 'search', operator: 'contains', value: debounced || undefined }], 'merge');
   }, [debounced, setFilters]);
   const sorter = sorters[0];
-  const items = useMemo(
-    () => sortJobs(tableQuery.data?.data ?? [], sorter),
-    [tableQuery.data?.data, sorter],
-  );
+  const items = tableQuery.data?.data ?? [];
+  const changeSort = (next: CrudSort[]) => {
+    setSorters(next);
+    setCurrentPage(1);
+  };
   const groups = useGroupsById();
   const environments = useEnvironments();
   const now = useNow();
@@ -407,7 +365,7 @@ export function JobList() {
               <Table highlightOnHover verticalSpacing="xs" className="ct-table" miw={980}>
                 <thead>
                   <tr>
-                    <SortHeader field="name" label="Name" sorter={sorter} onSort={setSorters} />
+                    <SortHeader field="name" label="Name" sorter={sorter} onSort={changeSort} />
                     <th>State</th>
                     <th>Schedule</th>
                     <th>Target</th>
@@ -415,19 +373,19 @@ export function JobList() {
                       field="nextRun"
                       label="Next run"
                       sorter={sorter}
-                      onSort={setSorters}
+                      onSort={changeSort}
                     />
                     <SortHeader
                       field="lastSuccess"
                       label="Last success"
                       sorter={sorter}
-                      onSort={setSorters}
+                      onSort={changeSort}
                     />
                     <SortHeader
                       field="failures"
                       label="Failures in a row"
                       sorter={sorter}
-                      onSort={setSorters}
+                      onSort={changeSort}
                       align="right"
                     />
                     <th aria-label="Actions" />
@@ -443,10 +401,7 @@ export function JobList() {
           </Box>
         )}
         {pageCount > 1 && (
-          <Group position="apart">
-            <Text size="xs" color="dimmed">
-              {sorter ? 'Sorting applies to the jobs on this page.' : ''}
-            </Text>
+          <Group position="right">
             <Pagination page={currentPage} total={pageCount} onChange={setCurrentPage} />
           </Group>
         )}

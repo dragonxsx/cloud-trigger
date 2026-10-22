@@ -134,7 +134,8 @@ const jobs = {
     .meta(
       readTool({
         name: 'list_jobs',
-        description: 'List jobs, newest first. Filter by search text, tag, group or state.',
+        description:
+          'List jobs, newest first unless sort is set (name, nextRun, lastSuccess or failures, with order). Filter by search text, tag, group or state.',
       }),
     )
     .input(JobListQuery)

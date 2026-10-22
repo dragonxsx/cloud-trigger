@@ -4,3 +4,4 @@ export * from './merge-patch.js';
 export * from './mutex.js';
 export { err, ok, Result, ResultAsync, errAsync, okAsync } from 'neverthrow';
 export * from './secret-resolver.js';
+export * from './sort.js';
