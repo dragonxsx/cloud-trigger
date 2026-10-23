@@ -223,7 +223,7 @@ claude mcp add --transport http cloud-trigger http://localhost:8080/mcp --header
 - Retries with backoff, timeouts, and auto-pause after N consecutive failures.
 - Exactly-once firing across replicas.
 - Groups that share default policies, default notifications and rate limits (`perSecond` and `maxConcurrent`, enforced across replicas).
-- SLAs (start delay, duration, time since last success) that flag runs and jobs as late.
+- SLAs (start delay, duration, time since last success) that flag runs and jobs as late, including runs that finish between SLA checks.
 - Idempotent backfill of past fire times.
 
 </details>

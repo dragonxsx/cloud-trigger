@@ -11,14 +11,17 @@ import {
   type Result,
   type Run,
   type RunRepository,
+  type RunningRun,
   type SkippedRun,
   type StaleRunError,
+  checkRunSla,
   isFailedRetry,
   isTerminal,
   successDeadlineAfter,
 } from '@cloud-trigger/core';
 
 import { DecisionRecorder } from './decisions.js';
+import { markRunLate } from './late-runs.js';
 import type { RunLifecycleListener } from './lifecycle.js';
 import { PolicyResolver } from './policies.js';
 
@@ -47,6 +50,9 @@ export class RunCompletion {
     next: Run,
     job: Job | undefined,
   ): Promise<Result<Run, StaleRunError>> {
+    if (previous.status === 'running' && job) {
+      await this.#flagOverdue(previous, job);
+    }
     const saved = await this.deps.runs.transition(previous, next);
     if (saved.isErr()) {
       return saved;
@@ -68,6 +74,18 @@ export class RunCompletion {
     await this.#notify(stored.id, (listener) => listener.onRunFinished(stored, job));
 
     return saved;
+  }
+
+  async #flagOverdue(run: RunningRun, job: Job): Promise<void> {
+    const now = this.deps.clock.now();
+    if (run.late || run.slaDeadline === null || now < run.slaDeadline) {
+      return;
+    }
+    const { policy } = await this.#policies.resolve(job);
+    const check = checkRunSla(run, policy.sla, now);
+    if (check.reasons.length > 0) {
+      await markRunLate(this.deps, run, job, check.reasons);
+    }
   }
 
   async #notify(

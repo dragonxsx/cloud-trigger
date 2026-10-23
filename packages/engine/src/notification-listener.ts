@@ -8,6 +8,7 @@ import {
   type NotificationRule,
   type PendingRun,
   type Run,
+  type RunningRun,
   type SkippedRun,
   type TargetResult,
   assertNever,
@@ -129,5 +130,9 @@ export class NotificationListener implements RunLifecycleListener {
     if (job) {
       await this.enqueuer.forRun(run, job, 'failure', `${run.id}:${run.attempts.length}`);
     }
+  }
+
+  async onRunLate(run: PendingRun | RunningRun, job: Job): Promise<void> {
+    await this.enqueuer.forRun(run, job, 'late');
   }
 }

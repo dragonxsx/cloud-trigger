@@ -3,7 +3,7 @@ import { silentLogger } from '@cloud-trigger/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { SlaMonitor } from '../src/index.js';
+import { type RunLifecycleListener, SlaMonitor } from '../src/index.js';
 import { useHarness } from './harness.js';
 
 const h = useHarness('sla');
@@ -22,14 +22,14 @@ const lateRule = () => ({
   on: ['late'],
   notifier: { type: 'webhook', config: { url: `${h.base()}/hook` } },
 });
-const monitor = () =>
+const monitor = (listeners: readonly RunLifecycleListener[] = h.listeners()) =>
   new SlaMonitor(
     {
       ...h.db,
       enqueuer: h.enqueuer(),
       clock: h.clock,
       logger: silentLogger,
-      listeners: h.listeners(),
+      listeners,
     },
     { intervalMs: 1_000, batchSize: 50 },
   );
@@ -65,12 +65,22 @@ describe('SLA monitor', () => {
       policy: { sla: { maxDurationMs: 500 } },
     });
     await fire(job.id);
-    const worker = h.worker();
+    let lateCalls = 0;
+    const listeners = [
+      ...h.listeners(),
+      {
+        onRunFinished: async () => {},
+        onRunLate: async () => {
+          lateCalls += 1;
+        },
+      },
+    ];
+    const worker = h.worker({}, { listeners });
     const settled = h.settle(worker);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect((await onlyRun(job.id)).status).toBe('running');
 
-    const sla = monitor();
+    const sla = monitor(listeners);
     await sla.tick();
     expect((await onlyRun(job.id)).late).toBe(false);
     h.advance(600);
@@ -85,6 +95,55 @@ describe('SLA monitor', () => {
     expect(run.lateReasons).toEqual(['Still running after 500 ms']);
     expect(lateHooks()).toHaveLength(1);
     expect(lateHooks()[0]?.run.id).toBe(run.id);
+    expect(lateCalls).toBe(1);
+  });
+
+  it('flags an overrun that finishes before the monitor checks it', async () => {
+    h.route('/slow-target', () => ({ status: 200, delayMs: 300 }));
+    const job = await h.createJob('/slow-target', {
+      notifications: [lateRule()],
+      policy: { sla: { maxDurationMs: 500 } },
+    });
+    await fire(job.id);
+    const settled = h.settle(h.worker());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    h.advance(600);
+    await settled;
+    await drain();
+
+    const run = await onlyRun(job.id);
+    expect(run).toMatchObject({ status: 'succeeded', late: true });
+    expect(run.lateReasons).toEqual(['Still running after 500 ms']);
+    expect(lateHooks()).toHaveLength(1);
+  });
+
+  it('flags a late start that finishes before the monitor checks it', async () => {
+    const job = await h.createJob('/ok', {
+      notifications: [lateRule()],
+      policy: { sla: { maxStartDelayMs: 1_000 } },
+    });
+    await fire(job.id);
+    h.advance(1_500);
+    await h.settle(h.worker());
+    await drain();
+
+    const run = await onlyRun(job.id);
+    expect(run).toMatchObject({ status: 'succeeded', late: true });
+    expect(run.lateReasons).toEqual(['Started 1500 ms after its scheduled time']);
+    expect(lateHooks()).toHaveLength(1);
+  });
+
+  it('leaves a run that finishes within its limits on time', async () => {
+    const job = await h.createJob('/ok', {
+      notifications: [lateRule()],
+      policy: { sla: { maxStartDelayMs: 1_000, maxDurationMs: 5_000 } },
+    });
+    await fire(job.id);
+    await h.settle(h.worker());
+    await drain();
+
+    expect(await onlyRun(job.id)).toMatchObject({ status: 'succeeded', late: false });
+    expect(lateHooks()).toHaveLength(0);
   });
 
   it('flags a run that waited longer than maxStartDelayMs only once', async () => {

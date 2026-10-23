@@ -12,6 +12,7 @@ import {
   checkRunSla,
 } from '@cloud-trigger/core';
 
+import { markRunLate } from './late-runs.js';
 import type { RunLifecycleListener } from './lifecycle.js';
 import { PollingLoop } from './loop.js';
 import type { NotificationEnqueuer } from './notification-listener.js';
@@ -92,19 +93,7 @@ export class SlaMonitor {
 
       return;
     }
-    const late = { ...run, late: true, lateReasons: [...check.reasons], slaDeadline: null };
-    if (!(await this.deps.runs.updateSla(run, late))) {
-      return;
-    }
-    this.deps.logger.warn('Run breached its SLA', { runId: run.id, reasons: check.reasons });
-    await this.deps.enqueuer.forRun(late, job, 'late');
-    for (const listener of this.deps.listeners) {
-      await listener
-        .onRunLate?.(late, job)
-        .catch((error: unknown) =>
-          this.deps.logger.error('Late listener failed', { runId: run.id, err: error }),
-        );
-    }
+    await markRunLate(this.deps, run, job, check.reasons);
   }
 
   async #checkJob(job: Job, now: Date): Promise<void> {
