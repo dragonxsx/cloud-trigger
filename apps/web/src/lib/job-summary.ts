@@ -62,8 +62,13 @@ export function triggerSummary(job: TriggerFields): string {
       return job.workflowId ? 'Workflow step' : 'Manual only';
     case 'webhook':
       return 'On webhook events';
-    default:
-      return type.charAt(0).toUpperCase() + type.slice(1);
+    case 'after_job':
+      return 'After another job';
+    default: {
+      const words = type.replaceAll('_', ' ');
+
+      return words.charAt(0).toUpperCase() + words.slice(1);
+    }
   }
 }
 
