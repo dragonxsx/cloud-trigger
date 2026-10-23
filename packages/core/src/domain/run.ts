@@ -266,7 +266,7 @@ const isRetryable = (status: TerminalStatus, result: TargetResult): boolean =>
 // Only the latest attempt keeps its body, keeping the doc under Mongo's 16 MiB limit.
 const withoutResponseBody = (attempt: AttemptRecord): AttemptRecord => {
   const response = attempt.result.response;
-  if (response?.body === undefined) {
+  if (response?.body === undefined || response.body === '') {
     return attempt;
   }
   const { body: _body, ...rest } = response;
