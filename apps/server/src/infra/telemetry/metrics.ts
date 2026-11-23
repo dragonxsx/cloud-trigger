@@ -87,7 +87,7 @@ export class AppMetrics implements RunLifecycleListener, EngineMetrics {
 
         return;
       case 'attempt_started':
-        if (signal.attempt === 1) {
+        if (signal.attempt === 1 && signal.reason !== 'backfill') {
           this.#startLag.record(Math.max(0, signal.lagMs) / MS_PER_SECOND, {
             target_type: signal.targetType,
           });

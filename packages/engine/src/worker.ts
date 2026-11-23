@@ -381,6 +381,7 @@ export class Worker {
     const parent = claimed.parent ?? (await this.#legacyParent(claimed));
     this.deps.metrics?.record({
       kind: 'attempt_started',
+      reason: claimed.reason,
       targetType: job.target.type,
       attempt: currentAttempt(claimed),
       lagMs: claimed.startedAt.getTime() - claimed.scheduledAt.getTime(),

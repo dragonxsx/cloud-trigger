@@ -7,6 +7,7 @@ export type EngineSignal =
   | { readonly kind: 'decision'; readonly decision: DecisionKind }
   | {
       readonly kind: 'attempt_started';
+      readonly reason: RunReason;
       readonly targetType: string;
       readonly attempt: number;
       readonly lagMs: number;

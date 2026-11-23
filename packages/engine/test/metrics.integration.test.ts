@@ -39,6 +39,7 @@ describe('engine metrics', () => {
     expect(metrics.signals).toContainEqual({ kind: 'fired', reason: 'scheduled', count: 1 });
     expect(metrics.signals).toContainEqual({
       kind: 'attempt_started',
+      reason: 'scheduled',
       targetType: 'http',
       attempt: 1,
       lagMs: 1_500,
