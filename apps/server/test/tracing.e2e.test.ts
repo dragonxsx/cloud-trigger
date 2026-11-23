@@ -1,10 +1,10 @@
 import 'reflect-metadata';
 import { type TestHttpServer, startTestHttpServer } from '@cloud-trigger/testing';
 import {
-  BasicTracerProvider,
+  TracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+} from '@opentelemetry/sdk-trace';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { OtelRunTracer } from '../src/infra/telemetry/tracing.js';
@@ -14,7 +14,7 @@ import { tempSqlite } from './support/databases.js';
 
 const sqlite = tempSqlite('tracing');
 const exporter = new InMemorySpanExporter();
-const provider = new BasicTracerProvider({ spanProcessors: [new SimpleSpanProcessor(exporter)] });
+const provider = new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter })] });
 let server: TestServer;
 let target: TestHttpServer;
 

@@ -3,13 +3,13 @@ import {
   ROOT_CONTEXT,
   SpanKind,
   SpanStatusCode,
+  context,
   type Tracer as OtelApiTracer,
   defaultTextMapGetter,
   defaultTextMapSetter,
   trace,
 } from '@opentelemetry/api';
 import { W3CTraceContextPropagator } from '@opentelemetry/core';
-import { NodeSDK } from '@opentelemetry/sdk-node';
 
 const propagator = new W3CTraceContextPropagator();
 
@@ -39,11 +39,13 @@ export class OtelRunTracer implements Tracer {
       },
       parent,
     );
+    const active = trace.setSpan(parent, span);
     const carrier: Record<string, string> = {};
-    propagator.inject(trace.setSpan(parent, span), carrier, defaultTextMapSetter);
+    propagator.inject(active, carrier, defaultTextMapSetter);
 
     return {
       traceparent: carrier['traceparent'],
+      activate: (work) => context.with(active, work),
       end: ({ outcome, errorCode }) => {
         if (errorCode !== undefined) {
           span.setAttribute('error.code', errorCode);
@@ -64,21 +66,4 @@ export class OtelRunTracer implements Tracer {
 
 export interface Tracing {
   readonly tracer: Tracer | undefined;
-  readonly shutdown: () => Promise<void>;
-}
-
-export function startTracing(config: {
-  readonly OTEL_EXPORTER_OTLP_ENDPOINT?: string | undefined;
-  readonly OTEL_SERVICE_NAME: string;
-}): Tracing {
-  if (config.OTEL_EXPORTER_OTLP_ENDPOINT === undefined) {
-    return { tracer: undefined, shutdown: () => Promise.resolve() };
-  }
-  const sdk = new NodeSDK({ serviceName: config.OTEL_SERVICE_NAME });
-  sdk.start();
-
-  return {
-    tracer: new OtelRunTracer(trace.getTracer('cloud-trigger')),
-    shutdown: () => sdk.shutdown(),
-  };
 }

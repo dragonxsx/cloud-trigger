@@ -40,13 +40,14 @@ export interface BackgroundLoopDeps {
 }
 
 export function createBackgroundLoops(deps: BackgroundLoopDeps): EngineParts {
-  const { config, persistence, registry, secrets, clock, logger, tracer, listeners } = deps;
+  const { config, persistence, registry, secrets, clock, logger, tracer, metrics, listeners } =
+    deps;
   const roles = new Set(config.APP_ROLE);
   const id = config.INSTANCE_ID;
 
   const scheduler = roles.has('scheduler')
     ? new Scheduler(
-        { ...persistence, registry, clock, logger },
+        { ...persistence, registry, clock, logger, metrics },
         {
           ownerId: id,
           intervalMs: config.SCHEDULER_INTERVAL_MS,
@@ -57,13 +58,13 @@ export function createBackgroundLoops(deps: BackgroundLoopDeps): EngineParts {
     : undefined;
   const reaper = roles.has('scheduler')
     ? new Reaper(
-        { ...persistence, clock, logger, listeners },
+        { ...persistence, clock, logger, listeners, metrics },
         { intervalMs: config.REAPER_INTERVAL_MS, batchSize: 100, slotIdleMs: config.LEASE_MS * 2 },
       )
     : undefined;
   const worker = roles.has('worker')
     ? new Worker(
-        { ...persistence, registry, secrets, clock, logger, listeners, tracer },
+        { ...persistence, registry, secrets, clock, logger, listeners, tracer, metrics },
         {
           workerId: id,
           concurrency: config.WORKER_CONCURRENCY,
@@ -74,7 +75,7 @@ export function createBackgroundLoops(deps: BackgroundLoopDeps): EngineParts {
       )
     : undefined;
   if (worker) {
-    deps.metrics.observeActiveRuns(() => worker.activeRuns);
+    metrics.observeActiveRuns(() => worker.activeRuns);
   }
   const dispatcher = roles.has('worker')
     ? new NotificationDispatcher(
