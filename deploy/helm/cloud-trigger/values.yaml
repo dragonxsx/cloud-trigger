@@ -44,7 +44,27 @@ config:
   CONSUMER_INTERVAL_MS: "5000"
   CONSUMER_LEASE_MS: "30000"
   WEBHOOK_MAX_PER_SECOND: "20"
+  # OpenTelemetry. Set an OTLP endpoint (e.g. http://otel-collector:4318) to export traces, metrics
+  # and logs; /metrics is served either way. Auth headers belong in secrets.values.OTEL_EXPORTER_OTLP_HEADERS.
   OTEL_EXPORTER_OTLP_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_PROTOCOL: ""   # http/protobuf (default), http/json or grpc
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ""    # per-signal full URLs override the endpoint above
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ""
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: ""    # per-signal protocols override the protocol above
+  OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: ""
+  OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: ""
+  OTEL_SERVICE_NAME: ""             # default cloud-trigger, unless OTEL_RESOURCE_ATTRIBUTES sets service.name
+  OTEL_RESOURCE_ATTRIBUTES: ""      # e.g. deployment.environment.name=prod
+  OTEL_TRACES_EXPORTER: ""          # otlp (default), console or none
+  OTEL_METRICS_EXPORTER: ""
+  OTEL_METRIC_EXPORT_INTERVAL: ""   # ms between OTLP metric pushes, default 60000
+  OTEL_LOGS_EXPORTER: ""
+  OTEL_TRACES_SAMPLER: ""           # e.g. parentbased_traceidratio with OTEL_TRACES_SAMPLER_ARG
+  OTEL_TRACES_SAMPLER_ARG: ""
+  OTEL_NODE_ENABLED_INSTRUMENTATIONS: ""    # e.g. http,express,undici; without either list fs, dns and net are off
+  OTEL_NODE_DISABLED_INSTRUMENTATIONS: ""
+  OTEL_SDK_DISABLED: ""             # true: no instrumentation or export; /metrics keeps working
   DECISION_RETENTION_DAYS: "14"
   BADGES_PUBLIC: "false"
   OPENAPI_FETCH_ALLOW_PRIVATE: "false"
@@ -63,6 +83,8 @@ secrets:
     DATA_ENCRYPTION_PREVIOUS_KEYS: ""
     # First-run /setup token; set it when running more than one API replica.
     SETUP_TOKEN: ""
+    # OTLP auth for a hosted backend, e.g. "authorization=Basic <token>" or "x-honeycomb-team=<key>".
+    OTEL_EXPORTER_OTLP_HEADERS: ""
 
 # Job-level secrets referenced as {{secret:NAME}}; mounted as files under /var/run/secrets/cloud-trigger.
 jobSecrets:
@@ -96,8 +118,6 @@ securityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
-
-# OpenTelemetry: set config.OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://otel-collector:4318) to export a span per run.
 
 # Throwaway in-cluster dependencies for demos and evaluation. Do not use in production.
 demo:

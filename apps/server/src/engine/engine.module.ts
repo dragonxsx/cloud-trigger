@@ -61,9 +61,9 @@ export const RUN_LISTENERS = token<readonly RunLifecycleListener[]>('RUN_LISTENE
     ),
     factoryProvider(
       JobService,
-      [PERSISTENCE, ProviderRegistry, CLOCK, LOGGER, RUN_LISTENERS],
-      (persistence, registry, clock, logger, listeners) =>
-        new JobService({ ...persistence, registry, clock, logger, listeners }),
+      [PERSISTENCE, ProviderRegistry, CLOCK, LOGGER, RUN_LISTENERS, AppMetrics],
+      (persistence, registry, clock, logger, listeners, metrics) =>
+        new JobService({ ...persistence, registry, clock, logger, listeners, metrics }),
     ),
     factoryProvider(
       WorkflowService,

@@ -1,18 +1,24 @@
 import type { Tracer } from '@cloud-trigger/core';
 import { type DynamicModule, Global, Module } from '@nestjs/common';
+import { trace } from '@opentelemetry/api';
+import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 
 import { ShutdownHook } from '../../common/shutdown-hook.js';
 import { factoryProvider, injectionToken, token } from '../../common/tokens.js';
 import { ConfigService } from '../../config/config.module.js';
 import { MetricsController } from './metrics.controller.js';
 import { AppMetrics } from './metrics.js';
-import { type Tracing, startTracing } from './tracing.js';
+import { type Telemetry, metricsOnlyTelemetry, startedTelemetry } from './sdk.js';
+import { OtelRunTracer, type Tracing } from './tracing.js';
 
+export const TELEMETRY = token<Telemetry>('TELEMETRY');
 export const TRACING = token<Tracing>('TRACING');
 
 export interface TelemetryOptions {
   readonly tracer?: Tracer | undefined;
 }
+
+const INSTRUMENTATION_SCOPE = 'cloud-trigger';
 
 @Global()
 @Module({})
@@ -22,17 +28,29 @@ export class TelemetryModule {
       module: TelemetryModule,
       controllers: [MetricsController],
       providers: [
-        factoryProvider(TRACING, [ConfigService], ({ values }) =>
-          options.tracer
-            ? { tracer: options.tracer, shutdown: () => Promise.resolve() }
-            : startTracing(values),
+        factoryProvider(
+          TELEMETRY,
+          [ConfigService],
+          ({ values }) => startedTelemetry() ?? metricsOnlyTelemetry(values),
         ),
         factoryProvider(
-          token<ShutdownHook>('TRACING_SHUTDOWN'),
-          [TRACING],
-          (tracing) => new ShutdownHook(tracing.shutdown),
+          token<ShutdownHook>('TELEMETRY_SHUTDOWN'),
+          [TELEMETRY],
+          (telemetry) => new ShutdownHook(telemetry.shutdown),
         ),
-        factoryProvider(AppMetrics, [], () => new AppMetrics()),
+        factoryProvider(TRACING, [TELEMETRY], (telemetry) => ({
+          tracer:
+            options.tracer ??
+            (telemetry.tracing
+              ? new OtelRunTracer(trace.getTracer(INSTRUMENTATION_SCOPE))
+              : undefined),
+        })),
+        factoryProvider(PrometheusExporter, [TELEMETRY], (telemetry) => telemetry.prometheus),
+        factoryProvider(
+          AppMetrics,
+          [TELEMETRY],
+          (telemetry) => new AppMetrics(telemetry.meterProvider.getMeter(INSTRUMENTATION_SCOPE)),
+        ),
       ],
       exports: [injectionToken(TRACING), AppMetrics],
     };

@@ -14,6 +14,7 @@ export interface RunSpanOutcome {
 
 export interface RunSpan {
   readonly traceparent: string | undefined;
+  readonly activate: <T>(work: () => Promise<T>) => Promise<T>;
   readonly end: (outcome: RunSpanOutcome) => void;
 }
 
@@ -22,5 +23,5 @@ export interface Tracer {
 }
 
 export const noopTracer: Tracer = {
-  startRun: () => ({ traceparent: undefined, end: () => undefined }),
+  startRun: () => ({ traceparent: undefined, activate: (work) => work(), end: () => undefined }),
 };

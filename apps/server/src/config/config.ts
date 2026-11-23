@@ -1,5 +1,3 @@
-import { hostname } from 'node:os';
-
 import {
   type ConfigIssue,
   DEFAULT_RETENTION,
@@ -10,12 +8,8 @@ import {
 } from '@cloud-trigger/core';
 import { z } from 'zod';
 
-const splitCsv = (s: string): string[] =>
-  s
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean);
-const csv = z.string().default('').transform(splitCsv);
+import { csv, splitCsv } from './env.js';
+import { TelemetryShape } from './telemetry-config.js';
 
 const KEY_HINT = 'Use 32 random bytes, base64-encoded (openssl rand -base64 32)';
 const EncryptionKey = z
@@ -33,7 +27,6 @@ const ConfigShape = z.object({
     .transform((s) => splitCsv(s === 'all' ? 'api,scheduler,worker,consumer' : s))
     .pipe(z.array(Role).min(1)),
   PORT: z.coerce.number().int().default(8080),
-  INSTANCE_ID: z.string().default(`${hostname()}-${process.pid}`),
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
 
   DB_DRIVER: z
@@ -109,11 +102,7 @@ const ConfigShape = z.object({
   SECRET_ENV_PREFIX: z.string().default('CT_SECRET_'),
   WEB_DIST: z.string().optional(),
   PLUGINS: csv,
-  OTEL_EXPORTER_OTLP_ENDPOINT: z
-    .url()
-    .optional()
-    .describe('Enables OpenTelemetry tracing; the SDK also reads the other OTEL_* variables.'),
-  OTEL_SERVICE_NAME: z.string().default('cloud-trigger'),
+  ...TelemetryShape.shape,
 });
 const ALL_ROLES: readonly Role[] = ['api', 'scheduler', 'worker', 'consumer'];
 
