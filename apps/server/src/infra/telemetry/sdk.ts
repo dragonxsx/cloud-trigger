@@ -59,6 +59,7 @@ import {
   exportsAnything,
   telemetryPlan,
 } from '../../config/telemetry-config.js';
+import { webhookRedactingSpanProcessor } from './webhook-redaction.js';
 
 const MAX_EXPORT_TIMEOUT_MS = 30_000;
 const DEFAULT_SERVICE_NAME = 'cloud-trigger';
@@ -121,6 +122,7 @@ function otlpLogExporter(protocol: OtlpProtocol): LogRecordExporter {
 }
 
 const spanProcessors = (traces: SignalExport): SpanProcessor[] => [
+  webhookRedactingSpanProcessor(),
   ...(traces.otlp === undefined
     ? []
     : [new BatchSpanProcessor({ exporter: otlpSpanExporter(traces.otlp) })]),

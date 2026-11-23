@@ -134,6 +134,7 @@ It starts the echo target with Docker Compose (`--no-echo` skips that), keeps it
 ### From source
 
 ```bash
+nvm use                                                      # Node 24, from .nvmrc
 pnpm install
 docker compose -f deploy/docker-compose.yml --profile demo up -d   # MongoDB replica set + echo server
 cp .env.example apps/server/.env
@@ -320,7 +321,7 @@ Cloud Trigger speaks OpenTelemetry and is configured with the standard `OTEL_*` 
 | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Traces  | Inbound HTTP requests, outgoing undici calls and MongoDB queries (auto-instrumented), plus a `run <job>` span per attempt. `traceparent` is forwarded to every target, and inbound webhooks continue the caller's trace.                             |
 | Metrics | `cloud_trigger_*` (runs, run duration, late runs, active runs, scheduler fires, schedule decisions, start lag, lease expirations, stale commits), HTTP server metrics and Node.js runtime metrics. Pushed over OTLP and always served at `/metrics`. |
-| Logs    | Every pino log record, with secrets already redacted. Stdout logs gain `trace_id` and `span_id`, so logs and traces link up even without OTLP logs.                                                                                                  |
+| Logs    | Every pino log record, with secrets (credentials and webhook tokens) already redacted. Stdout logs gain `trace_id` and `span_id`, so logs and traces link up even without OTLP logs.                                                                 |
 
 Nothing is exported until an endpoint is set:
 
