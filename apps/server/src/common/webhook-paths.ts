@@ -20,11 +20,3 @@ export const webhookTokenForms = (url: string): readonly string[] => {
 
 export const redactWebhookToken = (url: string): string =>
   url.replace(WEBHOOK_PATH, `$1${REDACTED_TOKEN}`);
-
-export const redactedWebhookPath = (url: string | undefined): string | undefined => {
-  const path = url?.replace(/[?#].*$/, '');
-
-  return path !== undefined && webhookTokenForms(path).length > 0
-    ? redactWebhookToken(path)
-    : undefined;
-};

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { redactedWebhookPath, webhookTokenForms } from '../src/common/webhook-paths.js';
+import { redactWebhookToken, webhookTokenForms } from '../src/common/webhook-paths.js';
 
 describe('webhook paths', () => {
   it('finds the token in raw and decoded form', () => {
@@ -11,9 +11,8 @@ describe('webhook paths', () => {
     expect(webhookTokenForms('/api/hooks/job-1/x')).toEqual([]);
   });
 
-  it('redacts the span path and drops the query', () => {
-    expect(redactedWebhookPath('/hooks/job-1/secret?sig=1')).toBe('/hooks/job-1/***');
-    expect(redactedWebhookPath('/api/jobs')).toBeUndefined();
-    expect(redactedWebhookPath(undefined)).toBeUndefined();
+  it('masks the token and keeps the rest of the url', () => {
+    expect(redactWebhookToken('/hooks/job-1/secret?sig=1')).toBe('/hooks/job-1/***?sig=1');
+    expect(redactWebhookToken('/api/jobs')).toBe('/api/jobs');
   });
 });
