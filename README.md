@@ -134,6 +134,7 @@ It starts the echo target with Docker Compose (`--no-echo` skips that), keeps it
 ### From source
 
 ```bash
+nvm use                                                      # Node 24, from .nvmrc
 pnpm install
 docker compose -f deploy/docker-compose.yml --profile demo up -d   # MongoDB replica set + echo server
 cp .env.example apps/server/.env
