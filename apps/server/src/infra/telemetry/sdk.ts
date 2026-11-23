@@ -47,10 +47,15 @@ import {
   type SpanExporter,
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
-import { ATTR_SERVICE_INSTANCE_ID, ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+import {
+  ATTR_SERVICE_INSTANCE_ID,
+  ATTR_SERVICE_NAME,
+  ATTR_URL_PATH,
+} from '@opentelemetry/semantic-conventions';
 import { createAddHookMessageChannel } from 'import-in-the-middle';
 
 import { isQuietPath } from '../../common/quiet-paths.js';
+import { redactedWebhookPath } from '../../common/webhook-paths.js';
 import {
   type OtlpProtocol,
   type SignalExport,
@@ -180,6 +185,12 @@ const instrumentations = (plan: TelemetryPlan) => {
   const configs: InstrumentationConfigMap = {
     '@opentelemetry/instrumentation-http': {
       ignoreIncomingRequestHook: (request) => isQuietPath(request.url),
+      requestHook: (span, request) => {
+        const path = 'url' in request ? redactedWebhookPath(request.url) : undefined;
+        if (path !== undefined) {
+          span.setAttribute(ATTR_URL_PATH, path);
+        }
+      },
     },
     '@opentelemetry/instrumentation-aws-sdk': { enabled: false },
     '@opentelemetry/instrumentation-grpc': { enabled: false },

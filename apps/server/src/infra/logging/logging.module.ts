@@ -5,7 +5,7 @@ import type { Logger as Pino } from 'pino';
 
 import { isQuietPath } from '../../common/quiet-paths.js';
 import { injectionToken, token, valueProvider } from '../../common/tokens.js';
-import { pinoLogger } from './logger.js';
+import { pinoLogger, redactRequestLog } from './logger.js';
 
 export const LOGGER = token<Logger>('LOGGER');
 
@@ -19,6 +19,7 @@ export class LoggingModule {
         LoggerModule.forRoot({
           pinoHttp: {
             logger: pino,
+            serializers: { req: redactRequestLog },
             autoLogging: {
               ignore: (req) => isQuietPath(req.url),
             },
