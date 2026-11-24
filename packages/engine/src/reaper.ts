@@ -1,5 +1,6 @@
 import {
   type Clock,
+  type EngineMetrics,
   type GroupRepository,
   type JobRepository,
   type Logger,
@@ -24,6 +25,7 @@ export interface ReaperDeps {
   readonly listeners: readonly RunLifecycleListener[];
   readonly groups?: GroupRepository | undefined;
   readonly rateLimiter?: RateLimiter | undefined;
+  readonly metrics?: EngineMetrics | undefined;
 }
 
 export interface ReaperOptions {
@@ -67,6 +69,7 @@ export class Reaper {
       const retry = job ? (await this.#policies.resolve(job)).policy.retry : noRetry;
       const result = await this.#completion.commit(run, expireLease(run, { retry, now }), job);
       if (result.isOk()) {
+        this.deps.metrics?.record({ kind: 'lease_expired' });
         this.deps.logger.warn('Recovered run with expired lease', {
           runId: run.id,
           workerId: run.lease.workerId,

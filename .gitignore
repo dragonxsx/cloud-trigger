@@ -11,3 +11,4 @@ coverage/
 CLAUDE.local.md
 apps/demo/.data/
 site/assets/
+.pnpm-store/

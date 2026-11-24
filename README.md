@@ -134,6 +134,7 @@ It starts the echo target with Docker Compose (`--no-echo` skips that), keeps it
 ### From source
 
 ```bash
+nvm use                                                      # Node 24, from .nvmrc
 pnpm install
 docker compose -f deploy/docker-compose.yml --profile demo up -d   # MongoDB replica set + echo server
 cp .env.example apps/server/.env
@@ -239,7 +240,7 @@ claude mcp add --transport http cloud-trigger http://localhost:8080/mcp --header
 <details>
 <summary><b>Operations, MCP and security</b></summary>
 
-- **Operations:** OpenTelemetry tracing (a span per run attempt, with `traceparent` forwarded to every target), run history, live updates over SSE, a dashboard (outcomes, p50/p95 latency, late runs, top errors), a failed-runs inbox with bulk replay and dismiss, a "Why didn't it run?" explainer, YAML import and export (`/api/jobs/export`, admin scope), status badges (`/badges/jobs/<id>.svg`), an iCal feed of upcoming runs (`/calendar.ics`), Prometheus `/metrics`, and OpenAPI docs at `/docs`.
+- **Operations:** OpenTelemetry traces, metrics and logs over OTLP (auto-instrumented HTTP, Express, undici and MongoDB, plus a span per run attempt with `traceparent` forwarded to every target; see [Observability](#observability)), run history, live updates over SSE, a dashboard (outcomes, p50/p95 latency, late runs, top errors), a failed-runs inbox with bulk replay and dismiss, a "Why didn't it run?" explainer, YAML import and export (`/api/jobs/export`, admin scope), status badges (`/badges/jobs/<id>.svg`), an iCal feed of upcoming runs (`/calendar.ics`), Prometheus `/metrics`, and OpenAPI docs at `/docs`.
 - **MCP:** an MCP server at `/mcp` (Streamable HTTP, same API keys and OIDC scopes) lets AI agents list, create, run, pause and explain jobs, read runs and analytics, and approve workflow gates.
 - **Security:** sign-in is configured in the UI and stored in the database: username and password accounts (argon2), OIDC (the UI signs in with authorization code + PKCE) and hashed API keys, with `read`/`write`/`admin` scopes. Anonymous `read` access serves wallboards. A first-run wizard picks the database and creates the first admin. Secrets are referenced as `{{secret:NAME}}` and redacted in every response and export.
 
@@ -311,6 +312,35 @@ helm install ct deploy/helm/cloud-trigger \
 The chart deploys `api`, `scheduler` and `worker` as separate Deployments, with an HPA on workers. Set `combined.enabled=true` to run a single Deployment instead.
 
 API keys are created in Settings → API keys. The key is shown once, and only its SHA-256 hash is stored.
+
+### Observability
+
+Cloud Trigger speaks OpenTelemetry and is configured with the standard `OTEL_*` variables, so it works with an OpenTelemetry Collector or any OTLP backend (Grafana, Datadog, Honeycomb, New Relic, Elastic and others).
+
+| Signal  | What you get                                                                                                                                                                                                                                         |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Traces  | Inbound HTTP requests, outgoing undici calls and MongoDB queries (auto-instrumented), plus a `run <job>` span per attempt. `traceparent` is forwarded to every target, and inbound webhooks continue the caller's trace.                             |
+| Metrics | `cloud_trigger_*` (runs, run duration, late runs, active runs, scheduler fires, schedule decisions, start lag, lease expirations, stale commits), HTTP server metrics and Node.js runtime metrics. Pushed over OTLP and always served at `/metrics`. |
+| Logs    | Every pino log record, with secrets (credentials and webhook tokens) already redacted. Stdout logs gain `trace_id` and `span_id`, so logs and traces link up even without OTLP logs.                                                                 |
+
+Nothing is exported until an endpoint is set:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   # every signal; :4317 with OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_EXPORTER_OTLP_HEADERS=authorization=Basic%20<token> # vendor auth; keep it in a secret
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=prod
+OTEL_LOGS_EXPORTER=none                                  # opt a signal out; otlp, console or none per signal
+OTEL_TRACES_SAMPLER=parentbased_traceidratio OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+- Per-signal endpoints (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `…_METRICS_…`, `…_LOGS_…`) and protocols (`OTEL_EXPORTER_OTLP_TRACES_PROTOCOL`, …) send each signal somewhere different. An `otlp` exporter without any endpoint is skipped, so `console,otlp` prints locally and sends nothing.
+- The service is named `cloud-trigger` unless `OTEL_SERVICE_NAME` or `service.name` in `OTEL_RESOURCE_ATTRIBUTES` says otherwise.
+- `OTEL_NODE_DISABLED_INSTRUMENTATIONS` or `OTEL_NODE_ENABLED_INSTRUMENTATIONS` choose the auto-instrumentations (`fs`, `dns` and `net` are off by default). `OTEL_SDK_DISABLED=true` turns instrumentation off; `/metrics` keeps the `cloud_trigger_*` and Node.js runtime metrics.
+- In Helm, set these under `config:` and put `OTEL_EXPORTER_OTLP_HEADERS` under `secrets.values`. `serviceMonitor.enabled=true` keeps Prometheus scraping `/metrics`.
+- To try it locally: `OTEL_EXPORTER_OTLP_ENDPOINT=http://lgtm:4318 docker compose -f deploy/docker-compose.yml --profile app --profile observability up`, then open Grafana at http://localhost:3000.
+- The `@nestjs/core` instrumentation does not support Nest 12 yet, so request spans come from the HTTP and Express instrumentations.
+
+> **Upgrading:** `/metrics` is now produced by OpenTelemetry. The `cloud_trigger_*` series keep their names, but the Node.js defaults (`process_*`, `nodejs_*`) are replaced by OpenTelemetry runtime metrics (`nodejs_eventloop_*`, `v8js_*`) and `http_server_request_duration`. Update dashboards that used the old names.
 
 ### Secrets at rest
 

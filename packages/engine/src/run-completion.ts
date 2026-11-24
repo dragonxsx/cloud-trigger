@@ -1,6 +1,7 @@
 import {
   type Clock,
   type DecisionLog,
+  type EngineMetrics,
   type FinishedRun,
   type GroupRepository,
   type Job,
@@ -34,6 +35,7 @@ export interface RunCompletionDeps {
   readonly groups?: GroupRepository | undefined;
   readonly rateLimiter?: RateLimiter | undefined;
   readonly decisions?: DecisionLog | undefined;
+  readonly metrics?: EngineMetrics | undefined;
 }
 
 export class RunCompletion {
@@ -42,7 +44,7 @@ export class RunCompletion {
 
   constructor(private readonly deps: RunCompletionDeps) {
     this.#policies = new PolicyResolver(deps.groups, deps.clock);
-    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger);
+    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger, deps.metrics);
   }
 
   async commit(
@@ -55,6 +57,8 @@ export class RunCompletion {
     }
     const saved = await this.deps.runs.transition(previous, next);
     if (saved.isErr()) {
+      this.deps.metrics?.record({ kind: 'stale_commit' });
+
       return saved;
     }
     const stored = saved.value;

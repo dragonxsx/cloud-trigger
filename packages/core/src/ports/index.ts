@@ -11,6 +11,7 @@ export * from './notifications.js';
 export * from './groups.js';
 export * from './decisions.js';
 export * from './tracing.js';
+export * from './metrics.js';
 export * from './persistence.js';
 export * from './event-sources.js';
 export * from './workflows.js';

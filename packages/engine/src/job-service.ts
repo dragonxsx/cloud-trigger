@@ -10,6 +10,7 @@ import {
   type Connection,
   type DecisionLog,
   type DomainError,
+  type EngineMetrics,
   type EnvironmentRepository,
   type EventBus,
   type FinishedRun,
@@ -74,6 +75,7 @@ export interface JobServiceDeps {
   readonly groups?: GroupRepository | undefined;
   readonly rateLimiter?: RateLimiter | undefined;
   readonly decisions?: DecisionLog | undefined;
+  readonly metrics?: EngineMetrics | undefined;
 }
 
 export interface BackfillResult {
@@ -119,7 +121,7 @@ export class JobService {
   constructor(private readonly deps: JobServiceDeps) {
     this.#completion = new RunCompletion(deps);
     this.#policies = new PolicyResolver(deps.groups, deps.clock, 0);
-    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger);
+    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger, deps.metrics);
   }
 
   async #trigger(job: Job) {

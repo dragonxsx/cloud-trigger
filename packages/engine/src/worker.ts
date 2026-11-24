@@ -4,6 +4,7 @@ import {
   type ConnectionRepository,
   type DecisionLog,
   EngineErrorCode,
+  type EngineMetrics,
   type GroupId,
   type RateLimit,
   type FinishedRun,
@@ -66,6 +67,7 @@ export interface WorkerDeps {
   readonly groups?: GroupRepository | undefined;
   readonly rateLimiter?: RateLimiter | undefined;
   readonly decisions?: DecisionLog | undefined;
+  readonly metrics?: EngineMetrics | undefined;
   readonly tracer?: Tracer | undefined;
 }
 
@@ -100,7 +102,7 @@ export class Worker {
     this.#loop = new PollingLoop('worker', options.pollIntervalMs, () => this.tick(), deps.logger);
     this.#completion = new RunCompletion(deps);
     this.#policies = new PolicyResolver(deps.groups, deps.clock);
-    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger);
+    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger, deps.metrics);
   }
 
   #overlapSkipped(run: RunningRun, detail: string): Promise<void> {
@@ -377,6 +379,13 @@ export class Worker {
     );
 
     const parent = claimed.parent ?? (await this.#legacyParent(claimed));
+    this.deps.metrics?.record({
+      kind: 'attempt_started',
+      reason: claimed.reason,
+      targetType: job.target.type,
+      attempt: currentAttempt(claimed),
+      lagMs: claimed.startedAt.getTime() - claimed.scheduledAt.getTime(),
+    });
     const span = (this.deps.tracer ?? noopTracer).startRun({
       jobId: job.id,
       jobName: job.name,
@@ -403,14 +412,16 @@ export class Worker {
     let result: TargetResult;
     const started = performance.now();
     try {
-      result = await this.#settleOnAbort(signal, async () => {
-        const payload = await ResultAsync.fromPromise(input.resolve(ctx), toError);
-        if (payload.isErr()) {
-          return failedResult(EngineErrorCode.inputFailed, payload.error.message, false);
-        }
+      result = await this.#settleOnAbort(signal, () =>
+        span.activate(async () => {
+          const payload = await ResultAsync.fromPromise(input.resolve(ctx), toError);
+          if (payload.isErr()) {
+            return failedResult(EngineErrorCode.inputFailed, payload.error.message, false);
+          }
 
-        return target.execute({ payload: payload.value, ctx, signal });
-      });
+          return target.execute({ payload: payload.value, ctx, signal });
+        }),
+      );
     } catch (error: unknown) {
       result = failedResult(
         EngineErrorCode.unexpected,

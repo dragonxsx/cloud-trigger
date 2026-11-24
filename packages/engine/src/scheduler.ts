@@ -2,10 +2,12 @@ import {
   type Clock,
   type ConnectionRepository,
   type DecisionLog,
+  type EngineMetrics,
   type GroupRepository,
   type Job,
   type JobRepository,
   type Logger,
+  type PendingRun,
   type ProviderRegistry,
   type ScheduleStore,
   newPendingRun,
@@ -34,6 +36,7 @@ export interface SchedulerDeps {
   readonly connections?: ConnectionRepository | undefined;
   readonly groups?: GroupRepository | undefined;
   readonly decisions?: DecisionLog | undefined;
+  readonly metrics?: EngineMetrics | undefined;
 }
 
 export class Scheduler {
@@ -47,7 +50,7 @@ export class Scheduler {
   ) {
     this.#loop = new PollingLoop('scheduler', options.intervalMs, () => this.tick(), deps.logger);
     this.#policies = new PolicyResolver(deps.groups, deps.clock);
-    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger);
+    this.#decisions = new DecisionRecorder(deps.decisions, deps.clock, deps.logger, deps.metrics);
   }
 
   start(): void {
@@ -125,10 +128,12 @@ export class Scheduler {
       },
     });
     if (committed.isErr()) {
+      this.deps.metrics?.record({ kind: 'fire_dropped' });
       this.deps.logger.warn('Dropping fire: scheduler claim was lost', { jobId: job.id });
 
       return;
     }
+    this.#recordFires(committed.value);
     if (plan.skippedCount > 0) {
       this.deps.logger.info('Skipped missed fire times per misfire policy', {
         jobId: job.id,
@@ -164,5 +169,12 @@ export class Scheduler {
       runs: committed.value.length,
       nextFireAt: plan.nextFireAt?.toISOString(),
     });
+  }
+
+  #recordFires(queued: readonly PendingRun[]): void {
+    for (const reason of new Set(queued.map((run) => run.reason))) {
+      const count = queued.filter((run) => run.reason === reason).length;
+      this.deps.metrics?.record({ kind: 'fired', reason, count });
+    }
   }
 }
