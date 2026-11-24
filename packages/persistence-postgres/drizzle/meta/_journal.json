@@ -43,6 +43,13 @@
       "when": 1792503659138,
       "tag": "0005_fluffy_madame_web",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795534849837,
+      "tag": "0006_minor_supreme_intelligence",
+      "breakpoints": true
     }
   ]
 }

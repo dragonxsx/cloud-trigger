@@ -18,6 +18,7 @@ paths:
   - The same spec types `rowParser`, `insertInto` and `assignments`. A column missing from the spec, or holding the wrong type, fails typecheck.
   - To change the schema, edit `tables.ts`, then run `pnpm --filter @cloud-trigger/persistence-postgres db:generate` and the same for `persistence-sqlite`. The script builds `persistence-sql` first, because drizzle-kit loads its `dist`. Never edit a released migration.
 - Postgres infers untyped parameters inside `CASE` as `text`; wrap them in `CAST(... AS BIGINT)`.
+- Retention: the SQL `sweep` deletes finished `runs`, `workflow_runs` (by `finished_at`), `run_metrics` and `schedule_decisions`, and reports failures through `onSweepError`. Mongo uses TTL indexes for the same data. A new table or collection that grows without bound needs a retention rule in both.
 - Multi-write operations that must be all-or-nothing go through `persistence.unitOfWork.transaction`. It is atomic on SQL and best-effort on Mongo (`atomic: false`).
 - Because Mongo's unit of work is not atomic, order writes so a partial failure stays recoverable (setup inserts the admin before the settings). Re-check cross-replica invariants, such as "some admin can sign in", after the write: the in-process `Mutex` only serializes one replica.
 - Engine integration tests run once per adapter as Vitest projects (`ENGINE_DB`: `mongo`, `postgres`, `sqlite`); use `h.clear([...tables])` instead of driver calls.

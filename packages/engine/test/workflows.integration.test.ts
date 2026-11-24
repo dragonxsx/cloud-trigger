@@ -1,7 +1,13 @@
-import { EnvironmentSpec, createEnvironment, newEnvironmentId } from '@cloud-trigger/core';
+import {
+  EnvironmentSpec,
+  type WorkflowRepository,
+  createEnvironment,
+  newEnvironmentId,
+  silentLogger,
+} from '@cloud-trigger/core';
 import { describe, expect, it } from 'vitest';
 
-import type { Worker } from '../src/index.js';
+import { type Worker, WorkflowMonitor } from '../src/index.js';
 import { useHarness } from './harness.js';
 
 const h = useHarness('workflows');
@@ -144,6 +150,122 @@ describe('DAG workflows', () => {
     expect(runs.items[0]?.idempotencyKey).toMatch(/^wfsched:/);
   });
 
+  it('stops an interval workflow after maxCount fires', async () => {
+    const workflow = (
+      await h.workflows().create({
+        name: 'twice',
+        schedule: { type: 'interval', config: { every: 1, unit: 'minutes', maxCount: 2 } },
+        nodes: [inline('only', '/twice')],
+      })
+    )._unsafeUnwrap();
+    for (let i = 0; i < 3; i++) {
+      h.advance(60_000);
+      await h.workflowMonitor().tick();
+    }
+    const runs = await h.workflows().listRuns({ limit: 10, workflowId: workflow.id });
+    expect(runs.items).toHaveLength(2);
+    expect((await h.workflows().get(workflow.id))._unsafeUnwrap()).toMatchObject({
+      nextFireAt: null,
+      fireCount: 2,
+    });
+  });
+
+  it('keeps the next fire time when an edit leaves the schedule alone', async () => {
+    const spec = {
+      name: 'nightly',
+      schedule: { type: 'interval', config: { every: 1, unit: 'minutes' } },
+      nodes: [inline('only', '/nightly')],
+    };
+    const created = (await h.workflows().create(spec))._unsafeUnwrap();
+    h.advance(60_000);
+    await h.workflowMonitor().tick();
+    const fired = (await h.workflows().get(created.id))._unsafeUnwrap();
+    h.advance(30_000);
+    const renamed = (
+      await h.workflows().update(created.id, { ...spec, name: 'renamed' }, fired.version)
+    )._unsafeUnwrap();
+    expect(renamed).toMatchObject({
+      name: 'renamed',
+      nextFireAt: fired.nextFireAt,
+      fireCount: 1,
+    });
+  });
+
+  it('keeps a scheduled occurrence when firing it fails once', async () => {
+    const workflow = (
+      await h.workflows().create({
+        name: 'flaky store',
+        schedule: { type: 'interval', config: { every: 1, unit: 'minutes' } },
+        nodes: [inline('only', '/flaky')],
+      })
+    )._unsafeUnwrap();
+    let failures = 1;
+    const workflows: WorkflowRepository = {
+      ...h.db.workflows,
+      findDue: (p) => h.db.workflows.findDue(p),
+      fireSchedule: async (fire) => {
+        if (failures-- > 0) {
+          throw new Error('store unavailable');
+        }
+
+        return h.db.workflows.fireSchedule(fire);
+      },
+    };
+    const monitor = new WorkflowMonitor(
+      {
+        ...h.db,
+        workflows,
+        registry: h.registry,
+        clock: h.clock,
+        logger: silentLogger,
+        runtime: h.workflowRuntime(),
+      },
+      { intervalMs: 1_000, batchSize: 50 },
+    );
+    h.advance(60_000);
+    await monitor.tick();
+    expect((await h.workflows().get(workflow.id))._unsafeUnwrap().nextFireAt).toEqual(
+      workflow.nextFireAt,
+    );
+    await monitor.tick();
+    const runs = await h.workflows().listRuns({ limit: 10, workflowId: workflow.id });
+    expect(runs.items).toHaveLength(1);
+  });
+
+  it('does not fire a workflow disabled after it was found due', async () => {
+    const spec = {
+      name: 'switched off',
+      schedule: { type: 'interval', config: { every: 1, unit: 'minutes' } },
+      nodes: [inline('only', '/off')],
+    };
+    const workflow = (await h.workflows().create(spec))._unsafeUnwrap();
+    const workflows: WorkflowRepository = {
+      ...h.db.workflows,
+      findDue: async (p) => {
+        const due = await h.db.workflows.findDue(p);
+        await h.workflows().update(workflow.id, { ...spec, enabled: false }, workflow.version);
+
+        return due;
+      },
+      fireSchedule: (fire) => h.db.workflows.fireSchedule(fire),
+    };
+    const monitor = new WorkflowMonitor(
+      {
+        ...h.db,
+        workflows,
+        registry: h.registry,
+        clock: h.clock,
+        logger: silentLogger,
+        runtime: h.workflowRuntime(),
+      },
+      { intervalMs: 1_000, batchSize: 50 },
+    );
+    h.advance(60_000);
+    await monitor.tick();
+    const runs = await h.workflows().listRuns({ limit: 10, workflowId: workflow.id });
+    expect(runs.items).toEqual([]);
+  });
+
   it('passes its environment to inline jobs that set none', async () => {
     for (const key of ['staging', 'prod']) {
       await h.db.environments.insert(
@@ -202,6 +324,25 @@ describe('DAG workflows', () => {
     await h.workflowMonitor().tick();
     await drain(h.worker(), 2);
     expect((await statuses(run.id)).status).toBe('succeeded');
+  });
+
+  it('repairs lost node runs beyond the first batch', async () => {
+    const started = [];
+    for (const name of ['one', 'two', 'three']) {
+      const workflow = (
+        await h.workflows().create({ name, nodes: [inline('a', `/repair-${name}`)] })
+      )._unsafeUnwrap();
+      started.push((await h.workflows().start(workflow.id))._unsafeUnwrap());
+    }
+    await h.clear(['runs', 'fire_keys']);
+    const monitor = h.workflowMonitor({ batchSize: 1 });
+    for (let i = 0; i < 3; i++) {
+      await monitor.tick();
+    }
+    await drain(h.worker(), 3);
+    for (const run of started) {
+      expect((await statuses(run.id)).status).toBe('succeeded');
+    }
   });
 
   it('validates graphs, job references, schedules and inline jobs', async () => {

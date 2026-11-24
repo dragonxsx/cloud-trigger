@@ -218,7 +218,8 @@ export function sealedPersistence(inner: Persistence, deps: SealingDeps): Persis
       findByEnvironment: async (environment) =>
         (await workflows.findByEnvironment(environment)).map(sealer.openWorkflow),
       findDue: async (p) => (await workflows.findDue(p)).map(sealer.openWorkflow),
-      advanceSchedule: (id, p) => workflows.advanceSchedule(id, p),
+      fireSchedule: (fire) =>
+        workflows.fireSchedule({ ...fire, run: fields.workflowRun(fire.run, seal) }),
     },
     workflowRuns: {
       insert: async (run) =>

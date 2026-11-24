@@ -78,19 +78,22 @@ All transitions are pure functions that return the next `WorkflowRun` plus a lis
 - **Node runs** are inserted as `reason: 'workflow'` runs with `workflow: { runId, node }` and the idempotency key `wf:<workflowRunId>:<nodeKey>` (a durable key). Because the `runId` is chosen in the CAS-written state _before_ the insert, a crash between the two is repaired by re-inserting the same id and key.
 - **`WorkflowAdvancer implements RunLifecycleListener`**: on `onRunFinished` for a run with `workflow` set, it loads the instance, applies `completeNode`, CAS-writes it (`WorkflowRunRepository.update(next, expectedVersion)`), and applies the effects. On a version conflict it reloads and retries; the transitions are idempotent. A node whose run was cancelled counts as `cancelled`.
 - **`WorkflowMonitor extends PollingLoop`** (scheduler role) does three things:
-  1. Fires due scheduled workflows. `WorkflowRepository.advanceSchedule` is a CAS on `nextFireAt`, and the instance key `wfsched:<workflowId>:<iso>` has a unique index, so the fire is exactly once.
+  1. Fires due scheduled workflows. `WorkflowRepository.fireSchedule` runs one transaction that is fenced on `nextFireAt` and `enabled`, inserts the run under the unique instance key `wfsched:<workflowId>:<iso>`, and advances the schedule. A crash can't lose an occurrence, and a workflow disabled after `findDue` doesn't fire. Each workflow fires in its own try/catch, so one failure doesn't block the rest of the tick.
   2. Fails expired approvals.
-  3. Repairs `queued` nodes whose run is missing.
+  3. Repairs `queued` nodes whose run is missing. It pages with a cursor (`findWithQueuedNodes({ limit, after })`), so runs past the first batch are reached too. Each replica keeps its own cursor.
+- **Schedule state.** `Workflow.fireCount` and `Workflow.lastFiredAt` record what the schedule has fired, so `maxCount` bounds hold. `WorkflowService.update` reschedules only when `schedule` or `enabled` changes, as jobs do. It computes the new time from the real counters and sends `basedOn`, so a fire that lands in between turns the update into a version conflict instead of being overwritten.
 - Cancelling a workflow run cancels its pending and running node runs through `JobService.cancelRun`.
 
 ## Persistence
 
 New ports, with contract tests written first in `describePersistenceContract`:
 
-- `WorkflowRepository`: `insert`, `get`, `list`, `update(id, change, expectedVersion)`, `delete`, `findDue({ now, limit })`, `advanceSchedule(id, { from, to })`.
-- `WorkflowRunRepository`: `insert` (`duplicate_run` on a key collision), `get`, `list({ workflowId?, status?, … })`, `update(next, expectedVersion)` (`stale_run` on conflict), `findExpiredApprovals({ now, limit })`, `findWithQueuedNodes({ limit })`.
+- `WorkflowRepository`: `insert`, `get`, `list`, `update(id, change, expectedVersion)` (with an optional `basedOn` schedule guard), `delete`, `findDue({ now, limit })`, `fireSchedule({ id, from, schedule, run })`.
+- `WorkflowRunRepository`: `insert` (`duplicate_run` on a key collision), `get`, `list({ workflowId?, status?, … })`, `update(next, expectedVersion)` (`stale_run` on conflict), `findExpiredApprovals({ now, limit })`, `findWithQueuedNodes({ limit, after? })`.
 
 Every adapter stores them as `workflows` and `workflow_runs`. `workflow_runs` has a unique partial index on the idempotency key, plus indexes on workflow id and id, status and id, and the approval deadlines. Mongo uses collections; the SQL adapters use the tables in `persistence-sql/src/tables.ts`, where `workflow_runs` also keeps a `has_queued` hot column for `findWithQueuedNodes`.
+
+Finished workflow runs expire after `RUN_RETENTION_DAYS`, like ordinary runs, and their approval decisions go with them. On SQL, the retention sweep deletes them by the `finished_at` hot column and fills that column in for rows written before it existed. On Mongo, a TTL index on `finishedAt` removes them.
 
 ## API
 

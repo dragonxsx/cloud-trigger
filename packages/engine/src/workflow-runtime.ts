@@ -65,27 +65,37 @@ export class WorkflowRuntime {
     this.#policies = new PolicyResolver(deps.groups, deps.clock);
   }
 
-  async start(
+  prepareStart(
     workflow: Workflow,
     p: { reason: 'manual' | 'scheduled'; idempotencyKey?: string | undefined },
-  ): Promise<WorkflowRun | undefined> {
-    const now = this.deps.clock.now();
-    const started = startWorkflowRun(workflow, {
+  ): Transition {
+    return startWorkflowRun(workflow, {
       id: newWorkflowRunId(),
       jobIds: nodeJobIds(workflow),
       reason: p.reason,
       idempotencyKey: p.idempotencyKey ?? null,
-      now,
+      now: this.deps.clock.now(),
     });
+  }
+
+  async afterStart(started: Transition): Promise<void> {
+    await this.#applyStarts(started.run, started.effects);
+    this.deps.logger.info('Workflow started', {
+      workflowId: started.run.workflowId,
+      workflowRunId: started.run.id,
+    });
+  }
+
+  async start(
+    workflow: Workflow,
+    p: { reason: 'manual' | 'scheduled'; idempotencyKey?: string | undefined },
+  ): Promise<WorkflowRun | undefined> {
+    const started = this.prepareStart(workflow, p);
     const inserted = await this.deps.workflowRuns.insert(started.run);
     if (inserted.isErr()) {
       return undefined;
     }
-    await this.#applyStarts(started.run, started.effects);
-    this.deps.logger.info('Workflow started', {
-      workflowId: workflow.id,
-      workflowRunId: started.run.id,
-    });
+    await this.afterStart(started);
 
     return started.run;
   }

@@ -104,6 +104,8 @@ export const makeWorkflow = (
   id: newWorkflowId(),
   inlineJobIds: {},
   nextFireAt,
+  lastFiredAt: null,
+  fireCount: 0,
   version: 1,
   createdAt: T0,
   updatedAt: T0,

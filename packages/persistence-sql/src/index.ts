@@ -46,6 +46,7 @@ export interface SqlAdapterOptions {
   readonly retention?: RetentionPolicy | undefined;
   readonly sweepIntervalMs?: number | undefined;
   readonly onEventBusError?: ((error: unknown) => void) | undefined;
+  readonly onSweepError?: ((error: unknown) => void) | undefined;
 }
 
 export interface SqlPersistenceOptions {
@@ -64,6 +65,7 @@ export interface SqlPersistence extends Persistence {
 }
 
 const DAY_MS = 86_400_000;
+const LEGACY_BACKFILL_BATCH = 500;
 
 export const createSession = (db: RawDatabase, dialect: SqlDialect): SqlSession =>
   new SqlSession(db, dialect);
@@ -71,6 +73,7 @@ export const createSession = (db: RawDatabase, dialect: SqlDialect): SqlSession 
 export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersistence {
   const { session, changes } = options;
   const retention = options.retention ?? DEFAULT_RETENTION;
+  const workflowRuns = new SqlWorkflowRunRepository(session);
   const sweep = async (now: Date): Promise<void> => {
     const at = now.getTime();
     await session.run(
@@ -81,6 +84,10 @@ export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersist
     );
     await session.run(
       sql`DELETE FROM schedule_decisions WHERE at < ${at - retention.decisionDays * DAY_MS}`,
+    );
+    await workflowRuns.expireFinished(
+      new Date(at - retention.runDays * DAY_MS),
+      LEGACY_BACKFILL_BATCH,
     );
   };
   const timer =
@@ -105,7 +112,7 @@ export function createSqlPersistence(options: SqlPersistenceOptions): SqlPersist
     decisions: new SqlDecisionLog(session),
     eventSources: new SqlEventSourceLeases(session),
     workflows: new SqlWorkflowRepository(session),
-    workflowRuns: new SqlWorkflowRunRepository(session),
+    workflowRuns,
     authSettings: new SqlAuthSettingsStore(session),
     users: new SqlUserRepository(session),
     apiKeys: new SqlApiKeyRepository(session),

@@ -1,0 +1,2 @@
+ALTER TABLE "workflow_runs" ADD COLUMN "finished_at" bigint;--> statement-breakpoint
+CREATE INDEX "workflow_runs_finished" ON "workflow_runs" USING btree ("finished_at") WHERE "workflow_runs"."finished_at" IS NOT NULL;

@@ -218,8 +218,8 @@ export function describePersistenceContract(
         expect(await names('prod')).toEqual(['staged']);
       });
 
-      it('finds due workflows and advances each schedule once', async () => {
-        const { workflows } = setup.ports();
+      it('finds due workflows and fires each occurrence once, with its run', async () => {
+        const { workflows, workflowRuns } = setup.ports();
         const due = makeWorkflow({ name: 'due' }, at(0));
         await workflows.insert(due);
         await workflows.insert(makeWorkflow({ name: 'later' }, at(60_000)));
@@ -228,26 +228,115 @@ export function describePersistenceContract(
         expect((await workflows.findDue({ now: at(1), limit: 10 })).map((w) => w.name)).toEqual([
           'due',
         ]);
-        const advance = () => workflows.advanceSchedule(due.id, { from: at(0), to: at(30_000) });
-        const results = await Promise.all([advance(), advance()]);
+        const fire = () =>
+          workflows.fireSchedule({
+            id: due.id,
+            from: at(0),
+            schedule: { nextFireAt: at(30_000), lastFiredAt: at(0), fireCount: 1 },
+            run: makeWorkflowRun(due, { key: `wfsched:${due.id}:0` }),
+          });
+        const results = await Promise.all([fire(), fire()]);
         expect(results.filter(Boolean)).toHaveLength(1);
-        expect((await workflows.get(due.id))?.nextFireAt).toEqual(at(30_000));
+        expect(await workflows.get(due.id)).toMatchObject({
+          nextFireAt: at(30_000),
+          lastFiredAt: at(0),
+          fireCount: 1,
+          version: 1,
+        });
+        expect((await workflowRuns.list({ limit: 10, workflowId: due.id })).total).toBe(1);
         expect(await workflows.findDue({ now: at(1), limit: 10 })).toEqual([]);
       });
 
-      it('keeps an advanced schedule when an update omits nextFireAt', async () => {
+      it('refuses to fire a workflow that was disabled after it was found due', async () => {
+        const { workflows, workflowRuns } = setup.ports();
+        const due = makeWorkflow({ name: 'due' }, at(0));
+        await workflows.insert(due);
+        await workflows.update(
+          due.id,
+          { spec: { ...due, enabled: false }, inlineJobIds: {}, updatedAt: at(1) },
+          due.version,
+        );
+        const fired = await workflows.fireSchedule({
+          id: due.id,
+          from: at(0),
+          schedule: { nextFireAt: at(30_000), lastFiredAt: at(0), fireCount: 1 },
+          run: makeWorkflowRun(due, { key: `wfsched:${due.id}:0` }),
+        });
+        expect(fired).toBe(false);
+        expect((await workflowRuns.list({ limit: 10, workflowId: due.id })).total).toBe(0);
+        expect(await workflows.get(due.id)).toMatchObject({ nextFireAt: at(0), fireCount: 0 });
+      });
+
+      it('advances the schedule without a second run when the occurrence already has one', async () => {
+        const { workflows, workflowRuns } = setup.ports();
+        const due = makeWorkflow({ name: 'due' }, at(0));
+        await workflows.insert(due);
+        const key = `wfsched:${due.id}:0`;
+        await workflowRuns.insert(makeWorkflowRun(due, { key }));
+        const fired = await workflows.fireSchedule({
+          id: due.id,
+          from: at(0),
+          schedule: { nextFireAt: at(30_000), lastFiredAt: at(0), fireCount: 1 },
+          run: makeWorkflowRun(due, { key }),
+        });
+        expect(fired).toBe(false);
+        expect((await workflowRuns.list({ limit: 10, workflowId: due.id })).total).toBe(1);
+        expect((await workflows.get(due.id))?.nextFireAt).toEqual(at(30_000));
+      });
+
+      it('keeps the schedule state when an update omits nextFireAt', async () => {
         const { workflows } = setup.ports();
         const due = makeWorkflow({ name: 'due' }, at(0));
         await workflows.insert(due);
-        expect(await workflows.advanceSchedule(due.id, { from: at(0), to: at(30_000) })).toBe(true);
-        const { nextFireAt: _stale, ...spec } = due;
+        expect(
+          await workflows.fireSchedule({
+            id: due.id,
+            from: at(0),
+            schedule: { nextFireAt: at(30_000), lastFiredAt: at(0), fireCount: 1 },
+            run: makeWorkflowRun(due),
+          }),
+        ).toBe(true);
+        const { nextFireAt: _next, lastFiredAt: _last, fireCount: _count, ...spec } = due;
         const updated = await workflows.update(
           due.id,
           { spec: { ...spec, name: 'renamed' }, inlineJobIds: {}, updatedAt: at(1) },
           due.version,
         );
-        expect(updated._unsafeUnwrap()).toMatchObject({ name: 'renamed', nextFireAt: at(30_000) });
-        expect((await workflows.get(due.id))?.nextFireAt).toEqual(at(30_000));
+        expect(updated._unsafeUnwrap()).toMatchObject({
+          name: 'renamed',
+          nextFireAt: at(30_000),
+          lastFiredAt: at(0),
+          fireCount: 1,
+        });
+        expect(await workflows.get(due.id)).toMatchObject({
+          nextFireAt: at(30_000),
+          lastFiredAt: at(0),
+          fireCount: 1,
+        });
+      });
+
+      it('refuses a reschedule based on a schedule that has fired since', async () => {
+        const { workflows } = setup.ports();
+        const due = makeWorkflow({ name: 'due' }, at(0));
+        await workflows.insert(due);
+        await workflows.fireSchedule({
+          id: due.id,
+          from: at(0),
+          schedule: { nextFireAt: at(30_000), lastFiredAt: at(0), fireCount: 1 },
+          run: makeWorkflowRun(due),
+        });
+        const reschedule = (basedOn: { nextFireAt: Date | null; fireCount: number }) =>
+          workflows.update(
+            due.id,
+            { spec: due, inlineJobIds: {}, nextFireAt: at(90_000), basedOn, updatedAt: at(1) },
+            due.version,
+          );
+        expect(
+          (await reschedule({ nextFireAt: at(0), fireCount: 0 }))._unsafeUnwrapErr().code,
+        ).toBe('version_conflict');
+        expect(
+          (await reschedule({ nextFireAt: at(30_000), fireCount: 1 }))._unsafeUnwrap().nextFireAt,
+        ).toEqual(at(90_000));
       });
     });
 
@@ -309,10 +398,28 @@ export function describePersistenceContract(
         expect((await workflowRuns.findWithQueuedNodes({ limit: 10 })).map((r) => r.id)).toEqual([
           queued.id,
         ]);
+        expect(await workflowRuns.findWithQueuedNodes({ limit: 10, after: queued.id })).toEqual([]);
         expect(await workflowRuns.findExpiredApprovals({ now: at(500), limit: 10 })).toEqual([]);
         expect(
           (await workflowRuns.findExpiredApprovals({ now: at(1_000), limit: 10 })).map((r) => r.id),
         ).toEqual([other.id]);
+      });
+      it('pages runs with queued nodes after a cursor', async () => {
+        const { workflowRuns } = setup.ports();
+        const workflow = makeWorkflow();
+        const runs = [
+          makeWorkflowRun(workflow),
+          makeWorkflowRun(workflow),
+          makeWorkflowRun(workflow),
+        ];
+        for (const run of runs) {
+          await workflowRuns.insert(run);
+        }
+        const ids = runs.map((r) => r.id).toSorted();
+        const first = await workflowRuns.findWithQueuedNodes({ limit: 2 });
+        expect(first.map((r) => r.id)).toEqual(ids.slice(0, 2));
+        const second = await workflowRuns.findWithQueuedNodes({ limit: 2, after: first[1]?.id });
+        expect(second.map((r) => r.id)).toEqual(ids.slice(2));
       });
     });
 

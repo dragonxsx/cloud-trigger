@@ -6,6 +6,7 @@ import {
   type VersionConflictError,
   Workflow,
   type WorkflowChange,
+  type WorkflowFire,
   type WorkflowId,
   type WorkflowQuery,
   type WorkflowRepository,
@@ -18,6 +19,7 @@ import {
   notFound,
   ok,
   savedWorkflowRun,
+  scheduleMovedSince,
   staleWorkflowRun,
   versionConflict,
   workflowChangeFields,
@@ -54,6 +56,7 @@ const runColumns = (run: WorkflowRun): RowValues<'workflow_runs'> => {
     idempotency_key: run.idempotencyKey,
     has_queued: index.hasQueued,
     approval_deadline: index.approvalDeadline,
+    finished_at: run.finishedAt,
     version: run.version,
     doc: run,
   };
@@ -92,7 +95,7 @@ export class SqlWorkflowRepository implements WorkflowRepository {
           return err(notFound('Workflow', id));
         }
         const current = workflowFromRow(row);
-        if (current.version !== expectedVersion) {
+        if (current.version !== expectedVersion || scheduleMovedSince(current, change.basedOn)) {
           return err(versionConflict('Workflow', id));
         }
         const next = Workflow.parse({
@@ -129,26 +132,27 @@ export class SqlWorkflowRepository implements WorkflowRepository {
     return rows.map(workflowFromRow);
   }
 
-  async advanceSchedule(
-    id: WorkflowId,
-    { from, to }: { from: Date; to: Date | null },
-  ): Promise<boolean> {
+  async fireSchedule(fire: WorkflowFire): Promise<boolean> {
     return this.session.transaction(async () => {
-      const [row] = await this.session.all(
-        sql`SELECT doc FROM workflows WHERE id = ${id} AND next_fire_at = ${from.getTime()} ${this.session.dialect.forUpdate}`,
-      );
+      const [row] = await this.session.all(sql`
+        SELECT doc FROM workflows
+        WHERE id = ${fire.id} AND enabled = 1 AND next_fire_at = ${fire.from.getTime()}
+        ${this.session.dialect.forUpdate}`);
       if (!row) {
         return false;
       }
-      const next = { ...workflowFromRow(row), nextFireAt: to };
-      const changed = await this.session.run(sql`
+      const inserted = await this.session.run(
+        sql`${insertInto(this.session, 'workflow_runs', runColumns(fire.run))} ON CONFLICT DO NOTHING`,
+      );
+      const next = Workflow.parse({ ...workflowFromRow(row), ...fire.schedule });
+      await this.session.run(sql`
         UPDATE workflows SET ${assignments(this.session, 'workflows', {
-          next_fire_at: to,
+          next_fire_at: next.nextFireAt,
           doc: next,
         })}
-        WHERE id = ${id} AND next_fire_at = ${from.getTime()}`);
+        WHERE id = ${fire.id}`);
 
-      return changed === 1;
+      return inserted === 1;
     });
   }
 }
@@ -197,6 +201,22 @@ export class SqlWorkflowRunRepository implements WorkflowRunRepository {
     return changed === 1 ? ok(saved) : err(staleWorkflowRun(next.id));
   }
 
+  async expireFinished(before: Date, backfillLimit: number): Promise<void> {
+    await this.session.run(
+      sql`DELETE FROM workflow_runs WHERE finished_at IS NOT NULL AND finished_at < ${before.getTime()}`,
+    );
+    const legacy = await this.session.all(sql`
+      SELECT doc FROM workflow_runs WHERE finished_at IS NULL AND status <> 'running'
+      LIMIT ${backfillLimit}`);
+    for (const run of legacy.map(runFromRow)) {
+      await this.session.run(sql`
+        UPDATE workflow_runs SET ${assignments(this.session, 'workflow_runs', {
+          finished_at: run.finishedAt ?? run.updatedAt,
+        })}
+        WHERE id = ${run.id}`);
+    }
+  }
+
   async findExpiredApprovals({
     now,
     limit,
@@ -211,9 +231,16 @@ export class SqlWorkflowRunRepository implements WorkflowRunRepository {
     return rows.map(runFromRow);
   }
 
-  async findWithQueuedNodes({ limit }: { limit: number }): Promise<readonly WorkflowRun[]> {
+  async findWithQueuedNodes({
+    limit,
+    after,
+  }: {
+    limit: number;
+    after?: WorkflowRunId | undefined;
+  }): Promise<readonly WorkflowRun[]> {
+    const where = and([sql`has_queued = 1`, after === undefined ? undefined : sql`id > ${after}`]);
     const rows = await this.session.all(
-      sql`SELECT doc FROM workflow_runs WHERE has_queued = 1 ORDER BY id LIMIT ${limit}`,
+      sql`SELECT doc FROM workflow_runs WHERE ${where} ORDER BY id LIMIT ${limit}`,
     );
 
     return rows.map(runFromRow);

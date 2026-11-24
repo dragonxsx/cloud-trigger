@@ -184,7 +184,7 @@ export async function createMongoPersistence(
     eventSources: new MongoEventSourceLeases(
       db.collection<EventSourceLeaseDocument>(MongoEventSourceLeases.collectionName),
     ),
-    workflows: new MongoWorkflowRepository(workflows),
+    workflows: new MongoWorkflowRepository(client, workflows, workflowRuns),
     workflowRuns: new MongoWorkflowRunRepository(workflowRuns),
     authSettings: new MongoAuthSettingsStore(
       db.collection<AuthSettingsDocument>(MongoAuthSettingsStore.collectionName),
@@ -200,7 +200,7 @@ export async function createMongoPersistence(
       await MongoConnectionRepository.ensureIndexes(connections);
       await MongoEnvironmentRepository.ensureIndexes(environments);
       await MongoWorkflowRepository.ensureIndexes(workflows);
-      await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
+      await MongoWorkflowRunRepository.ensureIndexes(workflowRuns, retention.runDays);
       await MongoUserRepository.ensureIndexes(users);
       await MongoApiKeyRepository.ensureIndexes(apiKeys);
       await MongoDecisionLog.ensureIndexes(db, retention.decisionDays);

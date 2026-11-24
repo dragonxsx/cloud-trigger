@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import {
   type ConfigError,
   type ConfigIssue,
@@ -56,6 +58,11 @@ const notFound = (what: string, id: string): NotFoundError => ({
 });
 const conflict = (message: string): ConflictError => ({ code: 'conflict', message });
 
+const scheduleChanged = (current: Workflow, spec: WorkflowSpec): boolean =>
+  !isDeepStrictEqual(spec.schedule, current.schedule) || spec.enabled !== current.enabled;
+
+const FRESH_SCHEDULE = { lastFiredAt: null, fireCount: 0 } as const;
+
 const prefixIssues = (prefix: string, error: ConfigError): ConfigIssue[] =>
   error.issues.map((issue) => ({
     path: issue.path ? `${prefix}.${issue.path}` : prefix,
@@ -78,6 +85,7 @@ export class WorkflowService {
   async #validate(
     raw: unknown,
     id: WorkflowId,
+    fired: Pick<Workflow, 'lastFiredAt' | 'fireCount'>,
   ): Promise<Result<{ spec: WorkflowSpec; nextFireAt: Date | null }, ConfigError>> {
     const parsed = WorkflowSpec.safeParse(raw);
     if (!parsed.success) {
@@ -113,8 +121,8 @@ export class WorkflowService {
       } else if (spec.enabled) {
         nextFireAt = bound.value.nextFireAt({
           after: this.deps.clock.now(),
-          lastFiredAt: null,
-          fireCount: 0,
+          lastFiredAt: fired.lastFiredAt,
+          fireCount: fired.fireCount,
           jobId: id,
         });
       }
@@ -193,7 +201,7 @@ export class WorkflowService {
     raw: unknown,
   ): Promise<Result<Workflow, ConfigError | ConflictError | NotFoundError | VersionConflictError>> {
     const id = newWorkflowId();
-    const validated = await this.#validate(raw, id);
+    const validated = await this.#validate(raw, id, FRESH_SCHEDULE);
     if (validated.isErr()) {
       return err(validated.error);
     }
@@ -208,6 +216,7 @@ export class WorkflowService {
       id,
       inlineJobIds: inline.value,
       nextFireAt,
+      ...FRESH_SCHEDULE,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -229,7 +238,7 @@ export class WorkflowService {
     if (current.version !== expectedVersion) {
       return err({ code: 'version_conflict', message: `Workflow ${id} was modified concurrently` });
     }
-    const validated = await this.#validate(raw, id);
+    const validated = await this.#validate(raw, id, current);
     if (validated.isErr()) {
       return err(validated.error);
     }
@@ -238,10 +247,16 @@ export class WorkflowService {
     if (inline.isErr()) {
       return err(inline.error);
     }
+    const reschedule = scheduleChanged(current, spec)
+      ? {
+          nextFireAt,
+          basedOn: { nextFireAt: current.nextFireAt, fireCount: current.fireCount },
+        }
+      : {};
 
     return this.deps.workflows.update(
       id,
-      { spec, inlineJobIds: inline.value, nextFireAt, updatedAt: this.deps.clock.now() },
+      { spec, inlineJobIds: inline.value, ...reschedule, updatedAt: this.deps.clock.now() },
       expectedVersion,
     );
   }
