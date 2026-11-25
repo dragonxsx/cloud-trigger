@@ -26,11 +26,12 @@ import {
   workflowChangeFields,
   workflowRunIndex,
 } from '@cloud-trigger/core';
-import type { Collection, Filter, MongoClient } from 'mongodb';
+import type { Collection, Db, Filter, MongoClient } from 'mongodb';
 
 import { findNewestFirstPage } from './cursor.js';
 import { type Stored, documentParser, toDocument } from './documents.js';
 import { casMissed, caseInsensitiveMatch, unlessDuplicateKey } from './errors.js';
+import { ensureTtlIndex } from './ttl.js';
 
 export type WorkflowDocument = Stored<Workflow>;
 export type WorkflowRunDocument = Stored<WorkflowRun> & WorkflowRunIndex;
@@ -168,16 +169,14 @@ export class MongoWorkflowRunRepository implements WorkflowRunRepository {
 
   constructor(private readonly runs: Collection<WorkflowRunDocument>) {}
 
-  static async ensureIndexes(
-    runs: Collection<WorkflowRunDocument>,
-    retentionDays: number,
-  ): Promise<void> {
+  static async ensureIndexes(db: Db, retentionDays: number): Promise<void> {
+    const runs = db.collection<WorkflowRunDocument>(MongoWorkflowRunRepository.collectionName);
+    await ensureTtlIndex(db, MongoWorkflowRunRepository.collectionName, {
+      name: 'retention',
+      key: { finishedAt: 1 },
+      days: retentionDays,
+    });
     await runs.createIndexes([
-      {
-        key: { finishedAt: 1 },
-        name: 'retention',
-        expireAfterSeconds: retentionDays * 86_400,
-      },
       {
         key: { idempotencyKey: 1 },
         name: 'idempotency',

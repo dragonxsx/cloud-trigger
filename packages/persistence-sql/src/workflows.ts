@@ -158,6 +158,8 @@ export class SqlWorkflowRepository implements WorkflowRepository {
 }
 
 export class SqlWorkflowRunRepository implements WorkflowRunRepository {
+  #legacyBackfillDrained = false;
+
   constructor(private readonly session: SqlSession) {}
 
   async insert(run: WorkflowRun): Promise<Result<WorkflowRun, DuplicateWorkflowRunError>> {
@@ -205,16 +207,22 @@ export class SqlWorkflowRunRepository implements WorkflowRunRepository {
     await this.session.run(
       sql`DELETE FROM workflow_runs WHERE finished_at IS NOT NULL AND finished_at < ${before.getTime()}`,
     );
+    if (this.#legacyBackfillDrained) {
+      return;
+    }
     const legacy = await this.session.all(sql`
       SELECT doc FROM workflow_runs WHERE finished_at IS NULL AND status <> 'running'
       LIMIT ${backfillLimit}`);
-    for (const run of legacy.map(runFromRow)) {
-      await this.session.run(sql`
-        UPDATE workflow_runs SET ${assignments(this.session, 'workflow_runs', {
-          finished_at: run.finishedAt ?? run.updatedAt,
-        })}
-        WHERE id = ${run.id}`);
-    }
+    this.#legacyBackfillDrained = legacy.length < backfillLimit;
+    await this.session.transaction(async () => {
+      for (const run of legacy.map(runFromRow)) {
+        await this.session.run(sql`
+          UPDATE workflow_runs SET ${assignments(this.session, 'workflow_runs', {
+            finished_at: run.finishedAt ?? run.updatedAt,
+          })}
+          WHERE id = ${run.id}`);
+      }
+    });
   }
 
   async findExpiredApprovals({

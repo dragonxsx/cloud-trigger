@@ -15,6 +15,8 @@ import {
 import type { Collection, Db, Document } from 'mongodb';
 import { z } from 'zod';
 
+import { ensureTimeSeriesTtl } from './ttl.js';
+
 export interface RunMetricDocument {
   ts: Date;
   meta: { jobId: string; targetType: string };
@@ -52,13 +54,10 @@ export class MongoRunAnalytics implements RunAnalytics {
   constructor(private readonly metrics: Collection<RunMetricDocument>) {}
 
   static async ensureCollection(db: Db, ttlDays: number): Promise<void> {
-    const exists = await db.listCollections({ name: MongoRunAnalytics.collectionName }).hasNext();
-    if (!exists) {
-      await db.createCollection(MongoRunAnalytics.collectionName, {
-        timeseries: { timeField: 'ts', metaField: 'meta', granularity: 'minutes' },
-        expireAfterSeconds: ttlDays * 86_400,
-      });
-    }
+    await ensureTimeSeriesTtl(db, MongoRunAnalytics.collectionName, {
+      days: ttlDays,
+      timeseries: { timeField: 'ts', metaField: 'meta', granularity: 'minutes' },
+    });
   }
 
   async record(metric: RunMetric): Promise<void> {

@@ -4,7 +4,9 @@ import {
   makeWorkflow,
   makeWorkflowRun,
 } from '@cloud-trigger/testing';
+import Database from 'better-sqlite3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { createSqlitePersistence } from '../src/index.js';
 import { type TestSqlite, startTestSqlite } from '../src/testing.js';
@@ -49,5 +51,40 @@ describe('sqlite retention sweep', () => {
     expect(await workflowRuns.get(old.id)).toBeUndefined();
     expect(await workflowRuns.get(recent.id)).toEqual(recent);
     expect(await workflowRuns.get(running.id)).toEqual(running);
+  });
+});
+
+describe('sqlite legacy workflow run backfill', () => {
+  const FinishedAt = z.object({ finished_at: z.number().nullable() });
+
+  it('backfills finished_at once, then stops scanning after the backlog drains', async () => {
+    const legacyDb = await startTestSqlite();
+    const raw = new Database(legacyDb.path);
+    const finishedAtOf = (id: string) =>
+      FinishedAt.parse(raw.prepare('SELECT finished_at FROM workflow_runs WHERE id = ?').get(id))
+        .finished_at;
+    const insertLegacy = async () => {
+      const run = {
+        ...makeWorkflowRun(makeWorkflow()),
+        status: 'succeeded' as const,
+        finishedAt: at(0),
+      };
+      await legacyDb.persistence.workflowRuns.insert(run);
+      raw.prepare('UPDATE workflow_runs SET finished_at = NULL WHERE id = ?').run(run.id);
+
+      return run;
+    };
+    try {
+      const legacy = await insertLegacy();
+      await legacyDb.persistence.sweep(at(0));
+      expect(finishedAtOf(legacy.id)).toBe(at(0).getTime());
+
+      const late = await insertLegacy();
+      await legacyDb.persistence.sweep(at(0));
+      expect(finishedAtOf(late.id)).toBeNull();
+    } finally {
+      raw.close();
+      await legacyDb.stop();
+    }
   });
 });

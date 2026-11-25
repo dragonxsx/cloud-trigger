@@ -6,6 +6,8 @@ import {
 } from '@cloud-trigger/core';
 import type { Collection, Db } from 'mongodb';
 
+import { ensureTtlIndex } from './ttl.js';
+
 export type DecisionDocument = ScheduleDecisionType;
 
 export class MongoDecisionLog implements DecisionLog {
@@ -14,10 +16,14 @@ export class MongoDecisionLog implements DecisionLog {
   constructor(private readonly decisions: Collection<DecisionDocument>) {}
 
   static async ensureIndexes(db: Db, retentionDays: number): Promise<void> {
-    await db.collection<DecisionDocument>(MongoDecisionLog.collectionName).createIndexes([
-      { key: { jobId: 1, at: -1 }, name: 'job_recent' },
-      { key: { at: 1 }, name: 'retention', expireAfterSeconds: retentionDays * 86_400 },
-    ]);
+    await db
+      .collection<DecisionDocument>(MongoDecisionLog.collectionName)
+      .createIndexes([{ key: { jobId: 1, at: -1 }, name: 'job_recent' }]);
+    await ensureTtlIndex(db, MongoDecisionLog.collectionName, {
+      name: 'retention',
+      key: { at: 1 },
+      days: retentionDays,
+    });
   }
 
   async record(decision: ScheduleDecisionType): Promise<void> {
