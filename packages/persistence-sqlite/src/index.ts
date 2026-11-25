@@ -93,6 +93,7 @@ export function createSqlitePersistence(options: SqlitePersistenceOptions): Sqli
     changes: events,
     retention: options.retention,
     sweepIntervalMs: options.sweepIntervalMs,
+    onSweepError: options.onSweepError,
     migrate: async () => {
       await mutex.lock(() => {
         migrate(drizzle(sqlite), { migrationsFolder: MIGRATIONS });

@@ -263,11 +263,13 @@ export const TABLES = {
       idempotency_key: opt('text'),
       has_queued: req('flag'),
       approval_deadline: opt('ms'),
+      finished_at: opt('ms'),
       version: req('int'),
       doc: req('doc'),
     },
     indexes: [
       { name: 'workflow_runs_idempotency', on: ['idempotency_key'], unique: true },
+      { name: 'workflow_runs_finished', on: ['finished_at'], whereNotNull: true },
       { name: 'workflow_runs_workflow', on: ['workflow_id', 'id'] },
       { name: 'workflow_runs_status', on: ['status', 'id'] },
       { name: 'workflow_runs_approval_deadline', on: ['approval_deadline'] },

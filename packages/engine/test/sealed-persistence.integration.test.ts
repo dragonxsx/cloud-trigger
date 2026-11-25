@@ -13,7 +13,12 @@ import {
   silentLogger,
 } from '@cloud-trigger/core';
 import { builtinProviders, createFanoutTarget } from '@cloud-trigger/providers-builtin';
-import { type TestHttpServer, makeWorkflow, startTestHttpServer } from '@cloud-trigger/testing';
+import {
+  type TestHttpServer,
+  makeWorkflow,
+  makeWorkflowRun,
+  startTestHttpServer,
+} from '@cloud-trigger/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -227,7 +232,12 @@ describe('sealed persistence', () => {
       get: (id) => inner.get(id),
       list: async (query) => {
         const page = await inner.list(query);
-        await inner.advanceSchedule(workflow.id, { from: first, to: second });
+        await inner.fireSchedule({
+          id: workflow.id,
+          from: first,
+          schedule: { nextFireAt: second, lastFiredAt: first, fireCount: 1 },
+          run: makeWorkflowRun(workflow),
+        });
 
         return page;
       },
@@ -235,7 +245,7 @@ describe('sealed persistence', () => {
       delete: (id) => inner.delete(id),
       findByEnvironment: (environment) => inner.findByEnvironment(environment),
       findDue: (p) => inner.findDue(p),
-      advanceSchedule: (id, p) => inner.advanceSchedule(id, p),
+      fireSchedule: (fire) => inner.fireSchedule(fire),
     };
 
     const report = await resealSecrets(

@@ -6,6 +6,7 @@ import {
   type VersionConflictError,
   type Workflow,
   type WorkflowChange,
+  type WorkflowFire,
   type WorkflowId,
   type WorkflowQuery,
   type WorkflowRepository,
@@ -14,6 +15,7 @@ import {
   type WorkflowRunQuery,
   type WorkflowRunIndex,
   type WorkflowRunRepository,
+  type WorkflowScheduleBasis,
   Workflow as WorkflowSchema,
   WorkflowRun as WorkflowRunSchema,
   duplicateWorkflowRun,
@@ -24,11 +26,12 @@ import {
   workflowChangeFields,
   workflowRunIndex,
 } from '@cloud-trigger/core';
-import type { Collection, Filter } from 'mongodb';
+import type { Collection, Db, Filter, MongoClient } from 'mongodb';
 
 import { findNewestFirstPage } from './cursor.js';
 import { type Stored, documentParser, toDocument } from './documents.js';
 import { casMissed, caseInsensitiveMatch, unlessDuplicateKey } from './errors.js';
+import { ensureTtlIndex } from './ttl.js';
 
 export type WorkflowDocument = Stored<Workflow>;
 export type WorkflowRunDocument = Stored<WorkflowRun> & WorkflowRunIndex;
@@ -41,10 +44,24 @@ const toRunDocument = (run: WorkflowRun): WorkflowRunDocument => ({
   ...workflowRunIndex(run),
 });
 
+const scheduleBasisFilter = (
+  basedOn: WorkflowScheduleBasis | undefined,
+): Filter<WorkflowDocument> =>
+  basedOn === undefined
+    ? {}
+    : {
+        nextFireAt: basedOn.nextFireAt,
+        fireCount: basedOn.fireCount === 0 ? { $not: { $gt: 0 } } : basedOn.fireCount,
+      };
+
 export class MongoWorkflowRepository implements WorkflowRepository {
   static readonly collectionName = 'workflows';
 
-  constructor(private readonly workflows: Collection<WorkflowDocument>) {}
+  constructor(
+    private readonly client: MongoClient,
+    private readonly workflows: Collection<WorkflowDocument>,
+    private readonly runs: Collection<WorkflowRunDocument>,
+  ) {}
 
   static async ensureIndexes(workflows: Collection<WorkflowDocument>): Promise<void> {
     await workflows.createIndexes([
@@ -82,7 +99,7 @@ export class MongoWorkflowRepository implements WorkflowRepository {
     expectedVersion: number,
   ): Promise<Result<Workflow, VersionConflictError | NotFoundError>> {
     const doc = await this.workflows.findOneAndUpdate(
-      { _id: id, version: expectedVersion },
+      { _id: id, version: expectedVersion, ...scheduleBasisFilter(change.basedOn) },
       { $set: workflowChangeFields(change, expectedVersion) },
       { returnDocument: 'after' },
     );
@@ -110,16 +127,40 @@ export class MongoWorkflowRepository implements WorkflowRepository {
     return docs.map(fromWorkflowDocument);
   }
 
-  async advanceSchedule(
-    id: WorkflowId,
-    { from, to }: { from: Date; to: Date | null },
-  ): Promise<boolean> {
-    const result = await this.workflows.updateOne(
-      { _id: id, nextFireAt: from },
-      { $set: { nextFireAt: to } },
-    );
+  async fireSchedule(fire: WorkflowFire): Promise<boolean> {
+    return this.client.withSession((session) =>
+      session.withTransaction(async () => {
+        const advanced = await this.workflows.updateOne(
+          { _id: fire.id, enabled: true, nextFireAt: fire.from },
+          {
+            $set: {
+              nextFireAt: fire.schedule.nextFireAt,
+              lastFiredAt: fire.schedule.lastFiredAt,
+              fireCount: fire.schedule.fireCount,
+            },
+          },
+          { session },
+        );
+        if (advanced.matchedCount === 0) {
+          await session.abortTransaction();
 
-    return result.modifiedCount === 1;
+          return false;
+        }
+        const doc = toRunDocument(fire.run);
+        if (fire.run.idempotencyKey === null) {
+          await this.runs.insertOne(doc, { session });
+
+          return true;
+        }
+        const inserted = await this.runs.updateOne(
+          { idempotencyKey: fire.run.idempotencyKey },
+          { $setOnInsert: doc },
+          { upsert: true, session },
+        );
+
+        return inserted.upsertedCount === 1;
+      }),
+    );
   }
 }
 
@@ -128,7 +169,13 @@ export class MongoWorkflowRunRepository implements WorkflowRunRepository {
 
   constructor(private readonly runs: Collection<WorkflowRunDocument>) {}
 
-  static async ensureIndexes(runs: Collection<WorkflowRunDocument>): Promise<void> {
+  static async ensureIndexes(db: Db, retentionDays: number): Promise<void> {
+    const runs = db.collection<WorkflowRunDocument>(MongoWorkflowRunRepository.collectionName);
+    await ensureTtlIndex(db, MongoWorkflowRunRepository.collectionName, {
+      name: 'retention',
+      key: { finishedAt: 1 },
+      days: retentionDays,
+    });
     await runs.createIndexes([
       {
         key: { idempotencyKey: 1 },
@@ -205,8 +252,18 @@ export class MongoWorkflowRunRepository implements WorkflowRunRepository {
     return docs.map(fromRunDocument);
   }
 
-  async findWithQueuedNodes({ limit }: { limit: number }): Promise<readonly WorkflowRun[]> {
-    const docs = await this.runs.find({ hasQueued: true }).sort({ _id: 1 }).limit(limit).toArray();
+  async findWithQueuedNodes({
+    limit,
+    after,
+  }: {
+    limit: number;
+    after?: WorkflowRunId | undefined;
+  }): Promise<readonly WorkflowRun[]> {
+    const docs = await this.runs
+      .find({ hasQueued: true, ...(after !== undefined && { _id: { $gt: after } }) })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .toArray();
 
     return docs.map(fromRunDocument);
   }

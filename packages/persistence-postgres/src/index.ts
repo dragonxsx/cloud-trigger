@@ -147,6 +147,7 @@ export function createPostgresPersistence(
     events,
     retention: options.retention,
     sweepIntervalMs: options.sweepIntervalMs,
+    onSweepError: options.onSweepError,
     migrate: async () => {
       await migrate(drizzle(client), { migrationsFolder: MIGRATIONS });
     },

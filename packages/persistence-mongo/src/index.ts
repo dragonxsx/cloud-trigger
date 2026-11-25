@@ -32,6 +32,7 @@ import {
 import { MongoJobRepository, MongoScheduleStore } from './jobs.js';
 import { MongoNotificationOutbox, type NotificationDocument } from './notifications.js';
 import { type FireKeyDocument, MongoRunQueue, MongoRunRepository } from './runs.js';
+import { ensureTtlIndex } from './ttl.js';
 import {
   MongoWorkflowRepository,
   MongoWorkflowRunRepository,
@@ -118,7 +119,6 @@ async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
       unique: true,
       partialFilterExpression: { idempotencyKey: { $type: 'string' } },
     },
-    { key: { finishedAt: 1 }, name: 'retention', expireAfterSeconds: runRetentionDays * 86_400 },
     {
       key: { overlapSlot: 1 },
       name: 'overlap_slot',
@@ -126,6 +126,11 @@ async function ensureIndexes(db: Db, runRetentionDays: number): Promise<void> {
       partialFilterExpression: { overlapSlot: { $type: 'string' } },
     },
   ]);
+  await ensureTtlIndex(db, 'runs', {
+    name: 'retention',
+    key: { finishedAt: 1 },
+    days: runRetentionDays,
+  });
 }
 
 export async function createMongoPersistence(
@@ -184,7 +189,7 @@ export async function createMongoPersistence(
     eventSources: new MongoEventSourceLeases(
       db.collection<EventSourceLeaseDocument>(MongoEventSourceLeases.collectionName),
     ),
-    workflows: new MongoWorkflowRepository(workflows),
+    workflows: new MongoWorkflowRepository(client, workflows, workflowRuns),
     workflowRuns: new MongoWorkflowRunRepository(workflowRuns),
     authSettings: new MongoAuthSettingsStore(
       db.collection<AuthSettingsDocument>(MongoAuthSettingsStore.collectionName),
@@ -200,7 +205,7 @@ export async function createMongoPersistence(
       await MongoConnectionRepository.ensureIndexes(connections);
       await MongoEnvironmentRepository.ensureIndexes(environments);
       await MongoWorkflowRepository.ensureIndexes(workflows);
-      await MongoWorkflowRunRepository.ensureIndexes(workflowRuns);
+      await MongoWorkflowRunRepository.ensureIndexes(db, retention.runDays);
       await MongoUserRepository.ensureIndexes(users);
       await MongoApiKeyRepository.ensureIndexes(apiKeys);
       await MongoDecisionLog.ensureIndexes(db, retention.decisionDays);

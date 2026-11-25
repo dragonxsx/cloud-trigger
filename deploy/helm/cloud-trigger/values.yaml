@@ -65,6 +65,7 @@ config:
   OTEL_NODE_ENABLED_INSTRUMENTATIONS: ""    # e.g. http,express,undici; without either list fs, dns and net are off
   OTEL_NODE_DISABLED_INSTRUMENTATIONS: ""
   OTEL_SDK_DISABLED: ""             # true: no instrumentation or export; /metrics keeps working
+  RUN_RETENTION_DAYS: "30"
   DECISION_RETENTION_DAYS: "14"
   BADGES_PUBLIC: "false"
   OPENAPI_FETCH_ALLOW_PRIVATE: "false"

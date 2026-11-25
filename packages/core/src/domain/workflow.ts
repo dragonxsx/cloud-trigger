@@ -75,6 +75,12 @@ export const Workflow = WorkflowSpec.extend({
     .default({})
     .describe('The jobs created for inline nodes, by node key.'),
   nextFireAt: z.date().nullable(),
+  lastFiredAt: z.date().nullable().default(null).describe('When the schedule last started a run.'),
+  fireCount: z
+    .int()
+    .min(0)
+    .default(0)
+    .describe('How many runs the schedule has started; bounds `maxCount`.'),
   version: z.int().min(1),
   createdAt: z.date(),
   updatedAt: z.date(),

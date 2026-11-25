@@ -18,6 +18,7 @@ export interface PersistenceOptions {
   readonly sweepIntervalMs?: number | undefined;
   readonly serverSelectionTimeoutMs?: number | undefined;
   readonly onEventBusError: (error: unknown) => void;
+  readonly onSweepError?: ((error: unknown) => void) | undefined;
 }
 
 export const retentionOf = (config: AppConfig): RetentionPolicy => ({
@@ -30,7 +31,7 @@ export async function openPersistence(
   database: DatabaseConfig,
   options: PersistenceOptions,
 ): Promise<Persistence> {
-  const { retention, onEventBusError, sweepIntervalMs } = options;
+  const { retention, onEventBusError, onSweepError, sweepIntervalMs } = options;
   switch (database.driver) {
     case 'mongo':
       return createMongoPersistence({
@@ -49,6 +50,7 @@ export async function openPersistence(
         sweepIntervalMs,
         retention,
         onEventBusError,
+        onSweepError,
       });
     case 'sqlite':
       return createSqlitePersistence({
@@ -56,6 +58,7 @@ export async function openPersistence(
         sweepIntervalMs,
         retention,
         onEventBusError,
+        onSweepError,
       });
     default:
       return assertNever(database);
@@ -72,6 +75,7 @@ export function createPersistence(
     sweepIntervalMs: SWEEP_INTERVAL_MS,
     onEventBusError: (error: unknown) =>
       logger.warn('Event stream error; reconnecting', { err: error }),
+    onSweepError: (error: unknown) => logger.error('Retention sweep failed', { err: error }),
   });
 }
 

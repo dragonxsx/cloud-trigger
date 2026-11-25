@@ -14,7 +14,26 @@ export interface WorkflowChange {
   readonly spec: WorkflowSpec;
   readonly inlineJobIds: Readonly<Record<string, JobId>>;
   readonly nextFireAt?: Date | null | undefined;
+  /** With `nextFireAt`: the schedule state it was computed from; a fire since then is a version conflict. */
+  readonly basedOn?: WorkflowScheduleBasis | undefined;
   readonly updatedAt: Date;
+}
+
+export interface WorkflowScheduleBasis {
+  readonly nextFireAt: Date | null;
+  readonly fireCount: number;
+}
+
+export interface WorkflowFire {
+  readonly id: WorkflowId;
+  /** The `nextFireAt` the fire was found due at; the fire is refused when it moved or the workflow is disabled. */
+  readonly from: Date;
+  readonly schedule: {
+    readonly nextFireAt: Date | null;
+    readonly lastFiredAt: Date;
+    readonly fireCount: number;
+  };
+  readonly run: WorkflowRun;
 }
 
 export interface WorkflowRepository {
@@ -30,8 +49,11 @@ export interface WorkflowRepository {
   findByEnvironment(environment: string): Promise<readonly Workflow[]>;
   /** Enabled workflows whose schedule is due. */
   findDue(p: { now: Date; limit: number }): Promise<readonly Workflow[]>;
-  /** Moves `nextFireAt` from `from` to `to`; false when another replica already did. */
-  advanceSchedule(id: WorkflowId, p: { from: Date; to: Date | null }): Promise<boolean>;
+  /**
+   * Atomically advances the schedule and inserts the occurrence's run (deduplicated by its key).
+   * Returns true only when this call inserted the run.
+   */
+  fireSchedule(fire: WorkflowFire): Promise<boolean>;
 }
 
 export interface WorkflowRunQuery extends PageRequest {
@@ -52,5 +74,9 @@ export interface WorkflowRunRepository {
     expectedVersion: number,
   ): Promise<Result<WorkflowRun, StaleWorkflowRunError>>;
   findExpiredApprovals(p: { now: Date; limit: number }): Promise<readonly WorkflowRun[]>;
-  findWithQueuedNodes(p: { limit: number }): Promise<readonly WorkflowRun[]>;
+  /** Runs with queued nodes in id order, after `after` when given. */
+  findWithQueuedNodes(p: {
+    limit: number;
+    after?: WorkflowRunId | undefined;
+  }): Promise<readonly WorkflowRun[]>;
 }

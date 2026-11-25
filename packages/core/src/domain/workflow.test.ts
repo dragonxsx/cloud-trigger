@@ -43,6 +43,8 @@ const workflow = (spec: Partial<WorkflowSpecInput> = {}): Workflow => ({
   id: newWorkflowId(),
   inlineJobIds: {},
   nextFireAt: null,
+  lastFiredAt: null,
+  fireCount: 0,
   version: 1,
   createdAt: T0,
   updatedAt: T0,

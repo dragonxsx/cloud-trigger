@@ -4,8 +4,9 @@ import { JobSpec } from '../domain/job.js';
 import type { NotificationDelivery } from '../domain/notification.js';
 import type { RunStatus } from '../domain/run.js';
 import type { WorkflowRun } from '../domain/workflow-run.js';
+import type { Workflow } from '../domain/workflow.js';
 import type { GroupUpdate } from '../ports/groups.js';
-import type { WorkflowChange } from '../ports/workflows.js';
+import type { WorkflowChange, WorkflowScheduleBasis } from '../ports/workflows.js';
 
 export const SUCCESS_LIKE_STATUSES: readonly RunStatus[] = ['succeeded', 'cancelled', 'skipped'];
 export const FAILURE_LIKE_STATUSES: readonly RunStatus[] = ['failed', 'timed_out'];
@@ -57,6 +58,14 @@ export const workflowChangeFields = (change: WorkflowChange, expectedVersion: nu
   updatedAt: change.updatedAt,
   version: expectedVersion + 1,
 });
+
+export const scheduleMovedSince = (
+  current: Pick<Workflow, 'nextFireAt' | 'fireCount'>,
+  basedOn: WorkflowScheduleBasis | undefined,
+): boolean =>
+  basedOn !== undefined &&
+  (current.fireCount !== basedOn.fireCount ||
+    current.nextFireAt?.getTime() !== basedOn.nextFireAt?.getTime());
 
 export const savedWorkflowRun = (next: WorkflowRun, expectedVersion: number): WorkflowRun => ({
   ...next,

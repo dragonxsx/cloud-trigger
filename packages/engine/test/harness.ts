@@ -56,7 +56,7 @@ export interface Harness {
   readonly service: () => JobService;
   readonly workflowRuntime: () => WorkflowRuntime;
   readonly workflows: () => WorkflowService;
-  readonly workflowMonitor: () => WorkflowMonitor;
+  readonly workflowMonitor: (options?: { batchSize?: number }) => WorkflowMonitor;
   readonly scheduler: (ownerId?: string) => Scheduler;
   readonly worker: (opts?: Partial<WorkerOptions>, deps?: Partial<WorkerDeps>) => Worker;
   readonly dispatcher: (opts?: Partial<NotificationDispatcherOptions>) => NotificationDispatcher;
@@ -198,10 +198,10 @@ export function useHarness(dbName: string): Harness {
         jobService: service(),
         runtime: workflowRuntime(),
       }),
-    workflowMonitor: () =>
+    workflowMonitor: (options: { batchSize?: number } = {}) =>
       new WorkflowMonitor(
         { ...persistence(), registry, clock, logger: silentLogger, runtime: workflowRuntime() },
-        { intervalMs: 1_000, batchSize: 50 },
+        { intervalMs: 1_000, batchSize: options.batchSize ?? 50 },
       ),
     scheduler: (ownerId = 's1') =>
       new Scheduler(
