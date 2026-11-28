@@ -37,6 +37,7 @@
     "@opentelemetry/core": "2.12.0",
     "@opentelemetry/sdk-node": "0.223.0",
     "@opentelemetry/sdk-trace-base": "2.12.0",
+    "@orpc/contract": "catalog:",
     "@orpc/json-schema": "1.16.0",
     "@orpc/nest": "1.16.0",
     "@orpc/openapi": "1.16.0",
@@ -63,7 +64,6 @@
   "devDependencies": {
     "@cloud-trigger/testing": "workspace:*",
     "@orpc/client": "catalog:",
-    "@orpc/contract": "catalog:",
     "@orpc/openapi-client": "catalog:",
     "@testcontainers/mongodb": "catalog:",
     "@testcontainers/postgresql": "catalog:",

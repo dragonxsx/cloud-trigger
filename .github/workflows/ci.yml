@@ -29,6 +29,17 @@ jobs:
           context: .
           file: deploy/Dockerfile
           push: false
+          load: true
           tags: cloud-trigger:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Boot the image on SQLite
+        run: |
+          docker run -d --name ct -p 8080:8080 -e DB_DRIVER=sqlite \
+            -e DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)" cloud-trigger:ci
+          for _ in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8080/health/live; then exit 0; fi
+            sleep 1
+          done
+          docker logs ct
+          exit 1

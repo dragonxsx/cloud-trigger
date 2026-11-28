@@ -562,15 +562,15 @@ claude mcp add --transport http cloud-trigger \
           </header>
           <div class="cards cards-3 deploy">
             <div class="card">
-              <h3>Docker Compose</h3>
-              <p>Everything in one container, with MongoDB and a demo echo target.</p>
-              <pre><code>git clone https://github.com/dragonxsx/cloud-trigger
-cd cloud-trigger
-docker compose -f deploy/docker-compose.yml \
-  --profile app up --build</code></pre>
+              <h3>Docker</h3>
+              <p>One signed multi-arch container on SQLite, with its data in a volume.</p>
+              <pre><code>docker run -d -p 8080:8080 \
+  -v cloud-trigger-data:/data \
+  -e DB_DRIVER=sqlite \
+  -e DATA_ENCRYPTION_KEY=… \
+  ghcr.io/dragonxsx/cloud-trigger</code></pre>
               <p class="note">
-                Open <code>localhost:8080</code> and enter the setup token
-                <code>local-setup-token</code>.
+                Open <code>localhost:8080</code> and enter the setup token from the container logs.
               </p>
             </div>
             <div class="card">

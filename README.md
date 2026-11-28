@@ -111,6 +111,30 @@ Screenshots come from the [demo](#try-the-demo) and follow your GitHub theme.
 
 ## Quick start
 
+### Run the published image
+
+Releases are published to `ghcr.io/dragonxsx/cloud-trigger` for `linux/amd64` and `linux/arm64`, tagged `X.Y.Z`, `X.Y` and `latest`. One container on SQLite, with its data in a named volume:
+
+```bash
+docker run -d --name cloud-trigger -p 8080:8080 -v cloud-trigger-data:/data \
+  -e DB_DRIVER=sqlite \
+  -e DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+  ghcr.io/dragonxsx/cloud-trigger:latest
+docker logs cloud-trigger | grep 'setup token'
+```
+
+Open <http://localhost:8080> and enter the setup token from the logs. Write down the `DATA_ENCRYPTION_KEY` first: you need the same value on every restart (see [Secrets at rest](#secrets-at-rest)). The image keeps SQLite at `/data/cloud-trigger.db` (`SQLITE_PATH`). For Postgres or MongoDB, pass `POSTGRES_URL` or `MONGO_URI` instead of `DB_DRIVER=sqlite`.
+
+Images are signed keylessly with cosign and ship with an SBOM and build provenance:
+
+```bash
+cosign verify ghcr.io/dragonxsx/cloud-trigger:latest \
+  --certificate-identity-regexp '^https://github.com/dragonxsx/cloud-trigger/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+### From a clone
+
 Everything in one container, with MongoDB and an echo server to call:
 
 ```bash
@@ -308,7 +332,7 @@ helm install ct deploy/helm/cloud-trigger \
   --set secrets.values.DATA_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 ```
 
-The chart deploys `api`, `scheduler` and `worker` as separate Deployments, with an HPA on workers. Set `combined.enabled=true` to run a single Deployment instead.
+The chart deploys `api`, `scheduler` and `worker` as separate Deployments, with an HPA on workers. Set `combined.enabled=true` to run a single Deployment instead. It pulls `ghcr.io/dragonxsx/cloud-trigger` at the chart's `appVersion`; set `image.tag` to pin another release.
 
 API keys are created in Settings → API keys. The key is shown once, and only its SHA-256 hash is stored.
 

@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/banana-inc/cloud-trigger
+  repository: ghcr.io/dragonxsx/cloud-trigger
   tag: ""            # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 imagePullSecrets: []

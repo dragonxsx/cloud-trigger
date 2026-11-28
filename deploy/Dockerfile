@@ -15,9 +15,11 @@ RUN pnpm --filter @cloud-trigger/server deploy --prod --legacy /out \
 
 FROM node:24-alpine AS runtime
 LABEL org.opencontainers.image.licenses="MIT"
-ENV NODE_ENV=production PORT=8080 WEB_DIST=/app/web
+ENV NODE_ENV=production PORT=8080 WEB_DIST=/app/web SQLITE_PATH=/data/cloud-trigger.db
 WORKDIR /app
 COPY --from=build --chown=node:node /out ./
+RUN mkdir -p /data && chown node:node /data
+VOLUME /data
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s CMD wget -qO- http://127.0.0.1:8080/health/live || exit 1
